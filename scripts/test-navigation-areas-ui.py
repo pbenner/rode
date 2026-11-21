@@ -99,10 +99,11 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
         text("unsaved project edit")
         ui.source("original source\nunsaved project edit")
         ui.click("workspace-explorer")
+        ui.absent("bookmark-project")
+        ui.click("activity:Connections")
         ui.click("bookmark-project")
         ui.control("project-bookmarked")
         ui.dismiss_notice()
-        ui.click("activity:Connections")
         ui.control("pane-Connections")
         ui.layout(
             lambda state: any(b["name"].startswith("saved-project:") for b in state["buttons"]),
@@ -148,11 +149,18 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
             ui.click("connections-section:" + section)
             ui.absent(row)
             if section == "Saved projects":
-                ui.absent("bookmark-project")
+                ui.control("bookmark-project")
             ui.click("connections-section:" + section)
             ui.control(row)
             if section == "Saved projects":
-                ui.control("bookmark-project")
+                buttons = {button["name"]: button for button in ui.layout()["buttons"]}
+                heading = buttons["connections-section:Saved projects"]["rect"]
+                action = buttons["bookmark-project"]["rect"]
+                pane = buttons["pane-Connections"]["rect"]
+                assert action[2] - action[0] <= 26, action
+                assert heading[2] <= action[0], (heading, action)
+                assert abs((heading[1] + heading[3] - action[1] - action[3]) / 2) <= 1
+                assert 0 <= pane[2] - action[2] <= 12, (pane, action)
         ui.control("tunnel-saved-load:remote-setup", enabled=False)
         rows = [
             button["rect"]

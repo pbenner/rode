@@ -24,36 +24,12 @@ impl EditorApp {
             "File transfers",
             if compact {
                 ""
-            } else if self.transfers.sharing.open {
-                "Mount selected folders over SSH. Save their settings with a project bookmark."
             } else {
                 "Drag files between panes to copy. Your project stays open."
             },
             palette,
-            |ui| {
-                let button = ui.add(crate::keyboard::Button::selectable(
-                    self.transfers.sharing.open,
-                    "Shared folders",
-                ));
-                ui_probe::button(ui, "shared-folders-toggle", &button);
-                if button.clicked() {
-                    self.transfers.sharing.open = true;
-                }
-                let files = ui.add(crate::keyboard::Button::selectable(
-                    !self.transfers.sharing.open,
-                    "Files",
-                ));
-                if files.clicked() {
-                    self.transfers.sharing.open = false;
-                }
-            },
+            |_| {},
         );
-        if self.transfers.sharing.open {
-            egui::ScrollArea::vertical()
-                .id_salt("shared-folder-page")
-                .show(ui, |ui| self.shared_folders_ui(ui, ctx));
-            return;
-        }
         if let Some(error) = &self.transfers.error {
             ui.colored_label(palette.error, error);
         }

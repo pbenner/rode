@@ -144,12 +144,19 @@ pub(crate) fn run(
     control: Arc<Control>,
     mut event: impl FnMut(Event),
 ) -> Result<()> {
+    // A transition may cancel a queued mount before the worker reaches its host.
+    // No resources exist yet, so this is completed cleanup rather than a mount failure.
+    if control.cancel.load(Ordering::Acquire) {
+        return Ok(());
+    }
     config.validate()?;
     let remote = endpoint
         .remote()
         .context("Shared folders require an SSH host")?;
     let helper = remote.native.client(remote)?.executable.clone();
-    ensure!(!control.cancel.load(Ordering::Acquire), "Mount cancelled");
+    if control.cancel.load(Ordering::Acquire) {
+        return Ok(());
+    }
     let source_remote = config.direction == Direction::RemoteToLocal;
     // Validate the remote path through exactly the selected transfer policy.
     let remote_folder = remote.request_in(
@@ -197,6 +204,9 @@ pub(crate) fn run(
         read_only: config.read_only,
     };
     let ready = Arc::new(AtomicBool::new(false));
+    if control.cancel.load(Ordering::Acquire) {
+        return Ok(());
+    }
     let mut exporting = Process::spawn(
         command(
             source_remote.then_some(remote),
@@ -308,4 +318,22 @@ pub(crate) fn run(
         std::thread::sleep(Duration::from_millis(50));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelling_a_queued_mount_needs_no_host_or_helpers_and_acknowledges_cleanup() {
+        let control = Arc::new(Control::default());
+        control.cancel.store(true, Ordering::Release);
+        run(
+            crate::transfers::Endpoint::local(),
+            Config::default(),
+            control,
+            |_| panic!("A cancelled mount must not announce a service"),
+        )
+        .unwrap();
+    }
 }

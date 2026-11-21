@@ -1254,6 +1254,10 @@ both Rust and OpenSSH masters, including binary reads/writes, read-only denial,
 path/symlink escapes and EOF shutdown. Core tests cover bounded framing and
 atomic rename behavior. `scripts/test-shared-folders-ui.py`, run under
 `scripts/test-ssh.sh`, exercises both mount directions and access modes, busy
-unmounts and bookmark persistence/restoration. It records a `fuse` skip on hosts
+unmounts, automatic project-change cleanup and automatic bookmark mount restoration.
+Application tests check cleanup acknowledgements, cancellation, busy mounts and stale
+bookmark preparation/generation rejection without requiring FUSE. They also check
+the project-tab registry, detaching shares and independence from transfer-browser
+host/policy changes. The UI test records a `fuse` skip on hosts
 that deny `/dev/fuse`; the `ssh` / `remote-smoke` CI lane requires this capability
 and installs SSHFS/FUSE, so successful kernel mounts cannot silently be skipped.

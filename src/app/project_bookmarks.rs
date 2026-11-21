@@ -6,17 +6,12 @@
 use super::*;
 use crate::extensions::Feature;
 mod model;
+pub(in crate::app) use model::Bookmark;
 pub(super) use model::State;
-use model::{Bookmark, Project};
+use model::{Project, Restoration, RestoreStage};
 
 const FEATURE: Feature = Feature::ProjectBookmarks;
 const SETTING: &str = "projects";
-
-/// Contextual sidebar action and compact Explorer action share one toggle and menu.
-pub(super) enum ButtonStyle {
-    Toolbar,
-    Sidebar,
-}
 
 enum Edit {
     Insert(Bookmark),
@@ -44,24 +39,13 @@ impl EditorApp {
         self.project_bookmarks.sync(raw);
     }
 
-    /// Only recipes bound to this project's actual SSH connection may be captured.
+    /// Recipes belong to the current SSH project, independently of the transfer-browser host.
     fn bookmark_share_configs(&self) -> Option<Vec<crate::shared_folders::Config>> {
-        let configs = self.transfers.sharing.configs();
-        let workspace_remote = self.workspace.as_ref()?.remote.as_ref()?;
-        if configs.is_empty()
-            || self
-                .transfer_host_endpoint()
-                .as_ref()
-                .and_then(|endpoint| endpoint.remote())
-                .is_some_and(|remote| remote.socket == workspace_remote.socket)
-        {
-            Some(configs)
-        } else {
-            None
-        }
+        self.project_shared_folder_endpoint()
+            .map(|_| self.shared_folders.configs())
     }
 
-    fn bookmark_candidate(&self) -> Option<Bookmark> {
+    pub(in crate::app) fn bookmark_candidate(&self) -> Option<Bookmark> {
         let workspace = self.workspace.as_ref().filter(|w| w.ready)?;
         if self.workspace.preparing() || self.vaults.has_active() {
             return None;
@@ -92,7 +76,8 @@ impl EditorApp {
         let shared_folders = (matches!(project, Project::Ssh { .. })
             && self.project_bookmarks.include_shares)
             .then(|| self.bookmark_share_configs())
-            .flatten();
+            .flatten()
+            .filter(|configs| !configs.is_empty());
         Some(Bookmark {
             name,
             project,
@@ -185,26 +170,78 @@ impl EditorApp {
 
     /// Persisted locations are intents, never proof of a live transport or an active sandbox.
     fn reopen_bookmark(&mut self, bookmark: Bookmark, ctx: &egui::Context) {
-        self.project_bookmarks.restore_shares = bookmark
-            .shared_folders
-            .clone()
-            .map(|shares| (bookmark.project.clone(), shares));
-        if self
-            .bookmark_candidate()
-            .is_some_and(|current| current.project.id() == bookmark.project.id())
-            && self.project_ready()
+        self.guarded(Action::Bookmark(Box::new(bookmark)), ctx);
+    }
+
+    pub(in crate::app) fn bookmark_is_current(&self, bookmark: &Bookmark) -> bool {
+        self.project_ready()
+            && self
+                .bookmark_candidate()
+                .is_some_and(|current| current.project.id() == bookmark.project.id())
+    }
+
+    /// Match ordinary SSH recovery: reopening the same disconnected project retains its edits.
+    pub(in crate::app) fn bookmark_preserves_buffers(&self, bookmark: &Bookmark) -> bool {
+        self.bookmark_is_current(bookmark)
+            || matches!(&bookmark.project, Project::Ssh { profile } if self.can_resume_ssh(profile))
+    }
+
+    /// A saved location obeys the same encrypted-project barriers as its ordinary open action.
+    pub(in crate::app) fn bookmark_transition<'a>(
+        &'a self,
+        bookmark: &'a Bookmark,
+    ) -> vaults::Transition<'a> {
+        match &bookmark.project {
+            Project::Local { root, .. } => vaults::Transition::Project(root, None),
+            Project::Ssh { profile } => {
+                let remote = self
+                    .workspace
+                    .as_ref()
+                    .filter(|w| w.connected)
+                    .and_then(|w| w.remote.as_ref())
+                    .filter(|remote| Project::same_connection(&remote.profile, profile));
+                match remote {
+                    Some(remote) => vaults::Transition::Project(&profile.root, Some(remote)),
+                    None => vaults::Transition::Connection,
+                }
+            }
+        }
+    }
+
+    /// Execute an admitted bookmark after dirty-buffer decisions and shared-folder cleanup.
+    pub(in crate::app) fn open_bookmark(&mut self, bookmark: Bookmark, ctx: &egui::Context) {
+        let current = self.bookmark_is_current(&bookmark);
+        if current
+            && bookmark
+                .shared_folders
+                .as_ref()
+                .is_some_and(|configs| self.shared_folders.matches_mounted(configs))
         {
+            self.project_bookmarks.restore_shares = None;
+            return;
+        }
+        self.project_bookmarks.restore_shares =
+            bookmark.shared_folders.clone().map(|configs| Restoration {
+                project: bookmark.project.clone(),
+                configs,
+                stage: if current {
+                    RestoreStage::Ready(self.workers.generation())
+                } else {
+                    RestoreStage::Armed
+                },
+            });
+        if current {
             return;
         }
         match bookmark.project {
             Project::Local { root, sandbox } => {
                 let options = self.saved_project_sandbox(&root, None).unwrap_or(sandbox);
-                self.guarded(
-                    Action::Project {
-                        path: root,
-                        remote: false,
-                        options,
-                    },
+                self.prepare_project(
+                    root,
+                    options,
+                    false,
+                    false,
+                    workspace::PreparationPolicy::Given,
                     ctx,
                 );
             }
@@ -219,56 +256,199 @@ impl EditorApp {
                     .and_then(|w| w.remote.as_ref())
                     .is_some_and(|remote| Project::same_connection(&remote.profile, &profile));
                 if same_host {
-                    self.guarded(
-                        Action::Project {
-                            path: profile.root,
-                            remote: true,
-                            options: profile.sandbox,
-                        },
+                    self.prepare_project(
+                        profile.root,
+                        profile.sandbox,
+                        true,
+                        false,
+                        workspace::PreparationPolicy::Given,
                         ctx,
                     );
                 } else {
-                    self.guarded(Action::Remote(profile), ctx);
+                    let resume = self.can_resume_ssh(&profile);
+                    self.connect(*profile, ctx, resume);
+                    if let Some(restore) = &mut self.project_bookmarks.restore_shares {
+                        restore.stage = RestoreStage::Connecting(self.workers.generation());
+                    }
                 }
             }
         }
     }
 
-    /// Apply only after the bookmarked host and project are ready. Cancelled or
-    /// failed transitions discard the intent; recipes never start mount workers.
-    pub(in crate::app) fn restore_bookmark_shares(&mut self) {
-        let Some((project, _)) = &self.project_bookmarks.restore_shares else {
+    /// Bind the intent to this exact preparation. A later settings/picker request supersedes it.
+    pub(in crate::app) fn bookmark_project_preparing(
+        &mut self,
+        id: workspace::PreparationId,
+        path: &str,
+        remote: bool,
+    ) {
+        let Some(restore) = &self.project_bookmarks.restore_shares else {
             return;
         };
-        let matches = self
-            .bookmark_candidate()
-            .is_some_and(|current| current.project.id() == project.id());
-        if matches && self.project_ready() {
-            if self
-                .transfers
-                .sharing
-                .admit(transfers::ContextChange::Project)
-                .is_err()
-            {
-                return;
+        let armed = match restore.stage {
+            RestoreStage::Armed => true,
+            RestoreStage::Connecting(generation) => generation == self.workers.generation(),
+            RestoreStage::Preparing(_) | RestoreStage::Ready(_) => false,
+        };
+        let matches = match &restore.project {
+            Project::Local { root, .. } => !remote && root == path,
+            Project::Ssh { profile } => {
+                remote
+                    && profile.root == path
+                    && self
+                        .workspace
+                        .as_ref()
+                        .and_then(|w| w.remote.as_ref())
+                        .is_some_and(|host| Project::same_connection(&host.profile, profile))
             }
-            let (_, shares) = self.project_bookmarks.restore_shares.take().unwrap();
-            self.bind_project_transfers();
-            self.transfers.sharing.restore(shares);
-        } else if !self.workspace.preparing()
-            && self.pending.as_ref().is_none()
-            && self
-                .workspace
-                .as_ref()
-                .is_none_or(|w| w.ready || w.remote.is_none())
-        {
+        };
+        if armed && matches {
+            self.project_bookmarks
+                .restore_shares
+                .as_mut()
+                .unwrap()
+                .stage = RestoreStage::Preparing(id);
+        } else {
             self.project_bookmarks.restore_shares = None;
         }
     }
 
-    /// Render the current project’s bookmark toggle using the same stored catalogue and mutation
-    /// path as the sidebar list.
-    pub(super) fn project_bookmark_button(&mut self, ui: &mut egui::Ui, style: ButtonStyle) {
+    /// Only an accepted matching candidate can authorize automatic mounts on the new workspace.
+    pub(in crate::app) fn bookmark_project_committed(
+        &mut self,
+        id: workspace::PreparationId,
+        previous: u64,
+    ) {
+        let Some(restore) = &self.project_bookmarks.restore_shares else {
+            return;
+        };
+        if !matches!(restore.stage, RestoreStage::Preparing(candidate) if candidate == id) {
+            return;
+        }
+        let accepted = previous != self.workers.generation()
+            && self
+                .bookmark_candidate()
+                .is_some_and(|current| current.project.id() == restore.project.id());
+        if accepted {
+            self.project_bookmarks
+                .restore_shares
+                .as_mut()
+                .unwrap()
+                .stage = RestoreStage::Ready(self.workers.generation());
+        } else {
+            self.project_bookmarks.restore_shares = None;
+        }
+    }
+
+    /// Explicit reopening restores mounts after the accepted project/host is ready. Loading a
+    /// bookmark catalogue alone cannot start workers, and stale requests cannot use another policy.
+    pub(in crate::app) fn restore_bookmark_shares(&mut self, ctx: &egui::Context) {
+        let Some(restore) = &self.project_bookmarks.restore_shares else {
+            return;
+        };
+        let ready = match restore.stage {
+            RestoreStage::Armed => false,
+            RestoreStage::Connecting(generation) => {
+                let connecting = self.workspace.as_ref().is_some_and(|workspace| {
+                    !workspace.ready
+                        && workspace.remote.as_ref().is_some_and(|host| {
+                            matches!(&restore.project, Project::Ssh { profile }
+                                if Project::same_connection(&host.profile, profile))
+                        })
+                });
+                if generation == self.workers.generation() && connecting {
+                    return;
+                }
+                false
+            }
+            RestoreStage::Preparing(id) => {
+                if self.workspace.preparation_id() == Some(id) {
+                    return;
+                }
+                false
+            }
+            RestoreStage::Ready(generation) => {
+                generation == self.workers.generation()
+                    && self.project_ready()
+                    && self
+                        .bookmark_candidate()
+                        .is_some_and(|current| current.project.id() == restore.project.id())
+            }
+        };
+        if !ready {
+            self.project_bookmarks.restore_shares = None;
+            return;
+        }
+        if !self.feature(Feature::Transfers) {
+            self.project_bookmarks.restore_shares = None;
+            self.notify(
+                "Enable File transfers to restore this bookmark's shared folders.",
+                true,
+            );
+            return;
+        }
+        if self.pending.as_ref().is_some()
+            || self.vaults.locking()
+            || self.exit_pending()
+            || self.dialog != Dialog::None
+            || self.workspace.preparing()
+            || self.shared_folders.pending()
+            || self.foreign_modal(ctx)
+        {
+            return;
+        }
+        let restore = self.project_bookmarks.restore_shares.take().unwrap();
+        self.mount_bookmark_shares(restore.configs, ctx);
+    }
+
+    /// A native disclosure and independently clickable bookmark action share the header row.
+    /// Reserve the action first so long labels truncate without shrinking the full-width list.
+    pub(super) fn project_bookmarks_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.vertical(|ui| {
+            let id = ui.make_persistent_id(egui::Id::new("project-bookmarks"));
+            let mut label = None;
+            let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                id,
+                true,
+            )
+            .show_header(ui, |ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    self.project_bookmark_button(ui);
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        // Pointer clicks on the title share the disclosure's single keyboard stop.
+                        label = Some(
+                            ui.add(
+                                egui::Label::new("Saved projects")
+                                    .selectable(false)
+                                    .truncate()
+                                    .sense(Sense::CLICK),
+                            ),
+                        );
+                    });
+                });
+            });
+            let label = label.unwrap();
+            if label.clicked() {
+                header.toggle();
+            }
+            let (disclosure, _, _) =
+                header.body_unindented(|ui| self.project_bookmarks_ui(ui, ctx));
+            let response = disclosure.union(label);
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::CollapsingHeader,
+                    ui.is_enabled(),
+                    "Saved projects",
+                )
+            });
+            keyboard::target(ui, "Saved projects", &response);
+            ui_probe::button(ui, "connections-section:Saved projects", &response);
+        });
+    }
+
+    /// Compact bookmark toggle with the catalogue's existing selection, tooltip and context menu.
+    fn project_bookmark_button(&mut self, ui: &mut egui::Ui) {
         if !self.feature(FEATURE) {
             return;
         }
@@ -288,15 +468,7 @@ impl EditorApp {
         } else {
             "Bookmark current project"
         };
-        let button = match style {
-            ButtonStyle::Toolbar => IconButton::toolbar(Icon::Bookmark, label),
-            ButtonStyle::Sidebar => IconButton::new(Icon::Bookmark, label)
-                .min_size(egui::vec2(
-                    ui.available_width(),
-                    layout::control_height(ui).max(30.),
-                ))
-                .truncate(),
-        };
+        let button = IconButton::toolbar(Icon::Bookmark, label);
         let button = ui.add_enabled(enabled, button.selected(saved));
         let button = button.on_disabled_hover_text(if self.vaults.has_active() {
             "Reopen encrypted projects through Open encrypted project."
@@ -329,7 +501,7 @@ impl EditorApp {
                     );
                 },
             );
-            ui.weak("Settings restore unmounted; use Mount in File transfers when needed.");
+            ui.weak("Saved shared folders mount automatically when you reopen the bookmark.");
         });
     }
 

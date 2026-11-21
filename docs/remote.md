@@ -171,7 +171,8 @@ an explicit retry; automatic synchronization and resume are not implemented.
 
 ## Shared folders
 
-In **File transfers**, select **Shared folders → Add shared folder**. Choose
+Open **Project tools → Shared folders** (or **Project: Shared folders** in the
+command palette), then select **Add shared folder**. Choose
 **Local folder on SSH host** or **SSH folder on this computer**. Use **Browse…**
 beside each path to select a source folder and an empty mount folder on the
 receiving machine. The picker shows its host, supports folder filtering, hidden
@@ -198,25 +199,34 @@ installed; RODE reports the mount failure and preserves the existing folders.
 Both the native Rust SSH backend and OpenSSH reuse their authenticated connection
 through dedicated binary channels; no additional login, SSH server on the desktop,
 network listener or installed SFTP server is required. Remote source access uses
-the selected transfer policy. Mounting does not add project sandbox grants;
+the current project's policy, independently of the File transfers host and access
+selection. Mounting does not add project sandbox grants;
 sandboxed programs need access to the resulting mount path, and existing isolated
 shells may need to be reopened after a mount is created.
 
 **Unmount** refuses an in-use mount. Close programs using it and retry. Cancel
-an unfinished attempt with **Cancel mount**. Unmount active shares before changing
-the project, access policy or host, disabling File transfers, or closing RODE.
-Hiding or detaching the view keeps mounts running. Lost connections and abrupt
-desktop exits tear down their streams and detach owned mounts; open handles then
-report I/O failures. After a mounting-helper crash or forced kill, a stale FUSE
+an unfinished attempt with **Cancel mount**. RODE automatically unshares folders
+before changing the project, project sandbox policy or SSH connection, disabling
+the File transfers extension, or closing RODE. The change waits for cleanup to
+finish. If a mount is busy, the
+change stops and the current workspace stays open; close programs using the
+folder and try the change again.
+Hiding or detaching the project tab keeps mounts running. Changing the File
+transfers browser's host or access scope leaves project shares unchanged. Lost
+connections and abrupt desktop exits tear down their streams and detach owned
+mounts; open handles then report I/O failures. After a mounting-helper crash or forced kill, a stale FUSE
 mount may need manual `fusermount3 -u /mount/path` cleanup.
 
-To save recipes, right-click the current **Saved projects** bookmark and enable
-**Include shared-folder settings**. **Update saved shared folders** refreshes its
-snapshot. The Explorer bookmark icon's context menu can enable inclusion when
-creating a new bookmark. Reopening a bookmark restores direction, paths and access
-settings for its SSH host, **without mounting automatically**. Open File transfers
-and choose Mount when needed. Existing bookmarks remain compatible and retain
-ordinary project-only behavior unless opted in.
+New SSH bookmarks include the current shared-folder settings by default. The small
+bookmark icon sits to the right of **Saved projects** in Connections. Right-click
+it to turn sharing inclusion off for new bookmarks, or right-click a saved
+bookmark and toggle **Include shared-folder settings** for that project.
+**Update saved shared folders** refreshes its snapshot after changing the recipes.
+Reopening a bookmark automatically mounts its saved folders after the project and
+SSH connection are ready, using that project's current access policy. Loading the
+saved-project list alone never mounts folders. Mount failures are reported in
+the Shared folders tab; they do not retry automatically. Existing bookmarks without
+shared-folder settings keep their project-only behavior.
 
 ## Client compatibility
 

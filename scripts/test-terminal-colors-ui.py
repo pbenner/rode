@@ -89,6 +89,21 @@ def close_colors():
     ui.absent("terminal-colors-theme")
 
 
+def terminal_crop(*, columns=None, rows=None):
+    """Use the observed grid and pixel scale, independently of sidebar/header geometry."""
+    ui.control("terminal-first-cell")
+    state = ui.layout()
+    first = next(b["rect"] for b in state["buttons"] if b["name"] == "terminal-first-cell")
+    area = next(b["rect"] for b in state["buttons"] if b["name"].startswith("terminal-input:"))
+    left, top = first[:2]
+    right = area[2] if columns is None else min(area[2], left + columns * (first[2] - left))
+    bottom = area[3] if rows is None else min(area[3], top + rows * (first[3] - top))
+    left, top, right, bottom = (
+        round(value * state["pixels_per_point"]) for value in (left, top, right, bottom)
+    )
+    return f"{max(1, right - left)}x{max(1, bottom - top)}{left:+}{top:+}"
+
+
 def bright_pixels(filename):
     """Count readable neutral glyph pixels in the three deliberately dark lines."""
     rgb = subprocess.check_output(
@@ -96,7 +111,7 @@ def bright_pixels(filename):
             "convert",
             str(ARTIFACTS / filename),
             "-crop",
-            "150x43+315+143",
+            terminal_crop(columns=12, rows=3),
             "-depth",
             "8",
             "rgb:-",
@@ -331,10 +346,10 @@ PS1='`if [ $? = 0 ]; then echo "\[\033[01;32m\]âœ”"; else echo "\[\033[01;31m\]â
                 theme(name.replace("-", " "), ui=ui)
                 current = json.loads((ROOT / f"themes/{name}.json").read_text())
                 text("true\n")
-                prompt_colors(window, name + "-prompt.png", current, "1050x240+315+140")
+                prompt_colors(window, name + "-prompt.png", current, terminal_crop())
                 text("false\n")
                 prompt_colors(
-                    window, name + "-prompt-failed.png", current, "1050x240+315+140", failed=True
+                    window, name + "-prompt-failed.png", current, terminal_crop(), failed=True
                 )
             text("echo $$ > palette-after.pid\n")
             wait_for(

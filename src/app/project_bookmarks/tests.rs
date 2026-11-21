@@ -141,10 +141,8 @@ fn reopening_local_and_ssh_bookmarks_waits_for_dirty_buffers_before_starting_wor
             local("/projects/example")
         };
         app.reopen_bookmark(bookmark, &ctx);
-        assert!(matches!(
-            (remote, app.pending.as_ref()),
-            (true, Some(Action::Remote(_))) | (false, Some(Action::Project { remote: false, .. }))
-        ));
+        assert!(matches!(app.pending.as_ref(), Some(Action::Bookmark(saved))
+            if matches!(saved.project, Project::Ssh { .. }) == remote));
         assert!(!app.workspace.preparing());
         assert!(app.ssh_master.is_none());
         assert_eq!(app.documents.active().unwrap().text, "Keep this edit");
@@ -196,7 +194,7 @@ fn separate_preference_writers_merge_bookmarks_and_remove_only_the_selected_reco
 }
 
 #[test]
-fn shared_folder_settings_are_opt_in_bounded_and_restore_without_mounting() {
+fn shared_folder_settings_are_included_by_default_optional_and_bounded() {
     let (mut app, ctx) = app();
     app.workspace
         .set_fixture(Some(crate::app::tests::remote_workspace()));
@@ -206,11 +204,12 @@ fn shared_folder_settings_are_opt_in_bounded_and_restore_without_mounting() {
         ..Default::default()
     };
     app.bind_project_transfers();
-    app.transfers.sharing.restore(vec![config.clone()]);
+    app.shared_folders.restore(vec![config.clone()]);
+    let saved = app.bookmark_candidate().unwrap();
+    app.project_bookmarks.include_shares = false;
     let plain = app.bookmark_candidate().unwrap();
     assert!(plain.shared_folders.is_none());
     app.project_bookmarks.include_shares = true;
-    let saved = app.bookmark_candidate().unwrap();
     assert_eq!(saved.project.id(), plain.project.id());
     assert_eq!(
         saved.shared_folders.as_ref().unwrap(),
@@ -224,11 +223,12 @@ fn shared_folder_settings_are_opt_in_bounded_and_restore_without_mounting() {
         app.project_bookmarks.projects[&id].shared_folders,
         saved.shared_folders
     );
-    app.transfers.sharing.reset();
+    app.shared_folders.reset();
     app.reopen_bookmark(saved, &ctx);
-    app.restore_bookmark_shares();
-    assert_eq!(app.transfers.sharing.configs(), vec![config]);
-    assert!(!app.transfers.sharing.pending());
+    assert!(app.project_bookmarks.restore_shares.is_some());
+    assert!(app.shared_folders.configs().is_empty());
+    assert!(!app.shared_folders.pending());
+    app.project_bookmarks.restore_shares = None;
     app.edit_bookmarks(Edit::Shares(id.clone(), None)).unwrap();
     assert!(app.project_bookmarks.projects[&id].shared_folders.is_none());
     assert!(
@@ -242,13 +242,12 @@ fn shared_folder_settings_are_opt_in_bounded_and_restore_without_mounting() {
 }
 
 #[test]
-fn unavailable_transfer_host_cannot_clear_saved_shared_folders_from_the_menu() {
+fn disconnected_project_cannot_clear_saved_shared_folders_from_the_menu() {
     let (mut app, ctx) = app();
     app.workspace
         .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.bind_project_transfers();
-    app.transfers
-        .sharing
+    app.shared_folders
         .restore(vec![crate::shared_folders::Config {
             source: "/local/source".into(),
             destination: "/remote/mount".into(),
@@ -322,4 +321,101 @@ fn unavailable_transfer_host_cannot_clear_saved_shared_folders_from_the_menu() {
     ]);
     frame(vec![pointer(point, egui::PointerButton::Primary, false)]);
     assert_eq!(app.bookmark_settings(), Some(&saved));
+}
+
+fn restoration(app: &EditorApp, stage: RestoreStage) -> Restoration {
+    Restoration {
+        project: app.bookmark_candidate().unwrap().project,
+        configs: vec![crate::shared_folders::Config {
+            source: "/chosen/source".into(),
+            destination: "/chosen/mount".into(),
+            ..Default::default()
+        }],
+        stage,
+    }
+}
+
+#[test]
+fn catalogue_loading_is_inert_and_superseded_preparations_cannot_restore_shares() {
+    let (mut app, ctx) = app();
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
+    let mut bookmark = app.bookmark_candidate().unwrap();
+    bookmark.shared_folders = Some(restoration(&app, RestoreStage::Armed).configs);
+    app.edit_bookmarks(Edit::Insert(bookmark)).unwrap();
+    app.restore_bookmark_shares(&ctx);
+    assert!(app.project_bookmarks.restore_shares.is_none());
+    assert!(!app.shared_folders.pending());
+
+    let intent = restoration(&app, RestoreStage::Armed);
+    let path = intent.project.root().to_owned();
+    app.project_bookmarks.restore_shares = Some(intent);
+    let first = app.workspace.begin_preparation();
+    app.bookmark_project_preparing(first, &path, true);
+    assert!(
+        matches!(app.project_bookmarks.restore_shares.as_ref().unwrap().stage,
+        RestoreStage::Preparing(id) if id == first)
+    );
+    app.workspace.begin_preparation();
+    app.restore_bookmark_shares(&ctx);
+    assert!(app.project_bookmarks.restore_shares.is_none());
+    assert!(!app.shared_folders.pending());
+}
+
+#[test]
+fn ready_restoration_requires_the_accepted_generation_and_enabled_transfers() {
+    for disabled in [false, true] {
+        let (mut app, ctx) = app();
+        app.workspace
+            .set_fixture(Some(crate::app::tests::remote_workspace()));
+        app.project_bookmarks.restore_shares = Some(restoration(
+            &app,
+            RestoreStage::Ready(app.workers.generation()),
+        ));
+        if disabled {
+            app.set_extension(crate::extensions::Feature::Transfers.id(), false);
+        } else {
+            app.workers.invalidate_workspace();
+        }
+        app.restore_bookmark_shares(&ctx);
+        assert!(app.project_bookmarks.restore_shares.is_none());
+        assert!(app.shared_folders.configs().is_empty());
+        assert!(!app.shared_folders.pending());
+        if disabled {
+            assert!(app.notice.as_ref().unwrap().1);
+        }
+    }
+}
+
+#[test]
+fn failed_commits_and_replaced_connections_cannot_mount_bookmark_recipes() {
+    let (mut app, ctx) = app();
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
+    let intent = restoration(&app, RestoreStage::Armed);
+    let id = app.workspace.begin_preparation();
+    app.project_bookmarks.restore_shares = Some(Restoration {
+        stage: RestoreStage::Preparing(id),
+        ..intent
+    });
+    app.workspace.finish_preparation(id);
+    app.bookmark_project_committed(id, app.workers.generation());
+    assert!(app.project_bookmarks.restore_shares.is_none());
+    app.project_bookmarks.restore_shares = Some(restoration(
+        &app,
+        RestoreStage::Connecting(app.workers.generation()),
+    ));
+    app.workspace.as_mut().unwrap().ready = false;
+    app.restore_bookmark_shares(&ctx);
+    assert!(app.project_bookmarks.restore_shares.is_some());
+    app.workspace.as_mut().unwrap().remote = Some(
+        Remote::new(Profile {
+            host: "another-host".into(),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    app.restore_bookmark_shares(&ctx);
+    assert!(app.project_bookmarks.restore_shares.is_none());
+    assert!(!app.shared_folders.pending());
 }

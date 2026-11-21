@@ -27,6 +27,18 @@ pub(super) struct State {
     selected: Option<String>,
 }
 impl State {
+    /// Capture one listing before dispatch. Transport, cancellation and host policy stay with
+    /// the caller; every browser shares the same token/path and loading-state transition.
+    pub fn begin(&mut self, path: &str) -> u64 {
+        self.token = self.token.wrapping_add(1);
+        self.requested = path.into();
+        self.location = path.into();
+        self.loading = true;
+        self.needs_load = false;
+        self.error = None;
+        self.token
+    }
+
     /// Reset picker state, advance its request token and request a fresh listing so late results
     /// cannot repopulate the previous location.
     pub fn reset(&mut self) {
@@ -443,13 +455,7 @@ impl EditorApp {
     /// Queue a directory listing with picker token and captured location; ordinary host
     /// file pickers use the active plan, while explicit desktop attachments use local scope.
     pub(super) fn browse_files(&mut self, path: String, ctx: &egui::Context) {
-        let browser = &mut self.file_browser;
-        browser.token = browser.token.wrapping_add(1);
-        browser.loading = true;
-        browser.error = None;
-        browser.requested = path.clone();
-        browser.location = path.clone();
-        let token = browser.token;
+        let token = self.file_browser.begin(&path);
         self.dispatch(
             Request::List { path: path.clone() },
             Job::BrowseFiles {

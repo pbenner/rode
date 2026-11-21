@@ -30,7 +30,7 @@ rode /path/to/project/main.py
 rode --ssh user@host --remote-path '~/project'
 ```
 
-Open **Project tools** below **Projects** in the left activity bar for Chat, Terminal, Git, Problems, Tasks and Settings. Close it to restore the full editor canvas; **Detach** and **Detach tab** move tools to separate windows while retaining their sessions. Connections, file transfers and monitoring live in the left activity bar.
+Open **Project tools** below **Projects** in the left activity bar for Chat, Terminal, Git, Problems, Tasks, Shared folders and Settings. Close it to restore the full editor canvas; **Detach** and **Detach tab** move tools to separate windows while retaining their sessions. Connections, file transfers and monitoring live in the left activity bar.
 
 Use **Project: Settings and sandbox access** in the command palette for categorised [project settings](docs/configuration.md#project-settings): code tools, environments, sandbox access, LaTeX and presentations. Each category saves its own changes.
 

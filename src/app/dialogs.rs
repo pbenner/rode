@@ -113,16 +113,16 @@ impl EditorApp {
                     540.
                 };
                 ui.set_width(width.min((ctx.content_rect().width() - 64.).max(1.)));
-                if self.dialog == Dialog::Folder {
-                    self.folder_dialog(ui, ctx);
-                } else if self.dialog == Dialog::SharedFolder {
-                    self.shared_folder_picker(ui, ctx);
-                } else if matches!(self.dialog, Dialog::Tunnels | Dialog::NewTunnel) {
-                    // Like the project picker, the tunnel manager owns its
-                    // scrolling body and keeps its actions visible.
-                    self.tunnels_dialog(ui, ctx);
-                } else if self.dialog == Dialog::Connect {
-                    self.connect_dialog(ui, ctx);
+                if matches!(
+                    self.dialog,
+                    Dialog::Folder
+                        | Dialog::SharedFolder
+                        | Dialog::Tunnels
+                        | Dialog::NewTunnel
+                        | Dialog::Connect
+                ) {
+                    // These forms own scrolling and keep their actions visible.
+                    self.dialog_content(ui, ctx);
                 } else {
                     egui::ScrollArea::vertical()
                         .id_salt(("dialog-body", std::mem::discriminant(&self.dialog)))
@@ -132,33 +132,7 @@ impl EditorApp {
                         // content, then shrink short dialogs to their actual height.
                         .min_scrolled_height((ctx.content_rect().height() - 80.).max(1.))
                         .max_height((ctx.content_rect().height() - 80.).max(1.))
-                        .show(ui, |ui| {
-                            if self.dialog == Dialog::Extensions {
-                                self.extensions_dialog(ui, ctx);
-                            } else if self.dialog == Dialog::Explorer {
-                                self.explorer_dialog(ui, ctx);
-                            } else if self.dialog == Dialog::TransferFiles {
-                                self.transfer_file_dialog(ui, ctx);
-                            } else if self.dialog == Dialog::Encrypted {
-                                self.encrypted_ui(ui, ctx);
-                            } else if matches!(self.dialog, Dialog::MarpExport(..)) {
-                                self.marp_export_dialog(ui, ctx);
-                            } else if self.dialog == Dialog::Shortcuts {
-                                self.help_dialog(ui);
-                            } else if self.dialog == Dialog::Commands {
-                                self.command_dialog(ui, ctx);
-                            } else if self.dialog == Dialog::Sessions {
-                                self.sessions_dialog(ui, ctx);
-                            } else if self.dialog == Dialog::Slurm {
-                                self.slurm_dialog(ui, ctx);
-                            } else if self.dialog == Dialog::AgentSessions {
-                                self.background_agents_dialog(ui, ctx);
-                            } else if self.dialog == Dialog::TerminalExit {
-                                self.terminal_exit_dialog(ui, ctx);
-                            } else {
-                                self.path_dialog(ui, ctx);
-                            }
-                        });
+                        .show(ui, |ui| self.dialog_content(ui, ctx));
                 }
                 if sizing {
                     self.dialog_focus = focus;
@@ -180,6 +154,35 @@ impl EditorApp {
             // egui keeps a closed modal's input barrier for one pass. Clear it
             // promptly even when no background worker will request a repaint.
             ctx.request_repaint();
+        }
+    }
+
+    /// Route every modal explicitly. A new dialog must choose a renderer rather than silently
+    /// falling through to a file picker; viewport, scrolling and lifecycle guards stay above.
+    fn dialog_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        match self.dialog {
+            Dialog::None => {}
+            Dialog::Folder => self.folder_dialog(ui, ctx),
+            Dialog::SharedFolder => self.shared_folder_picker(ui, ctx),
+            Dialog::Tunnels | Dialog::NewTunnel => self.tunnels_dialog(ui, ctx),
+            Dialog::Connect => self.connect_dialog(ui, ctx),
+            Dialog::Extensions => self.extensions_dialog(ui, ctx),
+            Dialog::Explorer => self.explorer_dialog(ui, ctx),
+            Dialog::TransferFiles => self.transfer_file_dialog(ui, ctx),
+            Dialog::Encrypted => self.encrypted_ui(ui, ctx),
+            Dialog::MarpExport(..) => self.marp_export_dialog(ui, ctx),
+            Dialog::Shortcuts => self.help_dialog(ui),
+            Dialog::Commands => self.command_dialog(ui, ctx),
+            Dialog::Sessions => self.sessions_dialog(ui, ctx),
+            Dialog::Slurm => self.slurm_dialog(ui, ctx),
+            Dialog::AgentSessions => self.background_agents_dialog(ui, ctx),
+            Dialog::TerminalExit => self.terminal_exit_dialog(ui, ctx),
+            Dialog::Open
+            | Dialog::HexOpen
+            | Dialog::Save(_)
+            | Dialog::NotebookImage(_)
+            | Dialog::AgentAttachLocal
+            | Dialog::AgentAttachHost => self.path_dialog(ui, ctx),
         }
     }
 

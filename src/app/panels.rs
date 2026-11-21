@@ -7,6 +7,7 @@ use super::*;
 /// Tool-view identity used by tabs, commands and feature gates; it carries no running job.
 pub(super) enum Panel {
     Transfers,
+    SharedFolders,
     Git,
     Monitor,
     Stocks,
@@ -21,12 +22,19 @@ impl Panel {
         match self {
             Self::Monitor | Self::Transfers => areas::Scope::Host,
             Self::Stocks => areas::Scope::Application,
-            _ => areas::Scope::Project,
+            Self::SharedFolders
+            | Self::Git
+            | Self::Problems
+            | Self::Tasks
+            | Self::Settings
+            | Self::Agent
+            | Self::Debug => areas::Scope::Project,
         }
     }
     fn title(self) -> &'static str {
         match self {
             Self::Transfers => "FILE TRANSFERS",
+            Self::SharedFolders => "SHARED FOLDERS",
             Self::Git => "SOURCE CONTROL",
             Self::Monitor => "SYSTEM MONITOR",
             Self::Stocks => "STOCKS",
@@ -129,6 +137,16 @@ impl EditorApp {
                     self.settings_ui(ui, ctx);
                     return;
                 }
+                if panel == Panel::SharedFolders && self.project_shared_folder_endpoint().is_none()
+                {
+                    layout::empty(
+                        ui,
+                        "Shared folders need an SSH project",
+                        "Open a project on an SSH host to share folders with this computer.",
+                        palette,
+                    );
+                    return;
+                }
                 egui::ScrollArea::vertical()
                     .id_salt(("workbench-content", panel.title()))
                     // Keep the solid scrollbar gutter stable while content wraps at fractional zoom.
@@ -139,6 +157,7 @@ impl EditorApp {
                         Panel::Monitor => self.monitor_ui(ui),
                         Panel::Problems => self.problems_ui(ui, ctx),
                         Panel::Tasks => self.tasks_ui(ui, ctx),
+                        Panel::SharedFolders => self.shared_folders_ui(ui, ctx),
                         Panel::Settings
                         | Panel::Agent
                         | Panel::Debug

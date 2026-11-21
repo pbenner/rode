@@ -143,6 +143,13 @@ mod tests {
             (Feature::Git, vec![Command::Panel(Panel::Git)]),
             (Feature::Monitor, vec![Command::Panel(Panel::Monitor)]),
             (
+                Feature::Transfers,
+                vec![
+                    Command::Panel(Panel::Transfers),
+                    Command::Panel(Panel::SharedFolders),
+                ],
+            ),
+            (
                 Feature::Agents,
                 vec![Command::Panel(Panel::Agent), Command::AgentSessions],
             ),

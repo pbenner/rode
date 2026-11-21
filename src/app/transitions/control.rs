@@ -20,6 +20,8 @@ pub(in crate::app) enum Wait {
     Runtime,
     /// Submitted file contents must receive their save acknowledgement.
     Save,
+    /// Shared folders must acknowledge unmount before their host or policy is released.
+    Shares,
 }
 impl Wait {
     /// User-facing explanation of the current acknowledgement barrier.
@@ -29,6 +31,7 @@ impl Wait {
             Self::Files => "Finishing the submitted file operation…",
             Self::Runtime => "Finishing submitted work and runtime lifetime changes…",
             Self::Save => "Waiting for file saves to be acknowledged…",
+            Self::Shares => "Unsharing folders…",
         }
     }
 }
@@ -55,6 +58,8 @@ pub(super) struct Policy {
     pub files_pending: bool,
     /// Runtime or cleanup work still awaits acknowledgement.
     pub runtime_pending: bool,
+    /// Shared-folder cleanup belongs to this ownership change.
+    pub shares_pending: bool,
     /// Current encrypted-workspace admission or lock barrier.
     pub vault: Barrier,
     /// The action retains buffers, so dirty text does not require discard approval.
@@ -130,15 +135,21 @@ impl Controller {
             .as_ref()
             .is_some_and(|p| p.phase == Phase::Wait(Wait::Save))
     }
-    /// Whether file, runtime or save acknowledgements are delaying an intent. Input collection and
+    /// Whether file, runtime, save or unsharing acknowledgements delay an intent. Input collection and
     /// discard confirmation are separate phases.
     pub fn waiting_for_ack(&self) -> bool {
         self.pending.as_ref().is_some_and(|p| {
             matches!(
                 p.phase,
-                Phase::Wait(Wait::Files | Wait::Runtime | Wait::Save)
+                Phase::Wait(Wait::Files | Wait::Runtime | Wait::Save | Wait::Shares)
             )
         })
+    }
+    /// Cleanup begins only after other admission and dirty-buffer decisions succeed.
+    pub fn waiting_for_shares(&self) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|p| p.phase == Phase::Wait(Wait::Shares))
     }
     /// Cancel the retained intent and return its action so the adapter can release any associated
     /// candidate resources.
@@ -179,8 +190,8 @@ impl Controller {
         }
         self.advance(policy, changes)
     }
-    /// Re-evaluate validity, input, file, vault, runtime, save and dirty-version barriers in that
-    /// order. Execution consumes the intent only after every required acknowledgement.
+    /// Re-evaluate validity, input, file, vault, runtime, save, dirty-version and unsharing barriers
+    /// in that order. Execution consumes the intent only after every required acknowledgement.
     pub(super) fn advance(&mut self, policy: Policy, changes: Changes) -> Effect {
         let Some(pending) = self.pending.as_ref() else {
             return Effect::None;
@@ -200,6 +211,8 @@ impl Controller {
             Phase::Wait(Wait::Save)
         } else if !policy.preserve_buffers && changes.unapproved(&pending.approved) {
             Phase::Confirm(changes.dirty_versions)
+        } else if policy.shares_pending {
+            Phase::Wait(Wait::Shares)
         } else {
             return Effect::Execute(self.clear().unwrap());
         };

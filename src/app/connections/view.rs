@@ -46,10 +46,7 @@ impl EditorApp {
             .show(ui, |ui| {
                 ui.add_space(8.);
                 if self.feature(crate::extensions::Feature::ProjectBookmarks) {
-                    sidebar::section(ui, "Saved projects", "project-bookmarks", |ui| {
-                        self.project_bookmark_button(ui, project_bookmarks::ButtonStyle::Sidebar);
-                        self.project_bookmarks_ui(ui, ctx);
-                    });
+                    self.project_bookmarks_section(ui, ctx);
                     ui.separator();
                 }
                 ui.add_space(12.);

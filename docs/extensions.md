@@ -28,8 +28,11 @@ Changing extensions/settings or the workspace cancels executable adapter jobs an
 The **File transfers** module adds local/remote browsing and a background copy
 queue while SSH is connected. Its browsers do not change the open project. See
 [File transfers](remote.md#file-transfers) for navigation, collision choices and
-the captured filesystem policy. Disabling it cancels queued/running transfers and
-hides its application view, palette command and Explorer entry points.
+the captured filesystem policy. It also provides **Project tools → Shared folders**
+for live folder sharing under the current SSH project's permissions. Shares have
+their own controller and remain active when transfer-browser hosts or access
+settings change. Disabling the extension first unshares folders, then cancels
+queued/running copies and hides both views, their commands and Explorer entry points.
 
 ## Project bookmarks
 
@@ -57,10 +60,13 @@ as with other extension preferences. Disable the extension to hide its controls
 while retaining saved projects. The library supports up to 128 entries within
 192 KiB; malformed records are preserved and reported rather than overwritten.
 
-SSH bookmarks can optionally include [shared-folder settings](remote.md#shared-folders).
-Right-click the current bookmark and enable **Include shared-folder settings**;
-use **Update saved shared folders** after changing the recipes. Restoring a
-bookmark restores configuration only; mounts require an explicit **Mount** action.
+New SSH bookmarks include current [shared-folder settings](remote.md#shared-folders)
+by default. Right-click a bookmark to toggle **Include shared-folder settings**;
+use **Update saved shared folders** after changing the recipes. Reopening mounts
+the saved folders automatically once the project and SSH connection are ready,
+using the project's access policy. Loading the catalogue alone starts no mounts.
+RODE automatically unshares folders before changing projects, hosts or policies;
+a busy mount stops the change and keeps the current workspace open.
 
 Encrypted projects continue to use **Open encrypted project**; temporary decrypted
 mounts cannot be bookmarked. Bookmarking is available once ordinary local or SSH

@@ -203,7 +203,6 @@ fn explorer_focus_outline_clears_toolbar_controls_across_themes_and_scales() {
                     };
                     let controls = [
                         control("explorer-new-document"),
-                        control("bookmark-project"),
                         control("explorer-refresh-expanded"),
                     ];
                     let output = output.unwrap();

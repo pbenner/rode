@@ -12,7 +12,7 @@ const MAX_BYTES: usize = 192 * 1024;
 /// SSH entries retain profile metadata rather than credentials or sockets.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Project {
+pub(in crate::app) enum Project {
     Local {
         root: String,
         sandbox: sandbox::Options,
@@ -25,10 +25,10 @@ pub(super) enum Project {
 /// Display name plus a bounded, validated project location. The map key is derived from location
 /// identity, not this label.
 #[derive(Clone, Serialize, Deserialize)]
-pub(super) struct Bookmark {
+pub(in crate::app) struct Bookmark {
     pub name: String,
     pub project: Project,
-    /// Optional inert recipes. Old bookmarks omit this field; restoring never mounts.
+    /// Recipes mounted only when this bookmark is explicitly reopened. Loading preferences is inert.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_folders: Option<Vec<crate::shared_folders::Config>>,
 }
@@ -158,7 +158,6 @@ pub(super) fn decode(raw: Option<&serde_json::Value>) -> Result<BTreeMap<String,
 
 /// Window-owned decoded bookmark cache and rename draft. It tracks stored raw data so unchanged
 /// frames perform no repeated parsing or connection work.
-#[derive(Default)]
 pub(in crate::app) struct State {
     loaded: bool,
     raw: Option<serde_json::Value>,
@@ -167,9 +166,38 @@ pub(in crate::app) struct State {
     pub(super) rename: Option<(String, String)>,
     pub(super) rename_focus: bool,
     /// Configuration restoration follows the accepted project, never an old socket.
-    pub(super) restore_shares: Option<(Project, Vec<crate::shared_folders::Config>)>,
-    /// The header context menu can opt a newly created bookmark into saving recipes.
+    pub(in crate::app) restore_shares: Option<Restoration>,
+    /// New bookmarks include recipes by default; the context menu can opt out.
     pub(super) include_shares: bool,
+}
+
+pub(super) enum RestoreStage {
+    Armed,
+    Connecting(u64),
+    Preparing(workspace::PreparationId),
+    Ready(u64),
+}
+
+/// A bookmark's mount intent follows one connection/preparation and accepted workspace generation.
+pub(in crate::app) struct Restoration {
+    pub(super) project: Project,
+    pub(super) configs: Vec<crate::shared_folders::Config>,
+    pub(super) stage: RestoreStage,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            loaded: false,
+            raw: None,
+            projects: Default::default(),
+            error: None,
+            rename: None,
+            rename_focus: false,
+            restore_shares: None,
+            include_shares: true,
+        }
+    }
 }
 impl State {
     /// Reload only changed raw settings, clearing invalid catalogue data and obsolete rename drafts

@@ -6,6 +6,35 @@ fn fixture() -> (EditorApp, egui::Context) {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     (EditorApp::new(&cc, Startup::default()), ctx)
 }
+
+#[test]
+fn reopening_a_disconnected_ssh_bookmark_retains_edits_without_a_discard_decision() {
+    let (mut app, ctx) = fixture();
+    let mut workspace = crate::app::tests::remote_workspace();
+    workspace.remote.as_mut().unwrap().profile.root = workspace.root.clone();
+    app.workspace.set_fixture(Some(workspace));
+    app.new_file();
+    app.documents
+        .active_mut()
+        .unwrap()
+        .set_source("retained remote edits".into());
+    let bookmark = app.bookmark_candidate().unwrap();
+    app.disconnect_ssh(&ctx);
+    assert!(app.workspace.is_none());
+    assert_eq!(
+        app.documents.active().unwrap().text,
+        "retained remote edits"
+    );
+    let action = Action::Bookmark(Box::new(bookmark));
+    let (policy, changes) = app.transition_facts(&action, &ctx);
+    assert!(policy.preserve_buffers);
+    assert!(!changes.dirty_versions.is_empty());
+    let mut controller = Controller::default();
+    assert!(matches!(
+        controller.request(action, policy, changes, vec![]),
+        Effect::Execute(Action::Bookmark(_))
+    ));
+}
 fn source(app: &mut EditorApp) -> u64 {
     app.new_file();
     let doc = app.documents.active_mut().unwrap();

@@ -79,6 +79,13 @@ pub(in crate::app) struct Controller {
 }
 
 impl Controller {
+    /// Identify the current candidate without exposing its mutable preparation state.
+    pub fn preparation_id(&self) -> Option<PreparationId> {
+        match self.candidate {
+            Candidate::Loading(id) | Candidate::Ready(id, _) => Some(id),
+            Candidate::Idle => None,
+        }
+    }
     /// Borrow the committed/connecting context without exposing mutation rights.
     pub fn as_ref(&self) -> Option<&Workspace> {
         self.active.as_ref()

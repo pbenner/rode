@@ -74,20 +74,18 @@ impl EditorApp {
     /// Capture the field's host once. Paths with the same spelling on the two
     /// machines must never cause a remote selection to fall back to local I/O.
     pub(super) fn open_shared_folder_picker(&mut self, field: Field, ctx: &egui::Context) {
-        let (side, draft) = self.transfers.sharing.view.folder(field);
-        let Some(endpoint) = self.transfer_endpoint(side) else {
+        let (side, draft) = self.shared_folders.view.folder(field);
+        let Some(endpoint) = self.shared_folder_endpoint(side) else {
             return;
         };
         let path = if !draft.trim().is_empty() {
             draft.into()
-        } else if self.transfers.panes[side].ready() {
-            self.transfers.panes[side].browser.directory.clone()
         } else if side == Side::Local {
             files::expand_home("~").to_string_lossy().into()
         } else {
-            self.transfer_host_root().unwrap_or_else(|| "~".into())
+            self.root()
         };
-        let state = &mut self.transfers.sharing;
+        let state = &mut self.shared_folders;
         state.picker_serial = state.picker_serial.wrapping_add(1);
         let mut pane = Pane::default();
         pane.browser.location = path;
@@ -107,13 +105,13 @@ impl EditorApp {
     }
 
     fn browse_shared_folder(&mut self, path: String, create: Option<String>, ctx: &egui::Context) {
-        let Some(picker) = &self.transfers.sharing.picker else {
+        let Some(picker) = &self.shared_folders.picker else {
             return;
         };
-        let Some(endpoint) = self.transfer_endpoint(picker.side) else {
+        let Some(endpoint) = self.shared_folder_endpoint(picker.side) else {
             return;
         };
-        let state = &mut self.transfers.sharing;
+        let state = &mut self.shared_folders;
         let picker = state.picker.as_mut().unwrap();
         if picker.pane.browser.loading {
             return;
@@ -152,21 +150,16 @@ impl EditorApp {
             }
             return;
         }
-        picker.pane.browser.needs_load = false;
-        picker.pane.browser.token = picker.pane.browser.token.wrapping_add(1);
-        picker.pane.browser.requested = path.clone();
-        picker.pane.browser.loading = true;
-        picker.pane.browser.error = None;
+        let token = picker.pane.browser.begin(&path);
         picker.pane.selected.clear();
         picker.cancel.store(true, Ordering::Release);
         picker.cancel = Arc::default();
         let cancel = picker.cancel.clone();
         let serial = picker.serial;
-        let token = picker.pane.browser.token;
         let generation = state.generation;
         let tx = state.tx.clone();
         let active = Listing(state.browsing.clone());
-        let pending = Pending::new(&self.transfers.pending);
+        let pending = Pending::new(&state.pending);
         let work = self.vaults.work();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -190,15 +183,20 @@ impl EditorApp {
     /// The ordinary modal host supplies viewport ownership, Escape and keyboard
     /// barriers. Directory navigation shares rows with project/file pickers.
     pub(in crate::app) fn shared_folder_picker(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if let Some(picker) = &self.transfers.sharing.picker
+        if let Some(picker) = &self.shared_folders.picker
             && picker.pane.browser.needs_load
             && !picker.pane.browser.loading
         {
             self.browse_shared_folder(picker.pane.browser.location.clone(), None, ctx);
         }
         let palette = self.themes.active().palette;
-        let host = self.transfer_host_label();
-        let Some(picker) = &mut self.transfers.sharing.picker else {
+        let host = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.remote.as_ref())
+            .map(|remote| remote.profile.endpoint())
+            .unwrap_or_default();
+        let Some(picker) = &mut self.shared_folders.picker else {
             self.dialog = Dialog::None;
             return;
         };
@@ -421,12 +419,12 @@ impl EditorApp {
         });
         let field = picker.field;
         if accept && let Some(path) = selected {
-            self.transfers.sharing.view.select_folder(field, path);
+            self.shared_folders.view.select_folder(field, path);
             self.dialog = Dialog::None;
-            self.transfers.sharing.cancel_picker();
+            self.shared_folders.cancel_picker();
         } else if cancel {
             self.dialog = Dialog::None;
-            self.transfers.sharing.cancel_picker();
+            self.shared_folders.cancel_picker();
         } else if let Some(path) = create {
             self.browse_shared_folder(path.clone(), Some(path), ctx);
         } else if let Some(path) = browse {
@@ -488,8 +486,8 @@ mod tests {
             &eframe::CreationContext::_new_kittest(ctx),
             Startup::default(),
         );
-        app.transfers.sharing.picker = Some(picker());
-        let state = &mut app.transfers.sharing;
+        app.shared_folders.picker = Some(picker());
+        let state = &mut app.shared_folders;
         for (generation, serial) in [(state.generation.wrapping_add(1), 1), (state.generation, 0)] {
             state
                 .tx
@@ -507,8 +505,7 @@ mod tests {
         }
         app.poll_shared_folders();
         assert!(
-            app.transfers
-                .sharing
+            app.shared_folders
                 .picker
                 .as_ref()
                 .unwrap()
@@ -517,8 +514,8 @@ mod tests {
                 .directory
                 .is_empty()
         );
-        app.transfers.sharing.reset();
-        assert!(app.transfers.sharing.picker.is_none());
+        app.shared_folders.reset();
+        assert!(app.shared_folders.picker.is_none());
     }
 
     #[test]
@@ -555,7 +552,7 @@ mod tests {
                     ..Default::default()
                 })),
             );
-            app.transfers.sharing.picker = Some(picker);
+            app.shared_folders.picker = Some(picker);
             app.set_dialog(Dialog::SharedFolder);
             for _ in 0..4 {
                 let _ = ctx.run(

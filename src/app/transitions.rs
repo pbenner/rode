@@ -25,6 +25,8 @@ pub(in crate::app) enum Action {
     CloseTab(u64),
     Quit,
     LockEncrypted,
+    Bookmark(Box<project_bookmarks::Bookmark>),
+    DisableTransfers,
 }
 
 impl EditorApp {
@@ -33,7 +35,7 @@ impl EditorApp {
         action: &Action,
         ctx: &egui::Context,
     ) -> (Policy, documents::Changes) {
-        let mut preserve_buffers = matches!(action, Action::Disconnect);
+        let mut preserve_buffers = matches!(action, Action::Disconnect | Action::DisableTransfers);
         let mut valid = !self.exit.waiting() && !self.exit.closing();
         let replacing = matches!(
             action,
@@ -41,8 +43,23 @@ impl EditorApp {
                 | Action::PreparedProject { .. }
                 | Action::Remote(_)
                 | Action::Reconnect(_)
-        );
+                | Action::Bookmark(_)
+        ) && !matches!(action, Action::Bookmark(bookmark) if self.bookmark_is_current(bookmark));
+        let changes_shares = match action {
+            Action::CloseTab(_) => false,
+            Action::Bookmark(bookmark) if self.bookmark_is_current(bookmark) => bookmark
+                .shared_folders
+                .as_ref()
+                .is_some_and(|configs| !self.shared_folders.matches_mounted(configs)),
+            _ => true,
+        };
         let vault = match action {
+            Action::Bookmark(bookmark) => {
+                valid &= self.feature(crate::extensions::Feature::ProjectBookmarks);
+                preserve_buffers = self.bookmark_preserves_buffers(bookmark);
+                self.bookmark_transition(bookmark)
+            }
+            Action::DisableTransfers => vaults::Transition::Stay,
             Action::Remote(profile) => {
                 preserve_buffers = self.can_resume_ssh(profile);
                 vaults::Transition::Connection
@@ -98,6 +115,7 @@ impl EditorApp {
                     || self.editor_input_pending(ctx),
                 files_pending: self.explorer_state.busy,
                 runtime_pending,
+                shares_pending: changes_shares && self.shared_folders.pending(),
                 vault: self.vaults.admission(vault),
                 preserve_buffers,
             },
@@ -107,14 +125,8 @@ impl EditorApp {
     /// Submit a potentially destructive action through the shared transition controller.
     /// Invalidate conflicting preparation and release candidates rejected by an existing action.
     pub(in crate::app) fn guarded(&mut self, action: Action, ctx: &egui::Context) {
-        let change = match &action {
-            Action::CloseTab(_) => None,
-            Action::Quit => Some(transfers::ContextChange::Quit),
-            _ => Some(transfers::ContextChange::Project),
-        };
-        if change.is_some_and(|change| !self.allow_shared_folder_change(change)) {
-            self.release_guarded_action(action);
-            return;
+        if !matches!(action, Action::CloseTab(_) | Action::PreparedProject { .. }) {
+            self.project_bookmarks.restore_shares = None;
         }
         if let Action::PreparedProject { .. } = &action {
             let busy = self.pending.as_ref().is_some_and(|pending| match pending {
@@ -132,6 +144,7 @@ impl EditorApp {
                 | Action::Remote(_)
                 | Action::Reconnect(_)
                 | Action::LockEncrypted
+                | Action::Bookmark(_)
         ) {
             self.invalidate_project_candidate(workspace::PickerReset::Invalidate);
         }
@@ -194,13 +207,25 @@ impl EditorApp {
     }
     fn transition_effect(&mut self, effect: Effect, ctx: &egui::Context) {
         match effect {
-            Effect::Execute(action) => self.perform(action, ctx),
-            Effect::Cancelled(action) => self.release_guarded_action(action),
+            Effect::Execute(action) => {
+                self.shared_folders.finish_stop_wait();
+                self.perform(action, ctx);
+            }
+            Effect::Cancelled(action) => {
+                self.shared_folders.finish_stop_wait();
+                self.release_guarded_action(action);
+            }
             Effect::Rejected(action, barrier) => {
+                self.shared_folders.finish_stop_wait();
                 self.release_guarded_action(action);
                 self.notify(barrier.message(), true);
             }
-            Effect::Held => ctx.request_repaint_after(Duration::from_millis(50)),
+            Effect::Held => {
+                if self.pending.waiting_for_shares() {
+                    self.shared_folders.stop_for_transition();
+                }
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
             Effect::None => {}
         }
     }
@@ -212,12 +237,14 @@ impl EditorApp {
     /// Cancel the held action and release any project candidate it owned.
     pub(in crate::app) fn cancel_guarded_action(&mut self) {
         if let Some(action) = self.pending.clear() {
+            self.shared_folders.finish_stop_wait();
             self.release_guarded_action(action);
         }
     }
     /// Cancel only the matching decision, leaving a newer transition untouched.
     pub(in crate::app) fn cancel_guarded_decision(&mut self, id: control::DecisionId) {
         if let Some(action) = self.pending.cancel(id) {
+            self.shared_folders.finish_stop_wait();
             self.release_guarded_action(action);
         }
     }
@@ -231,7 +258,9 @@ impl EditorApp {
         match action {
             Action::PreparedProject { id } => {
                 if let Some(prepared) = self.workspace.take_prepared(id) {
+                    let previous = self.workers.generation();
                     self.commit_prepared(prepared, ctx);
+                    self.bookmark_project_committed(id, previous);
                 }
             }
             Action::Project {
@@ -267,6 +296,8 @@ impl EditorApp {
                 vaults::QuitPolicy::Close => self.request_exit(ctx),
             },
             Action::LockEncrypted => self.lock_encrypted(false, ctx),
+            Action::Bookmark(bookmark) => self.open_bookmark(*bookmark, ctx),
+            Action::DisableTransfers => self.set_extension(crate::extensions::Feature::Transfers.id(), false),
         }
     }
 }

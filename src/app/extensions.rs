@@ -50,6 +50,19 @@ impl Extensions {
     }
 }
 impl EditorApp {
+    /// User changes share the ownership guard so disabling transfers first unshares its folders.
+    pub(in crate::app) fn request_extension(
+        &mut self,
+        id: &str,
+        enabled: bool,
+        ctx: &egui::Context,
+    ) {
+        if id == Feature::Transfers.id() && !enabled {
+            self.guarded(Action::DisableTransfers, ctx);
+        } else {
+            self.set_extension(id, enabled);
+        }
+    }
     /// Cancel captured adapter jobs and rotate the flag so future work has a fresh lifetime.
     pub(super) fn cancel_extensions(&mut self) {
         self.extensions.cancel_work();
@@ -61,7 +74,7 @@ impl EditorApp {
     /// Map optional tool views to their bundled feature gate; core views have no extra gate.
     pub(super) fn panel_feature(panel: Panel) -> Option<Feature> {
         match panel {
-            Panel::Transfers => Some(Feature::Transfers),
+            Panel::Transfers | Panel::SharedFolders => Some(Feature::Transfers),
             Panel::Git => Some(Feature::Git),
             Panel::Monitor => Some(Feature::Monitor),
             Panel::Stocks => Some(Feature::Stocks),
@@ -94,10 +107,7 @@ impl EditorApp {
     /// Change feature enablement, invalidate source-tool epochs and cancel affected owned work
     /// without replacing source buffers or abandoning protected save acknowledgements.
     pub(super) fn set_extension(&mut self, id: &str, enabled: bool) {
-        if id == Feature::Transfers.id()
-            && !enabled
-            && !self.allow_shared_folder_change(transfers::ContextChange::Disable)
-        {
+        if id == Feature::Transfers.id() && !enabled && self.shared_folders.pending() {
             return;
         }
         self.cancel_extensions();
@@ -113,6 +123,7 @@ impl EditorApp {
             }
             if id == Feature::Transfers.id() {
                 self.transfers.reset();
+                self.shared_folders.reset();
             }
             if id == Feature::Debugger.id() {
                 self.leave_debugger();
@@ -302,7 +313,7 @@ impl EditorApp {
             }
         });
         if let Some((id, enabled)) = toggle {
-            self.set_extension(&id, enabled);
+            self.request_extension(&id, enabled, ctx);
         }
         if let Some(id) = settings {
             self.extensions.settings_text = serde_json::to_string_pretty(

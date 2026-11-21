@@ -162,7 +162,7 @@ fn scope_registry_keeps_host_and_application_tools_out_of_project_tabs() {
             .into_iter()
             .filter(|t| t.scope() == Scope::Project)
             .count(),
-        7
+        8
     );
 }
 

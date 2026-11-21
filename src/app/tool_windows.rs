@@ -24,13 +24,14 @@ pub(in crate::app) enum ToolTab {
 }
 
 impl ToolTab {
-    pub(in crate::app) const ALL: [Self; 12] = [
+    pub(in crate::app) const ALL: [Self; 13] = [
         Self::Panel(Panel::Agent),
         Self::Terminal,
         Self::Panel(Panel::Git),
         Self::Panel(Panel::Monitor),
         Self::Panel(Panel::Problems),
         Self::Panel(Panel::Tasks),
+        Self::Panel(Panel::SharedFolders),
         Self::Panel(Panel::Debug),
         Self::Panel(Panel::Settings),
         Self::Panel(Panel::Stocks),
@@ -71,6 +72,7 @@ impl ToolTab {
             Self::Panel(Panel::Debug) => "Debugger",
             Self::Panel(Panel::Stocks) => "Stocks",
             Self::Panel(Panel::Transfers) => "Transfers",
+            Self::Panel(Panel::SharedFolders) => "Shared folders",
         }
     }
 

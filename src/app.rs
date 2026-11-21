@@ -242,6 +242,7 @@ pub struct EditorApp {
     terminal_colors: terminal_colors::State,
     stocks: stocks::State,
     transfers: transfers::State,
+    shared_folders: transfers::Sharing,
     theme_save_pending: bool,
     syntax_save_pending: bool,
     started: Instant,
@@ -372,6 +373,7 @@ impl EditorApp {
             terminal_colors: terminal_colors::State::load(storage, &themes),
             stocks: Default::default(),
             transfers: Default::default(),
+            shared_folders: Default::default(),
             themes,
             theme_save_pending: startup.theme.is_some(),
             syntax_save_pending: startup.syntax_theme.is_some(),
@@ -792,6 +794,7 @@ impl eframe::App for EditorApp {
         self.poll_debugger(ctx);
         self.stocks.poll(ctx);
         self.transfer_tick(ctx);
+        self.shared_folders_tick(ctx);
         self.poll_notebooks(ctx);
         self.marp_tick();
         self.monitor_tick(ctx);

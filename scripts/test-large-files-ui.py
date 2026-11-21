@@ -104,8 +104,9 @@ with fixture_directory(prefix="rode-large-files-ui-") as base:
                     item["name"] == "hex-saved" for item in json.loads(state.read_text())["buttons"]
                 )
 
-            if remote:
-                NativeUI(window, process, log.name, state, root).navigate("e")
+            ui = NativeUI(window, process, log.name, state, root)
+            ui.command("Navigation: Focus explorer")
+            ui.control("pane-Explorer", focused=True)
             # Open through the real explorer row after selecting its surface.
             button("explorer-row:" + str(path))
             point("hex-ready", timeout=60)

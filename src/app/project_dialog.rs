@@ -357,7 +357,7 @@ impl State {
                 );
                 ui_probe::button(ui, "project-dialog-up", &up);
                 if up.clicked() {
-                    browse = Some(project_parent(&self.path));
+                    browse = Some(file_browser::parent(&self.path));
                 }
                 let width =
                     (ui.available_width() - browse_width - ui.spacing().item_spacing.x).max(1.);
@@ -446,7 +446,7 @@ impl State {
                 ui_probe::button(ui, "project-dialog-folders", &listing.response);
                 if let Some(action) = listing.inner {
                     browse = Some(match action {
-                        file_browser::Choice::Parent => project_parent(&self.path),
+                        file_browser::Choice::Parent => file_browser::parent(&self.path),
                         file_browser::Choice::Select(entry) | file_browser::Choice::Open(entry) => {
                             entry.path
                         }
@@ -465,11 +465,4 @@ impl State {
             });
         browse
     }
-}
-
-fn project_parent(path: &str) -> String {
-    std::path::Path::new(path)
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .map_or_else(|| "/".into(), |path| path.to_string_lossy().into())
 }

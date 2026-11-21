@@ -250,7 +250,10 @@ with fixture_directory(prefix="rode-transfers-ui-") as base:
         ui = root_ui
         ui.control("transfer-view:0:icons")
         ui.value("transfer-directory:0", str(local))
-        ui.click("activity:Projects")
+        # Projects restores its remembered surface without opening Explorer.
+        # Request the pane explicitly before checking the uploaded file.
+        ui.command("Navigation: Focus explorer")
+        ui.control("pane-Explorer", focused=True)
         ui.control(f"explorer-row:{remote / source.name}")
         ui.click("activity:File transfers")
         assert source.read_bytes() == payload

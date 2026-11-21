@@ -83,10 +83,10 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
 | `src/app/navigation/` | Pane focus, validated shortcut presets and native source-editing modes |
 | `src/app/input.rs`, `src/app/input/control.rs` | Input adapter and private source replay/keymap owner; frame contexts and ordered document handoffs |
-| `src/app/transitions.rs`, `src/app/transitions/control.rs` | Ownership-transition effects and private intent/confirmation controller; source, file, save, runtime and vault admission |
+| `src/app/transitions.rs`, `src/app/transitions/control.rs` | Ownership-transition effects and private intent/confirmation controller; source, file, save, runtime, vault and shared-folder cleanup admission |
 | `src/app/sidebar.rs`, `src/app/connections/view.rs` | Exclusive root sidebar selection, independent Connections focus/width, and compact saved lists shared with the detached owner |
 | `src/app/saved_connections/` | Connection form intents, catalogue reloads, submitted-form identity and serialized profile writes independent of workspace lifetime |
-| `src/shared_folders.rs`, `src/app/transfers/sharing.rs`, `src/app/transfers/sharing/view.rs`, `crates/rode-host-core/src/shared_folders/` | Captured share recipes, one context-change admission rule, intent-only presentation, cancellable SSH relays and identity-checked mounts; bookmarks retain settings without services |
+| `src/shared_folders.rs`, `src/app/transfers/sharing.rs`, `src/app/transfers/sharing/view.rs`, `crates/rode-host-core/src/shared_folders/` | Captured share recipes, acknowledged automatic unsharing, intent-only presentation, cancellable SSH relays and identity-checked mounts; explicit bookmark reopening restores mounts |
 | `src/app/project_dialog.rs` | Owned selected-host project discovery state, path/selection, request tokens and candidate sandbox options; emits browse/open/cancel intents |
 | `src/app/explorer/` | Project-scoped directory cache, flattened rows, keyboard selection and acknowledged mutation effects |
 | `src/app/explorer.rs`, `crates/rode-host-core/src/files/mutations.rs` | Explorer menus/forms, acknowledged path updates and bounded native filesystem mutations on the captured project host |
@@ -191,6 +191,8 @@ The choices below explain the current implementation. Module-level rustdoc recor
 
 Keep the desktop coordinator focused on application state and shared lifecycle guards. Application menus and header actions belong in `app/frame.rs`; `app/chrome/workspace.rs` projects actual workspace state into footer controls and native window titles without allocating a banner or changing authority. File/decode dispatch belongs in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Project-tool background work lives in `workbench/jobs.rs`, independently of tool-panel rendering and saved settings. Git operation admission lives in `workbench/git/controller.rs`; `workbench/git/jobs.rs` connects admitted operations and completion effects to the captured project workers. Git rendering consumes cached state and invokes those same operations for buttons, confirmations and credential retries. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules under the domain that owns the behavior.
 
+Modal rendering and panel scope classification use exhaustive matches: adding a dialog or panel requires an explicit renderer or ownership scope.
+
 ### Theme composition
 
 `src/theme.rs` owns theme selection, startup loading and highlighting invalidation. `theme/palette.rs` defines interface/terminal color roles; `theme/definition.rs` parses each JSON definition once per resolution and resolves built-in inheritance by ID, with cycle detection independent of menu order. `theme/interface.rs` defines and validates inheritable component tokens. `theme/install.rs` applies the resolved palette and metrics to egui, assigning each style role once; `theme/typography.rs` installs the embedded interface font once per context. `theme/components.rs` supplies control metrics, padded form inputs, secondary labels, primary actions and card/dialog/panel frames. The app’s layout helpers reuse those controls and own page/pane geometry; keyboard discovery reuses the shared button wrapper. `theme/surfaces.rs` draws optional native decoration, while `theme/syntax.rs` handles independently selected code palettes and cached highlighting.
@@ -232,12 +234,27 @@ or interaction IDs and preserves source selection and focus. See the
 
 ### Transfer and mount admission
 
-The shared-folder controller owns one typed context-change admission rule for
-projects/connections, host selection, file access, extension disabling and quit.
-UI availability and mutating adapters consult that same rule. Worker ownership,
-including cancelled rows still cleaning up, keeps those changes blocked until
-cleanup completes. Forced connection loss still cancels owned work. The view
-edits its draft and emits add/remove/mount/stop intents; it never signals workers.
+Shared folders is a project-scoped, detachable tool tab with application-owned
+controller state independent of the host-scoped transfer browsers. Its endpoint
+always captures the current SSH project's policy; folder pickers and streaming
+helpers reuse the transfer implementation. Browser host/access changes cannot
+retarget shares, clear their recipes or stop their workers.
+
+The transition controller admits project/connection and sandbox-policy changes,
+extension disabling and quit through the same shared-folder cleanup
+barrier. Dirty-buffer decisions precede automatic unsharing. A normal unmount is
+requested once; worker ownership and the final reply both keep the action waiting
+until cleanup completes. Busy-unmount errors cancel the action and retain the
+current context without forcing a detach. Forced connection loss still cancels
+owned work. The view edits its draft and emits add/remove/mount/stop intents; it
+never signals workers.
+
+Bookmark loading is inert. Explicit reopening captures mount recipes as an intent
+bound to one connection, preparation identity and accepted workspace generation.
+Superseding, failed and cancelled preparations discard it. Only the matching ready
+project can restore mounts, with its project policy rather than a previous
+host-access policy. Reopening the current bookmark with identical live mounts is
+idempotent. Restored mount failures are visible and do not retry automatically.
 
 Copies and mounted shares use the same nonblocking pipe implementation. Copy
 streams choose an idle timeout; shared-folder reads allow indefinite inactivity
@@ -335,10 +352,13 @@ project; neither a disconnected host nor an expired scope can fall back to local
 access. Explicit SSH disconnect still releases the original transport and leaves
 the tool's selection offline.
 
-File pickers and transfer panes reuse the directory-item renderer, selection
-visuals and lexical parent navigation. Their requests retain separate endpoint,
+File pickers, transfer panes and shared-folder pickers reuse the directory-item
+renderer, selection visuals and lexical parent navigation. Their shared
+`file_browser::State::begin` captures listing tokens, submitted paths and loading
+state. Adapters retain separate cancellation, reply-admission, endpoint,
 generation and permission checks: sharing presentation never grants file access
-or changes the selected workspace.
+or changes the selected workspace. Selected-host project discovery retains its
+separate sandbox-options draft.
 
 Transfer endpoints distinguish desktop access from SSH access. An SSH endpoint
 owns its connection and captured policy together, so missing policies and local

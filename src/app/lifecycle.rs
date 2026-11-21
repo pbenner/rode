@@ -48,6 +48,7 @@ impl EditorApp {
     pub(super) fn request_exit(&mut self, ctx: &egui::Context) {
         self.host_tools.stop_monitor();
         self.transfers.reset();
+        self.shared_folders.reset();
         if !self.debugger.change_pending() {
             self.leave_debugger();
         }
@@ -97,6 +98,7 @@ impl EditorApp {
             installation: self.agent_installation_pending(),
             exports: self.workers.exports_pending()
                 || self.transfers.pending()
+                || self.shared_folders.pending()
                 || self.host_tools.preparing,
         }
     }

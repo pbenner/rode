@@ -318,8 +318,8 @@ impl Registry {
             (
                 Feature::Transfers,
                 "File transfers",
-                "Browse local and SSH folders and copy files through a cancellable background queue.",
-                "Explicit browse / upload / download",
+                "Browse and copy local/SSH files, and share live folders from project tools.",
+                "Explicit browse / copy / mount, or reopen a saved project",
             ),
             (
                 Feature::Python,
