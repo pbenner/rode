@@ -65,6 +65,10 @@ fn main() -> eframe::Result {
                 | "--runtime-cache"
                 | "--file-transfer"
                 | "--file-transfer-worker"
+                | "--shared-folder-export"
+                | "--shared-folder-export-worker"
+                | "--shared-folder-mount"
+                | "--shared-folder-unmount"
         )
     }) {
         if let Err(error) = rode_session::cli(&args) {

@@ -1228,3 +1228,14 @@ simulate an unavailable backend rather than merely remove `bwrap` from `PATH`.
 The pinned Codex release needs `codex-code-mode-host` and `codex-exec-server` alongside `codex`. Runtime tests check multi-executable transfers, executable permissions, incomplete/corrupt transfers, distinct cache identities for main-only versus complete deployments, and explicit repair that preserves the original main binary and previous selector on download failure. `python3 scripts/test-packaging.py` exercises the same missing-helper repair through the preparation script.
 
 With `RODE_TEST_CODEX` pointing to a complete prepared runtime, the existing loopback Responses test also enables code mode in its isolated configuration and returns a deterministic tool call. It must create a file with a real shell command and return the output to the next model request, in normal mode and an available bwrap sandbox. This uses no account or model and catches runtime layouts that pass initialization/chat-only checks but cannot execute tools. The SSH checks verify complete runtime deployment over direct and ProxyJump connections.
+
+### Shared-folder validation
+
+`tests/ssh_roundtrip/shared_folders.rs` exercises the actual SFTP service over
+both Rust and OpenSSH masters, including binary reads/writes, read-only denial,
+path/symlink escapes and EOF shutdown. Core tests cover bounded framing and
+atomic rename behavior. `scripts/test-shared-folders-ui.py`, run under
+`scripts/test-ssh.sh`, exercises both mount directions and access modes, busy
+unmounts and bookmark persistence/restoration. It records a `fuse` skip on hosts
+that deny `/dev/fuse`; the `ssh` / `remote-smoke` CI lane requires this capability
+and installs SSHFS/FUSE, so successful kernel mounts cannot silently be skipped.

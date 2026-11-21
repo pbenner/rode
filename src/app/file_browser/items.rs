@@ -2,6 +2,9 @@
 //! cursor uses an outline so deselected files never retain selection colors.
 use super::*;
 
+// File rows own their border gutter, independent of ordinary button styling.
+const LIST_PADDING: egui::Margin = egui::Margin::symmetric(8, 6);
+
 /// Transfer-browser presentation; changing it keeps the same cursor and paths.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::app) enum View {
@@ -24,7 +27,10 @@ impl View {
     }
     pub(super) fn height(self, ui: &egui::Ui) -> f32 {
         match self {
-            Self::List => layout::control_height(ui).max(34.),
+            Self::List => layout::control_height(ui)
+                .max(34.)
+                .max(ui.text_style_height(&egui::TextStyle::Button).max(18.) + LIST_PADDING.sum().y)
+                .ceil(),
             Self::Icons => {
                 84. + 2. * ui.text_style_height(&egui::TextStyle::Body)
                     + ui.text_style_height(&egui::TextStyle::Small)
@@ -45,9 +51,6 @@ pub(super) fn show(
 ) -> egui::Response {
     let response = match view {
         View::List => {
-            // Reserve the layer before the label so fill changes never cover
-            // text. Frameless egui buttons otherwise keep only selected text.
-            let background = ui.painter().add(egui::Shape::Noop);
             let check_id = ui.next_auto_id().with("file-check");
             let icon_id = ui.next_auto_id().with("file-icon");
             let label = if selected {
@@ -55,32 +58,32 @@ pub(super) fn show(
             } else {
                 RichText::new(&entry.name)
             };
-            let output = egui::Button::selectable(
-                selected,
-                (
-                    egui::Atom::custom(check_id, egui::Vec2::splat(18.)),
-                    egui::Atom::custom(icon_id, egui::Vec2::splat(18.)),
-                    label,
-                    egui::Atom::grow(),
-                ),
-            )
-            .frame(false)
-            .truncate()
+            // A frameless Button removes its padding, putting the check mark
+            // on the outline. Lay out inset contents inside the same full-row
+            // hit target, and include that padding in the virtual row height.
+            let mut prepared = egui::AtomLayout::new((
+                egui::Atom::custom(check_id, egui::Vec2::splat(18.)),
+                egui::Atom::custom(icon_id, egui::Vec2::splat(18.)),
+                label,
+                egui::Atom::grow(),
+            ))
+            .frame(egui::Frame::new().inner_margin(LIST_PADDING))
+            .fallback_font(egui::TextStyle::Button)
+            .wrap_mode(egui::TextWrapMode::Truncate)
             .sense(sense)
             .min_size(size)
-            .atom_ui(ui);
-            let visuals = ui.style().interact_selectable(&output.response, selected);
+            .allocate(ui);
+            let visuals = ui.style().interact_selectable(&prepared.response, selected);
             let fill = if selected {
                 selection_fill(ui.visuals())
-            } else if output.response.hovered() || output.response.is_pointer_button_down_on() {
+            } else if prepared.response.hovered() || prepared.response.is_pointer_button_down_on() {
                 visuals.weak_bg_fill
             } else {
                 egui::Color32::TRANSPARENT
             };
-            ui.painter().set(
-                background,
-                egui::Shape::rect_filled(output.response.rect, 6, fill),
-            );
+            prepared.frame = prepared.frame.fill(fill).corner_radius(6);
+            prepared.fallback_text_color = visuals.text_color();
+            let output = prepared.paint(ui);
             if let Some(rect) = output.rect(check_id) {
                 selection_mark(ui, rect, selected);
             }
@@ -99,6 +102,14 @@ pub(super) fn show(
         }
         View::Icons => tile(ui, entry, selected, size, sense),
     };
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            selected,
+            &entry.name,
+        )
+    });
     if selected {
         ui.painter().rect_stroke(
             response.rect.shrink(0.5),
@@ -166,14 +177,6 @@ fn tile(
     sense: Sense,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, sense);
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            selected,
-            &entry.name,
-        )
-    });
     if !ui.is_rect_visible(rect) {
         return response;
     }

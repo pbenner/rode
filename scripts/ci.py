@@ -192,6 +192,7 @@ SUITES = {
         ),
     ],
     "remote-smoke": [
+        ui("shared-folders"),
         ui("transfers"),
         ui("execution-modes", RODE_EXECUTION_UI_REMOTE="1"),
         ui("git-identity", RODE_GIT_IDENTITY_UI_REMOTE="1"),
@@ -556,6 +557,8 @@ def suite_environment(name):
             env.pop(key, None)
     if name in ("runtimes", "remote-runtimes"):
         env["RODE_TEST_REQUIRED_CAPABILITIES"] = "jupyter,debugpy,lldb"
+    if name in ("ssh", "remote-smoke"):
+        env["RODE_TEST_REQUIRED_CAPABILITIES"] = "fuse"
     if name == "sandbox":
         env["RODE_TEST_REQUIRED_CAPABILITIES"] = "bwrap"
     if name == "landlock":

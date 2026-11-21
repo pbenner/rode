@@ -107,6 +107,11 @@ impl EditorApp {
     /// Submit a potentially destructive action through the shared transition controller.
     /// Invalidate conflicting preparation and release candidates rejected by an existing action.
     pub(in crate::app) fn guarded(&mut self, action: Action, ctx: &egui::Context) {
+        if self.transfers.sharing.pending() && !matches!(action, Action::CloseTab(_)) {
+            self.release_guarded_action(action);
+            self.notify("Unmount shared folders in File transfers before changing projects, disconnecting or closing RODE.", false);
+            return;
+        }
         if let Action::PreparedProject { .. } = &action {
             let busy = self.pending.as_ref().is_some_and(|pending| match pending {
                 Action::PreparedProject { id } => self.workspace.prepared(*id).is_some(),

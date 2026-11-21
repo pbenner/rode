@@ -6,6 +6,7 @@ mod browser;
 mod drag;
 mod operations;
 mod queue;
+mod sharing;
 #[cfg(test)]
 mod tests;
 mod ui;
@@ -146,6 +147,7 @@ struct Finished {
 }
 /// Transient browser/queue state. Only explicit user actions launch workers.
 pub(super) struct State {
+    pub(in crate::app) sharing: sharing::Sharing,
     panes: Sides<Pane>,
     generation: u64,
     next: u64,
@@ -169,6 +171,7 @@ impl Default for State {
     fn default() -> Self {
         let (send, receive) = mpsc::channel();
         Self {
+            sharing: Default::default(),
             panes: Default::default(),
             generation: 0,
             next: 0,
@@ -218,11 +221,12 @@ impl State {
 
     /// Normal window exit waits for cancelled stream and listing workers to release their stages.
     pub fn pending(&self) -> bool {
-        self.pending.load(Ordering::Acquire) > 0
+        self.pending.load(Ordering::Acquire) > 0 || self.sharing.pending()
     }
     /// Cancel without waiting on network/filesystem I/O on the GUI thread. Keep
     /// the running slot until completion so rapid switches never spawn copies concurrently.
     pub fn reset(&mut self) {
+        self.sharing.reset();
         self.generation = self.generation.wrapping_add(1);
         self.queue.clear();
         self.history.clear();
@@ -424,6 +428,8 @@ impl EditorApp {
     }
     /// Refresh dirty-destination guards and drain replies even when the tab is hidden or disabled.
     pub(super) fn transfer_tick(&mut self, ctx: &egui::Context) {
+        self.poll_shared_folders();
+        self.restore_bookmark_shares();
         if self.dialog != Dialog::TransferFiles {
             self.transfers.file_form = None;
         }

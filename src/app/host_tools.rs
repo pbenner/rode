@@ -98,6 +98,10 @@ impl EditorApp {
         }
     }
     pub(super) fn bind_project_transfers(&mut self) {
+        if self.transfers.sharing.pending() {
+            return;
+        }
+        self.host_tools.transfer_initialized = true;
         if let Some(workspace) = self.workspace.as_ref().filter(|w| w.ready && w.connected)
             && let Some(remote) = &workspace.remote
         {
@@ -200,7 +204,7 @@ impl EditorApp {
         });
     }
     fn prepare_transfer_host(&mut self, remote: Remote, ctx: &egui::Context) {
-        if self.host_tools.preparing {
+        if self.host_tools.preparing || self.transfers.sharing.pending() {
             return;
         }
         self.transfers.reset();
@@ -319,10 +323,17 @@ impl EditorApp {
                         }
                     }
                     if let Some(remote) = &remote {
-                        let choose = crate::keyboard::button(
-                            ui,
-                            format!("SSH · {}", remote.profile.endpoint()),
-                        );
+                        let choose = ui
+                            .add_enabled(
+                                panel != Panel::Transfers || !self.transfers.sharing.pending(),
+                                crate::keyboard::Button::new(format!(
+                                    "SSH · {}",
+                                    remote.profile.endpoint()
+                                )),
+                            )
+                            .on_disabled_hover_text(
+                                "Unmount shared folders before changing the host.",
+                            );
                         ui_probe::button(
                             ui,
                             if panel == Panel::Monitor {
@@ -332,7 +343,9 @@ impl EditorApp {
                             },
                             &choose,
                         );
-                        if choose.clicked() {
+                        if choose.clicked()
+                            && (panel != Panel::Transfers || !self.transfers.sharing.pending())
+                        {
                             if panel == Panel::Monitor {
                                 self.select_monitor_host(Some(remote.clone()));
                             } else {
@@ -360,7 +373,9 @@ impl EditorApp {
                     .is_some_and(|(selected, current)| selected.socket == current.socket);
                 let access = crate::keyboard::menu_button(ui, "Access", |ui| {
                     let project = ui.add_enabled(
-                        self.project_ready() && same_project_host,
+                        self.project_ready()
+                            && same_project_host
+                            && !self.transfers.sharing.pending(),
                         crate::keyboard::Button::new("Use current project permissions"),
                     );
                     ui_probe::button(ui, "transfer-use-project-access", &project);
@@ -372,7 +387,8 @@ impl EditorApp {
                         selected
                             .as_ref()
                             .is_some_and(|remote| self.selected_host_connected(remote))
-                            && !self.host_tools.preparing,
+                            && !self.host_tools.preparing
+                            && !self.transfers.sharing.pending(),
                         crate::keyboard::Button::new("Use host access (outside project sandbox)"),
                     );
                     ui_probe::button(ui, "transfer-use-host-access", &host);

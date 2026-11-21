@@ -165,6 +165,51 @@ host, locking an encrypted project or disabling the extension cancels queued/run
 normal window exit waits for local cleanup. Interrupted copies restart through
 an explicit retry; automatic synchronization and resume are not implemented.
 
+## Shared folders
+
+In **File transfers**, select **Shared folders → Add shared folder**. Choose
+**Local folder on SSH host** or **SSH folder on this computer**, enter the source
+and an existing empty mount folder on the receiving machine, and choose **Save
+shared folder**. Paths are absolute or start with `~/`, interpreted on their
+respective hosts. Mount folders must be owned by you and not writable by other
+users. Choose a specific source subfolder; whole-home and filesystem-root exports
+are refused.
+
+Select **Mount** to make the source available through the mount path. **Read only**
+is enabled by default and enforced by both the mount and exporting server. Turn it
+off to allow programs on the receiving machine to edit the source files. Changes
+are live after files are saved; this creates no offline copy or synchronization
+queue. Applications writing concurrently need their own coordination; shares do
+not provide cross-host file locking. Up to eight
+shared folders may be configured. Symbolic links and special files are excluded.
+
+The receiving machine needs **SSHFS**, **FUSE**, and `fusermount3` (or
+`fusermount`). Linux is currently supported. On Debian/Ubuntu these are provided
+by `sshfs` and `fuse3`. Compute hosts may prohibit FUSE even when these tools are
+installed; RODE reports the mount failure and preserves the existing folders.
+Both the native Rust SSH backend and OpenSSH reuse their authenticated connection
+through dedicated binary channels; no additional login, SSH server on the desktop,
+network listener or installed SFTP server is required. Remote source access uses
+the selected transfer policy. Mounting does not add project sandbox grants;
+sandboxed programs need access to the resulting mount path, and existing isolated
+shells may need to be reopened after a mount is created.
+
+**Unmount** refuses an in-use mount. Close programs using it and retry. Cancel
+an unfinished attempt with **Cancel mount**. Unmount active shares before changing
+the project, access policy or host, disabling File transfers, or closing RODE.
+Hiding or detaching the view keeps mounts running. Lost connections and abrupt
+desktop exits tear down their streams and detach owned mounts; open handles then
+report I/O failures. After a mounting-helper crash or forced kill, a stale FUSE
+mount may need manual `fusermount3 -u /mount/path` cleanup.
+
+To save recipes, right-click the current **Saved projects** bookmark and enable
+**Include shared-folder settings**. **Update saved shared folders** refreshes its
+snapshot. The Explorer bookmark icon's context menu can enable inclusion when
+creating a new bookmark. Reopening a bookmark restores direction, paths and access
+settings for its SSH host, **without mounting automatically**. Open File transfers
+and choose Mount when needed. Existing bookmarks remain compatible and retain
+ordinary project-only behavior unless opted in.
+
 ## Client compatibility
 
 The Rust backend supports `Host` patterns and negation, bounded `Include` files,

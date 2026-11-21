@@ -13,6 +13,7 @@ portable-pty = "0.9"
 rode-host-protocol = { path = "../rode-host-protocol" }
 anyhow = "1"
 base64 = "0.22"
+cap-std = "=4.0.3"
 dprint-plugin-typescript = "0.101"
 dprint-plugin-json = "0.26"
 dprint-plugin-markdown = "0.29"

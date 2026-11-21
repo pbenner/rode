@@ -53,6 +53,13 @@ impl EditorApp {
         restore_saved: Option<bool>,
         ctx: &egui::Context,
     ) {
+        if self.transfers.sharing.pending() {
+            self.notify(
+                "Unmount shared folders before changing the project or its sandbox policy.",
+                false,
+            );
+            return;
+        }
         if self.exit.waiting()
             || self.exit.closing()
             || matches!(

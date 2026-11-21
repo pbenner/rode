@@ -16,6 +16,7 @@ enum Edit {
     Insert(Bookmark),
     Remove(String),
     Rename(String, String),
+    Shares(String, Option<Vec<crate::shared_folders::Config>>),
 }
 
 impl EditorApp {
@@ -35,6 +36,23 @@ impl EditorApp {
             .get(FEATURE.id())
             .and_then(|p| p.settings.get(SETTING));
         self.project_bookmarks.sync(raw);
+    }
+
+    /// Only recipes bound to this project's actual SSH connection may be captured.
+    fn bookmark_share_configs(&self) -> Option<Vec<crate::shared_folders::Config>> {
+        let configs = self.transfers.sharing.configs();
+        let workspace_remote = self.workspace.as_ref()?.remote.as_ref()?;
+        if configs.is_empty()
+            || self
+                .transfer_host_endpoint()
+                .as_ref()
+                .and_then(|endpoint| endpoint.remote())
+                .is_some_and(|remote| remote.socket == workspace_remote.socket)
+        {
+            Some(configs)
+        } else {
+            None
+        }
     }
 
     fn bookmark_candidate(&self) -> Option<Bookmark> {
@@ -65,7 +83,15 @@ impl EditorApp {
         if name.trim().is_empty() {
             name = "Project".into();
         }
-        Some(Bookmark { name, project })
+        let shared_folders = (matches!(project, Project::Ssh { .. })
+            && self.project_bookmarks.include_shares)
+            .then(|| self.bookmark_share_configs())
+            .flatten();
+        Some(Bookmark {
+            name,
+            project,
+            shared_folders,
+        })
     }
 
     /// Patch raw records, retaining fields introduced by newer versions of the extension.
@@ -84,6 +110,17 @@ impl EditorApp {
             }
             Edit::Remove(id) => {
                 map.remove(&id);
+            }
+            Edit::Shares(id, shares) => {
+                let record = map
+                    .get_mut(&id)
+                    .and_then(serde_json::Value::as_object_mut)
+                    .ok_or_else(|| anyhow::anyhow!("Project bookmark no longer exists"))?;
+                if let Some(shares) = shares {
+                    record.insert("shared_folders".into(), serde_json::to_value(shares)?);
+                } else {
+                    record.remove("shared_folders");
+                }
             }
             Edit::Rename(id, name) => {
                 model::validate_name(&name)?;
@@ -142,6 +179,10 @@ impl EditorApp {
 
     /// Persisted locations are intents, never proof of a live transport or an active sandbox.
     fn reopen_bookmark(&mut self, bookmark: Bookmark, ctx: &egui::Context) {
+        self.project_bookmarks.restore_shares = bookmark
+            .shared_folders
+            .clone()
+            .map(|shares| (bookmark.project.clone(), shares));
         if self
             .bookmark_candidate()
             .is_some_and(|current| current.project.id() == bookmark.project.id())
@@ -184,6 +225,33 @@ impl EditorApp {
                     self.guarded(Action::Remote(profile), ctx);
                 }
             }
+        }
+    }
+
+    /// Apply only after the bookmarked host and project are ready. Cancelled or
+    /// failed transitions discard the intent; recipes never start mount workers.
+    pub(in crate::app) fn restore_bookmark_shares(&mut self) {
+        let Some((project, _)) = &self.project_bookmarks.restore_shares else {
+            return;
+        };
+        let matches = self
+            .bookmark_candidate()
+            .is_some_and(|current| current.project.id() == project.id());
+        if matches && self.project_ready() {
+            if self.transfers.sharing.pending() {
+                return;
+            }
+            let (_, shares) = self.project_bookmarks.restore_shares.take().unwrap();
+            self.bind_project_transfers();
+            self.transfers.sharing.restore(shares);
+        } else if !self.workspace.preparing()
+            && self.pending.as_ref().is_none()
+            && self
+                .workspace
+                .as_ref()
+                .is_none_or(|w| w.ready || w.remote.is_none())
+        {
+            self.project_bookmarks.restore_shares = None;
         }
     }
 
@@ -234,6 +302,21 @@ impl EditorApp {
         if button.clicked() {
             self.toggle_project_bookmark();
         }
+        crate::keyboard::context_menu(&button, |ui| {
+            ui.add_enabled_ui(
+                candidate
+                    .as_ref()
+                    .is_some_and(|b| matches!(b.project, Project::Ssh { .. })),
+                |ui| {
+                    crate::keyboard::checkbox(
+                        ui,
+                        &mut self.project_bookmarks.include_shares,
+                        "Include shared-folder settings in new bookmarks",
+                    );
+                },
+            );
+            ui.weak("Settings restore unmounted; use Mount in File transfers when needed.");
+        });
     }
 
     /// Render saved local/SSH locations and their management actions in Explorer. Reopening uses
@@ -270,6 +353,25 @@ impl EditorApp {
                         let change_name = crate::keyboard::button(ui, "Rename bookmark…");
                         ui_probe::button(ui, &format!("bookmark-rename:{id}"), &change_name);
                         if change_name.clicked() { rename = Some((id.clone(), bookmark.name.clone())); ui.close(); }
+                        if matches!(bookmark.project, Project::Ssh { .. }) {
+                            let mut include = bookmark.shared_folders.is_some();
+                            let configs = self.bookmark_share_configs();
+                            let can_capture = current.as_ref() == Some(id) && configs.is_some();
+                            let include_control = ui.add_enabled_ui(can_capture, |ui| {
+                                crate::keyboard::checkbox(ui, &mut include, "Include shared-folder settings")
+                            }).inner;
+                            ui_probe::button(ui, &format!("bookmark-shares:{id}"), &include_control);
+                            if include_control.changed() {
+                                edit = Some(Edit::Shares(id.clone(), if include { self.bookmark_share_configs() } else { None }));
+                            }
+                            if include && current.as_ref() == Some(id) {
+                                let update = ui.add_enabled(can_capture, crate::keyboard::Button::new("Update saved shared folders"));
+                                ui_probe::button(ui, &format!("bookmark-shares-update:{id}"), &update);
+                                if update.clicked() {
+                                    edit = Some(Edit::Shares(id.clone(), configs)); ui.close();
+                                }
+                            }
+                        }
                         let remove = crate::keyboard::button(ui, RichText::new("Remove bookmark").color(palette.error));
                         ui_probe::button(ui, &format!("bookmark-remove:{id}"), &remove);
                         if remove.clicked() { edit = Some(Edit::Remove(id.clone())); ui.close(); }

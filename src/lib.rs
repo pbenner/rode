@@ -54,3 +54,4 @@ pub(crate) mod transfers;
 pub mod vault;
 
 mod keyboard;
+pub(crate) mod shared_folders;

@@ -142,6 +142,89 @@ fn clearing_checked_files_removes_the_fill_even_at_the_navigation_cursor() {
 }
 
 #[test]
+fn selection_marks_stay_clear_of_item_outlines_at_different_scales() {
+    for theme in theme::Theme::builtins() {
+        for view in [View::List, View::Icons] {
+            for (pixels_per_point, font_scale) in [(1., 1.), (1.25, 1.5), (2., 2.)] {
+                for width in [180., 430.] {
+                    let mut browser = Browser::new(view, 2);
+                    browser.width = width;
+                    theme::install(&browser.ctx, theme.palette);
+                    browser.ctx.set_pixels_per_point(pixels_per_point);
+                    browser.ctx.style_mut(|style| {
+                        // Embedded panes can remove ordinary button padding.
+                        // File items must still reserve their own border gutter.
+                        style.spacing.button_padding = egui::Vec2::ZERO;
+                        for font in style.text_styles.values_mut() {
+                            font.size *= font_scale;
+                        }
+                    });
+                    browser.list.navigated = true;
+                    browser
+                        .checked
+                        .extend(browser.entries.iter().map(|e| e.path.clone()));
+                    browser.frame(vec![]);
+                    let (output, _, rects) = browser.frame(vec![]);
+                    let accent = browser
+                        .ctx
+                        .style()
+                        .visuals
+                        .selection
+                        .stroke
+                        .color
+                        .to_opaque();
+                    for entry in &browser.entries {
+                        let row = rects[&entry.path];
+                        let border = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Rect(r)
+                                    if r.stroke.width == 2.
+                                        && r.stroke.color == accent
+                                        && r.rect.contains(row.center()) =>
+                                {
+                                    Some(r)
+                                }
+                                _ => None,
+                            })
+                            .expect("Missing selected item outline");
+                        let mark = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Rect(r)
+                                    if r.fill == accent
+                                        && r.rect.width() < 20.
+                                        && row.contains_rect(r.rect) =>
+                                {
+                                    Some(r.rect)
+                                }
+                                _ => None,
+                            })
+                            .expect("Missing checked selection mark");
+                        assert!(
+                            border
+                                .rect
+                                .shrink(border.stroke.width + 3.)
+                                .contains_rect(mark),
+                            "Checkbox touches the item border: theme={}, view={view:?}, dpi={pixels_per_point}, font={font_scale}, width={width}, row={row:?}, mark={mark:?}",
+                            theme.id
+                        );
+                    }
+                    let first = rects[&browser.entries[0].path];
+                    let second = rects[&browser.entries[1].path];
+                    assert!(
+                        !first.intersects(second),
+                        "File items overlap after scaling"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn tile_navigation_tracks_columns_and_reveals_the_same_file_after_resizing() {
     let mut browser = Browser::new(View::Icons, 100);
     browser.frame(vec![]);

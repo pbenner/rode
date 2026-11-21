@@ -85,6 +85,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/input.rs`, `src/app/input/control.rs` | Input adapter and private source replay/keymap owner; frame contexts and ordered document handoffs |
 | `src/app/transitions.rs`, `src/app/transitions/control.rs` | Ownership-transition effects and private intent/confirmation controller; source, file, save, runtime and vault admission |
 | `src/app/saved_connections/` | Connection form intents, catalogue reloads, submitted-form identity and serialized profile writes independent of workspace lifetime |
+| `src/shared_folders.rs`, `src/app/transfers/sharing.rs`, `crates/rode-host-core/src/shared_folders/` | Captured share recipes, cancellable SSH relays, capability-scoped SFTP serving and identity-checked SSHFS mount ownership; bookmarks retain settings without services |
 | `src/app/project_dialog.rs` | Owned selected-host project discovery state, path/selection, request tokens and candidate sandbox options; emits browse/open/cancel intents |
 | `src/app/explorer/` | Project-scoped directory cache, flattened rows, keyboard selection and acknowledged mutation effects |
 | `src/app/explorer.rs`, `crates/rode-host-core/src/files/mutations.rs` | Explorer menus/forms, acknowledged path updates and bounded native filesystem mutations on the captured project host |

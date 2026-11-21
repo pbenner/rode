@@ -56,6 +56,11 @@ as with other extension preferences. Disable the extension to hide its controls
 while retaining saved projects. The library supports up to 128 entries within
 192 KiB; malformed records are preserved and reported rather than overwritten.
 
+SSH bookmarks can optionally include [shared-folder settings](remote.md#shared-folders).
+Right-click the current bookmark and enable **Include shared-folder settings**;
+use **Update saved shared folders** after changing the recipes. Restoring a
+bookmark restores configuration only; mounts require an explicit **Mount** action.
+
 Encrypted projects continue to use **Open encrypted project**; temporary decrypted
 mounts cannot be bookmarked. Bookmarking is available once ordinary local or SSH
 project preparation has finished.

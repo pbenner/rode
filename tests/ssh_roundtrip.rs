@@ -49,6 +49,8 @@ use documents::{
     binary_extension_roundtrip, encrypted_roundtrip, latex_roundtrip, marp_roundtrip,
     notebook_roundtrip,
 };
+#[path = "ssh_roundtrip/shared_folders.rs"]
+mod shared_folders;
 #[path = "ssh_roundtrip/transport.rs"]
 mod transport;
 

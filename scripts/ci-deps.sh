@@ -16,7 +16,7 @@ if [[ "$suite" == build ]]; then packages+=(musl-tools bubblewrap); fi
 case "$suite" in
     ssh|remote|runtimes) packages+=(openssh-server) ;;
 esac
-if [[ "$suite" == ssh ]]; then packages+=(krb5-kdc krb5-admin-server krb5-user); fi
+if [[ "$suite" == ssh ]]; then packages+=(krb5-kdc krb5-admin-server krb5-user sshfs fuse3); fi
 case "$suite" in
     workspace|ssh) packages+=(openssl) ;; # HTTPS Git authentication fixtures.
 esac

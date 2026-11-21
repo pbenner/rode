@@ -8,6 +8,7 @@ fn app() -> (EditorApp, egui::Context) {
 }
 fn local(root: &str) -> Bookmark {
     Bookmark {
+        shared_folders: None,
         name: "Project".into(),
         project: Project::Local {
             root: root.into(),
@@ -126,6 +127,7 @@ fn reopening_local_and_ssh_bookmarks_waits_for_dirty_buffers_before_starting_wor
             .set_source("Keep this edit".into());
         let bookmark = if remote {
             Bookmark {
+                shared_folders: None,
                 name: "Remote".into(),
                 project: Project::Ssh {
                     profile: Box::new(Profile {
@@ -191,4 +193,133 @@ fn separate_preference_writers_merge_bookmarks_and_remove_only_the_selected_reco
     let bookmarks = model::decode(preferences[FEATURE.id()].settings.get(SETTING)).unwrap();
     assert!(!bookmarks.contains_key(&one_id));
     assert!(bookmarks.contains_key(&two_id));
+}
+
+#[test]
+fn shared_folder_settings_are_opt_in_bounded_and_restore_without_mounting() {
+    let (mut app, ctx) = app();
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
+    let config = crate::shared_folders::Config {
+        source: "/local/chosen".into(),
+        destination: "/remote/mount".into(),
+        ..Default::default()
+    };
+    app.bind_project_transfers();
+    app.transfers.sharing.restore(vec![config.clone()]);
+    let plain = app.bookmark_candidate().unwrap();
+    assert!(plain.shared_folders.is_none());
+    app.project_bookmarks.include_shares = true;
+    let saved = app.bookmark_candidate().unwrap();
+    assert_eq!(saved.project.id(), plain.project.id());
+    assert_eq!(
+        saved.shared_folders.as_ref().unwrap(),
+        &vec![config.clone()]
+    );
+    let id = saved.project.id();
+    app.edit_bookmarks(Edit::Insert(saved.clone())).unwrap();
+    app.edit_bookmarks(Edit::Rename(id.clone(), "With shared folders".into()))
+        .unwrap();
+    assert_eq!(
+        app.project_bookmarks.projects[&id].shared_folders,
+        saved.shared_folders
+    );
+    app.transfers.sharing.reset();
+    app.reopen_bookmark(saved, &ctx);
+    app.restore_bookmark_shares();
+    assert_eq!(app.transfers.sharing.configs(), vec![config]);
+    assert!(!app.transfers.sharing.pending());
+    app.edit_bookmarks(Edit::Shares(id.clone(), None)).unwrap();
+    assert!(app.project_bookmarks.projects[&id].shared_folders.is_none());
+    assert!(
+        app.bookmark_settings().unwrap()[&id]
+            .get("shared_folders")
+            .is_none()
+    );
+    let mut invalid = app.project_bookmarks.projects[&id].clone();
+    invalid.shared_folders = Some(vec![crate::shared_folders::Config::default()]);
+    assert!(app.edit_bookmarks(Edit::Insert(invalid)).is_err());
+}
+
+#[test]
+fn unavailable_transfer_host_cannot_clear_saved_shared_folders_from_the_menu() {
+    let (mut app, ctx) = app();
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
+    app.bind_project_transfers();
+    app.transfers
+        .sharing
+        .restore(vec![crate::shared_folders::Config {
+            source: "/local/source".into(),
+            destination: "/remote/mount".into(),
+            ..Default::default()
+        }]);
+    app.project_bookmarks.include_shares = true;
+    let bookmark = app.bookmark_candidate().unwrap();
+    let id = bookmark.project.id();
+    app.edit_bookmarks(Edit::Insert(bookmark)).unwrap();
+    let saved = app.bookmark_settings().unwrap().clone();
+    app.workspace.as_mut().unwrap().connected = false;
+    assert!(app.bookmark_share_configs().is_none());
+    let temp = tempfile::tempdir().unwrap();
+    let snapshot = temp.path().join("state.json");
+    ui_probe::install_at(&ctx, snapshot.clone());
+    let mut frame = |events| {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(450., 600.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.project_bookmarks_ui(ui, ctx));
+            },
+        );
+    };
+    let control = |name: &str| {
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
+        state["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == name)
+            .unwrap_or_else(|| panic!("Missing {name}"))
+            .clone()
+    };
+    let center = |button: &serde_json::Value| {
+        let rect = &button["rect"];
+        egui::pos2(
+            ((rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap()) / 2.) as f32,
+            ((rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap()) / 2.) as f32,
+        )
+    };
+    let pointer = |pos, button, pressed| egui::Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: Default::default(),
+    };
+    frame(vec![]);
+    frame(vec![]);
+    let row = center(&control(&format!("saved-project:{id}")));
+    frame(vec![
+        egui::Event::PointerMoved(row),
+        pointer(row, egui::PointerButton::Secondary, true),
+    ]);
+    frame(vec![pointer(row, egui::PointerButton::Secondary, false)]);
+    frame(vec![]);
+    frame(vec![]);
+    let update = control(&format!("bookmark-shares-update:{id}"));
+    assert_eq!(update["enabled"], false);
+    let point = center(&update);
+    frame(vec![
+        egui::Event::PointerMoved(point),
+        pointer(point, egui::PointerButton::Primary, true),
+    ]);
+    frame(vec![pointer(point, egui::PointerButton::Primary, false)]);
+    assert_eq!(app.bookmark_settings(), Some(&saved));
 }

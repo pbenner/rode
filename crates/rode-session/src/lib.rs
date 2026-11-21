@@ -1093,6 +1093,12 @@ fn attach_stream(id: &str, policy: &str, framed: bool, heartbeat: bool) -> Resul
 /// Entry point shared by the standalone headless helper and the GUI binary's
 /// local fallback. No windowing code is linked into rode-sessiond.
 pub fn cli(args: &[String]) -> Result<()> {
+    if args
+        .first()
+        .is_some_and(|arg| arg.starts_with("--shared-folder-"))
+    {
+        return rode_host_core::shared_folders::cli(args);
+    }
     if args.first().is_some_and(|s| s == "--git-credential") {
         return rode_host_core::project::git_auth::helper(&args[1..]);
     }

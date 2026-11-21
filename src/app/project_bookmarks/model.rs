@@ -28,6 +28,9 @@ pub(super) enum Project {
 pub(super) struct Bookmark {
     pub name: String,
     pub project: Project,
+    /// Optional inert recipes. Old bookmarks omit this field; restoring never mounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_folders: Option<Vec<crate::shared_folders::Config>>,
 }
 
 /// Authentication configuration is metadata: no key contents, tokens or live sockets.
@@ -125,6 +128,26 @@ pub(super) fn decode(raw: Option<&serde_json::Value>) -> Result<BTreeMap<String,
     for (id, bookmark) in &projects {
         validate_name(&bookmark.name)?;
         bookmark.project.validate()?;
+        if let Some(shares) = &bookmark.shared_folders {
+            ensure!(
+                matches!(bookmark.project, Project::Ssh { .. }),
+                "Only SSH bookmarks can include shared folders"
+            );
+            ensure!(
+                shares.len() <= 8,
+                "At most eight shared folders can be saved per bookmark"
+            );
+            for (index, share) in shares.iter().enumerate() {
+                share.validate()?;
+                ensure!(
+                    !shares[..index]
+                        .iter()
+                        .any(|other| other.direction == share.direction
+                            && other.destination == share.destination),
+                    "Duplicate shared-folder mount destination"
+                );
+            }
+        }
         ensure!(
             *id == bookmark.project.id(),
             "Bookmark identity does not match its project location"
@@ -143,6 +166,10 @@ pub(in crate::app) struct State {
     pub(super) error: Option<String>,
     pub(super) rename: Option<(String, String)>,
     pub(super) rename_focus: bool,
+    /// Configuration restoration follows the accepted project, never an old socket.
+    pub(super) restore_shares: Option<(Project, Vec<crate::shared_folders::Config>)>,
+    /// The header context menu can opt a newly created bookmark into saving recipes.
+    pub(super) include_shares: bool,
 }
 impl State {
     /// Reload only changed raw settings, clearing invalid catalogue data and obsolete rename drafts

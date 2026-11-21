@@ -23,6 +23,7 @@ pub mod private_tmp;
 pub mod project;
 pub mod runtime_cache;
 pub mod sandbox;
+pub mod shared_folders;
 pub mod slurm;
 pub mod supervisor;
 pub mod transfer;
