@@ -97,9 +97,11 @@ move up, or double-click a folder. The **···** menu contains Home, Refresh, h
 files, selection actions and New folder. **Select this folder** copies the current
 folder itself, including a sandboxed project root. Browsing does not change the
 project, chat, terminal or execution settings. Drag the pane/queue dividers to
-resize; **Layout…** provides the same adjustments by keyboard. On short windows,
-the tray becomes an **Activity…** bar; open it for progress, cancel, retry and
-finished copies while both file panes retain their space.
+resize. Dividers highlight on hover or keyboard focus. Focus a divider with Tab
+or action hints, then use Left/Right for the browser split or Up/Down for the
+queue height. Press Home or double-click the divider to restore its default size.
+On short windows, the tray becomes an **Activity…** bar; open it for progress,
+cancel, retry and finished copies while both file panes retain their space.
 
 Drag files or folders to the opposite pane to copy them into that displayed
 folder, or drop onto a folder row to copy into that folder. Dragging a selected

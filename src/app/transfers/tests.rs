@@ -253,6 +253,8 @@ fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
         let local = rect("transfer-path:0");
         let remote = rect("transfer-path:1");
         assert!(local[2] <= remote[0], "Browsers overlap: {snapshot}");
+        let divider = rect("transfer-browser-resize");
+        assert!(local[2] <= divider[0] && divider[2] <= remote[0]);
         for (side, copy) in [
             (Side::Local, "transfer-upload"),
             (Side::Remote, "transfer-download"),
@@ -287,6 +289,13 @@ fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
                     && control[3] <= height as f64,
                 "Control outside viewport: {snapshot}"
             );
+        }
+        if let Some(queue) = buttons
+            .iter()
+            .find(|b| b["name"] == "transfer-queue-resize")
+        {
+            let top = queue["rect"][1].as_f64().unwrap();
+            assert!(rect("transfer-upload")[3] <= top && rect("transfer-download")[3] <= top);
         }
         assert!(buttons.iter().any(|b| b["name"] == "transfer-idle"));
     }
@@ -345,4 +354,133 @@ fn desktop_drops_require_real_absolute_paths_and_listed_destinations() {
             .unwrap()
             .contains("destination folder changed")
     );
+}
+
+#[test]
+fn dividers_resize_by_keyboard_and_drag_reset_and_survive_compact_windows() {
+    let (mut app, ctx) = app();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("layout.json");
+    ui_probe::install_at(&ctx, path.clone());
+    let mut time = 0.;
+    let mut render = |width, height, events| {
+        // Separate unrelated gestures while keeping the deliberate pair of
+        // clicks within egui's double-click delay (which tracks clicks globally).
+        time += 0.1;
+        let _ = ctx.run(
+            egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, height),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.transfers_ui(ui, ctx));
+            },
+        );
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()
+    };
+    let rect = |state: &serde_json::Value, name: &str| {
+        let control = state["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|button| button["name"] == name)
+            .unwrap_or_else(|| panic!("Missing {name}: {state}"));
+        let r = &control["rect"];
+        egui::Rect::from_min_max(
+            egui::pos2(r[0].as_f64().unwrap() as f32, r[1].as_f64().unwrap() as f32),
+            egui::pos2(r[2].as_f64().unwrap() as f32, r[3].as_f64().unwrap() as f32),
+        )
+    };
+    let pointer = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        pressed,
+        button: egui::PointerButton::Primary,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let key = |key| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    render(1100., 800., vec![]);
+    let initial = render(1100., 800., vec![]);
+    for (name, arrow, delta) in [
+        (
+            "transfer-browser-resize",
+            egui::Key::ArrowRight,
+            egui::vec2(60., 0.),
+        ),
+        (
+            "transfer-queue-resize",
+            egui::Key::ArrowUp,
+            egui::vec2(0., -60.),
+        ),
+    ] {
+        let baseline = rect(&initial, name).center();
+        // Clicking a grip must make its keyboard controls available immediately.
+        render(
+            1100.,
+            800.,
+            vec![egui::Event::PointerMoved(baseline), pointer(baseline, true)],
+        );
+        let focused = render(1100., 800., vec![pointer(baseline, false)]);
+        assert!(
+            focused["buttons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b["name"] == name && b["focused"] == true)
+        );
+        render(1100., 800., vec![key(arrow), key(arrow)]);
+        let enlarged = render(1100., 800., vec![]);
+        assert_eq!(rect(&enlarged, name).center(), baseline + delta * (2. / 3.));
+        render(1100., 800., vec![key(egui::Key::Home)]);
+        let reset = render(1100., 800., vec![]);
+        assert_eq!(rect(&reset, name).center(), baseline);
+        render(
+            1100.,
+            800.,
+            vec![egui::Event::PointerMoved(baseline), pointer(baseline, true)],
+        );
+        let moved = baseline + delta;
+        render(1100., 800., vec![egui::Event::PointerMoved(moved)]);
+        render(1100., 800., vec![pointer(moved, false)]);
+        let dragged = render(1100., 800., vec![]);
+        assert_eq!(rect(&dragged, name).center(), moved);
+        // The queue grip disappears in compact mode; neither preference is reset.
+        let compact = render(850., 400., vec![]);
+        assert!(
+            !compact["buttons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b["name"] == "transfer-queue-resize")
+        );
+        render(1100., 800., vec![]);
+        let restored = render(1100., 800., vec![]);
+        assert!((rect(&restored, name).center() - moved).length() <= 1.);
+        // Double-click resets exactly as Home does, after a genuine drag.
+        let grip = rect(&restored, name).center();
+        for _ in 0..2 {
+            render(
+                1100.,
+                800.,
+                vec![egui::Event::PointerMoved(grip), pointer(grip, true)],
+            );
+            render(1100., 800., vec![pointer(grip, false)]);
+        }
+        let reset = render(1100., 800., vec![]);
+        assert!(
+            (rect(&reset, name).center() - baseline).length() <= 1.,
+            "{name}: double-click reset to {:?}, expected {baseline:?}",
+            rect(&reset, name).center()
+        );
+    }
 }

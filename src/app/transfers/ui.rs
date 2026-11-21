@@ -1,5 +1,8 @@
 //! Transfer workspace: two calm browser surfaces above a compact, resizable activity tray.
 use super::*;
+use layout::resize::{Edge, Handle};
+
+const DIVIDER: f32 = 8.;
 
 pub(super) fn surface(palette: theme::Palette) -> egui::Frame {
     egui::Frame::new()
@@ -12,7 +15,6 @@ pub(super) fn surface(palette: theme::Palette) -> egui::Frame {
 impl EditorApp {
     pub(in crate::app) fn transfers_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        let view_width = ui.available_width().max(90.);
         let view_height = ui.available_height().max(80.);
         let compact = view_height < 430.;
         let queue_id = ui.id().with("transfer-queue");
@@ -26,56 +28,7 @@ impl EditorApp {
                 "Drag files between panes to copy. Your project stays open."
             },
             palette,
-            |ui| {
-                crate::keyboard::menu_button(ui, "Layout…", |ui| {
-                    for (id, label, default, maximum, horizontal) in [
-                        (
-                            local_id,
-                            "Local browser width",
-                            view_width * 0.5,
-                            view_width * 0.7,
-                            true,
-                        ),
-                        (
-                            queue_id,
-                            "Transfer queue height",
-                            100.,
-                            (view_height * 0.45).max(70.),
-                            false,
-                        ),
-                    ] {
-                        let mut state = egui::containers::panel::PanelState::load(ctx, id)
-                            .unwrap_or(egui::containers::panel::PanelState {
-                                rect: egui::Rect::from_min_size(
-                                    egui::Pos2::ZERO,
-                                    egui::vec2(default, default),
-                                ),
-                            });
-                        let mut size = if horizontal {
-                            state.rect.width()
-                        } else {
-                            state.rect.height()
-                        };
-                        ui.label(label);
-                        if ui
-                            .add(crate::keyboard::named(
-                                label,
-                                egui::DragValue::new(&mut size)
-                                    .range(70. ..=maximum.max(70.))
-                                    .speed(5.),
-                            ))
-                            .changed()
-                        {
-                            if horizontal {
-                                state.rect.max.x = state.rect.min.x + size;
-                            } else {
-                                state.rect.max.y = state.rect.min.y + size;
-                            }
-                            ctx.data_mut(|data| data.insert_persisted(id, state));
-                        }
-                    }
-                });
-            },
+            |_| {},
         );
         if let Some(error) = &self.transfers.error {
             ui.colored_label(palette.error, error);
@@ -104,6 +57,7 @@ impl EditorApp {
                 );
             }
         }
+        let mut queue_resize = None;
         if compact {
             egui::TopBottomPanel::bottom(queue_id.with("compact"))
                 .frame(surface(palette))
@@ -127,14 +81,18 @@ impl EditorApp {
                 });
         } else {
             let maximum = (ui.available_height() * 0.45).max(65.);
-            egui::TopBottomPanel::bottom(queue_id)
-                .frame(surface(palette))
-                .resizable(true)
-                .default_height(100.)
-                .height_range(65. ..=maximum)
+            let queue = egui::TopBottomPanel::bottom(queue_id)
+                .frame(surface(palette).outer_margin(egui::Margin {
+                    top: DIVIDER as i8,
+                    ..Default::default()
+                }))
+                .resizable(false)
+                .default_height(100. + DIVIDER)
+                .height_range(65. ..=maximum.max(65. + DIVIDER))
+                .show_separator_line(false)
                 .show_inside(ui, |ui| self.transfer_queue_ui(ui, ctx));
+            queue_resize = Some((queue.response.rect, maximum.max(65. + DIVIDER)));
         }
-        ui.add_space(8.);
         let width = ui.available_width();
         // Persist the user's split proportion across native window resizes.
         // Keeping an absolute desktop width would crush the remote pane on a laptop.
@@ -148,18 +106,62 @@ impl EditorApp {
         }
         ctx.data_mut(|data| data.insert_temp(local_id.with("container-width"), width));
         let minimum = (width * 0.35).clamp(100., 230.);
-        egui::SidePanel::left(local_id)
+        let local = egui::SidePanel::left(local_id)
             .frame(surface(palette).outer_margin(egui::Margin {
-                right: 8,
+                right: DIVIDER as i8,
                 ..Default::default()
             }))
-            .resizable(true)
-            .default_width((width - 8.) * 0.5)
-            .width_range(minimum..=(width - minimum - 8.).max(minimum))
+            .resizable(false)
+            .default_width((width + DIVIDER) * 0.5)
+            // egui adds outer margins to the panel's minimum content size.
+            .width_range((minimum - DIVIDER)..=(width - minimum - DIVIDER).max(minimum))
+            .show_separator_line(false)
             .show_inside(ui, |ui| self.transfer_pane_ui(ui, Side::Local, ctx));
         egui::CentralPanel::default()
             .frame(surface(palette))
             .show_inside(ui, |ui| self.transfer_pane_ui(ui, Side::Remote, ctx));
+        // These hit regions occupy reserved outer margins, never file rows,
+        // pane borders or queue buttons. Render after both browsers so neither
+        // ScrollArea can claim the divider's drag/focus interaction.
+        let rect = local.response.rect;
+        resize_panel(
+            ui,
+            local_id,
+            "transfer-browser-resize",
+            Handle {
+                rect: egui::Rect::from_min_max(
+                    egui::pos2(rect.right() - DIVIDER, rect.top()),
+                    rect.max,
+                ),
+                id: local_id.with("handle"),
+                label: "Local browser width",
+                edge: Edge::Right,
+                size: rect.width(),
+                default: (width + DIVIDER) * 0.5,
+                range: minimum..=(width - minimum - DIVIDER).max(minimum),
+                enabled: true,
+            },
+        );
+        if let Some((rect, maximum)) = queue_resize {
+            resize_panel(
+                ui,
+                queue_id,
+                "transfer-queue-resize",
+                Handle {
+                    rect: egui::Rect::from_min_max(
+                        rect.min,
+                        egui::pos2(rect.right(), rect.top() + DIVIDER),
+                    ),
+                    id: queue_id.with("handle"),
+                    label: "Transfer queue height",
+                    edge: Edge::Top,
+                    size: rect.height(),
+                    default: 100. + DIVIDER,
+                    range: (65. + DIVIDER)..=maximum,
+                    enabled: true,
+                },
+            );
+        }
         self.transfer_drag_preview(ctx);
     }
     /// Conflicts remain operable at compact sizes, independent of queue height
@@ -235,5 +237,33 @@ impl EditorApp {
             let _ = conflict.answer.try_send(decision);
             self.transfers.rename.clear();
         }
+    }
+}
+
+/// Keep egui's panel sizes (including existing user preferences) while replacing
+/// its mouse-only edge with the shared keyboard-accessible grip. PanelState is
+/// keyed by the containing UI, so detached windows keep independent geometry.
+fn resize_panel(ui: &mut egui::Ui, panel: egui::Id, name: &str, handle: Handle<'_>) {
+    let drag_id = panel.with("drag-start");
+    let mut drag_start = ui
+        .ctx()
+        .data(|data| data.get_temp::<Option<f32>>(drag_id))
+        .flatten();
+    let horizontal = matches!(handle.edge, Edge::Right);
+    let resized = handle.show(ui, &mut drag_start);
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(drag_id, drag_start));
+    ui_probe::button(ui, name, &resized.response);
+    if resized.response.changed()
+        && let Some(mut state) = egui::containers::panel::PanelState::load(ui.ctx(), panel)
+    {
+        if horizontal {
+            state.rect.max.x = state.rect.min.x + resized.size;
+        } else {
+            state.rect.min.y = state.rect.max.y - resized.size;
+        }
+        ui.ctx()
+            .data_mut(|data| data.insert_persisted(panel, state));
+        ui.ctx().request_repaint();
     }
 }

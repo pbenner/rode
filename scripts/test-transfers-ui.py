@@ -102,6 +102,31 @@ with fixture_directory(prefix="rode-transfers-ui-") as base:
 
         browse(0, local)
         ui.value("transfer-directory:1", str(remote))
+
+        def grip(state, name, axis):
+            rect = next(b["rect"] for b in state["buttons"] if b["name"] == name)
+            return (rect[axis] + rect[axis + 2]) / 2
+
+        # Native focus and key routing must resize the actual panels, including
+        # the tray; testing just the handles would miss overwritten panel state.
+        for name, arrow, axis, direction in (
+            ("transfer-browser-resize", "Right", 0, 1),
+            ("transfer-queue-resize", "Up", 1, -1),
+        ):
+            original = grip(ui.layout(), name, axis)
+            ui.click(name)
+            ui.control(name, focused=True)
+            key(arrow)
+            ui.layout(
+                lambda state: (grip(state, name, axis) - original) * direction >= 19,
+                f"{name} did not resize with {arrow}",
+            )
+            key("Home")
+            ui.layout(
+                lambda state: abs(grip(state, name, axis) - original) <= 1,
+                f"{name} did not reset with Home",
+            )
+        screenshot(ui.window, "resize-grips.png")
         selected = "file-picker-checked:" + hashlib.sha256(str(source).encode()).hexdigest()
         select(source)
         ui.control(selected)

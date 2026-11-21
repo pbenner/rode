@@ -9,6 +9,8 @@ pub(super) use crate::theme::{
 };
 use eframe::egui::{self, Align, Layout, RichText};
 
+pub(super) mod resize;
+
 #[cfg(test)]
 pub(super) mod tests;
 

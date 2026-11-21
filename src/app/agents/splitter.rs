@@ -1,6 +1,7 @@
 //! Window-local sizing for bottom-anchored chat panels. Resizing changes only
 //! presentation; viewport clamps never overwrite the user's preferred height.
-use eframe::egui::{self, Key, Rect, Sense, Stroke};
+use crate::app::layout::resize::{Edge, Handle};
+use eframe::egui::{self, Rect};
 
 #[derive(Default)]
 pub(super) struct State {
@@ -46,76 +47,29 @@ impl State {
             egui::pos2(bounds.left(), (top - 6.).max(bounds.top())),
             egui::pos2(bounds.right(), top + 2.),
         );
-        let response = ui.interact(
-            handle,
-            ui.id().with(id),
-            if enabled { Sense::click_and_drag() } else { Sense::hover() },
-        ).on_hover_cursor(egui::CursorIcon::ResizeVertical)
-            .on_hover_text("Drag to resize · Double-click to reset\nWhen focused: Up/Down to resize, Home to reset");
-        crate::app::ui_probe::button(ui, id, &response);
-        crate::keyboard::target(ui, label, &response);
-        if response.is_pointer_button_down_on() || response.dragged() {
-            crate::app::ui_probe::button(ui, &format!("{id}-active"), &response);
+        let resized = Handle {
+            rect: handle,
+            id: ui.id().with(id),
+            label,
+            edge: Edge::Top,
+            size: height,
+            default: size.default + size.extra,
+            range: minimum..=maximum,
+            enabled,
         }
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, enabled, label));
-        if response.has_focus() {
-            // These arrows resize the panel instead of invoking spatial focus
-            // navigation to a neighbouring chat control.
-            ui.memory_mut(|memory| {
-                memory.set_focus_lock_filter(
-                    response.id,
-                    egui::EventFilter {
-                        vertical_arrows: true,
-                        ..Default::default()
-                    },
-                );
-            });
+        .show(ui, &mut self.drag_start);
+        crate::app::ui_probe::button(ui, id, &resized.response);
+        if resized.response.is_pointer_button_down_on() || resized.response.dragged() {
+            crate::app::ui_probe::button(ui, &format!("{id}-active"), &resized.response);
         }
-        let mut resized = height;
-        if enabled {
-            if response.drag_started() {
-                self.drag_start = Some(height);
-            }
-            if response.dragged() {
-                resized = (self.drag_start.unwrap_or(height)
-                    - response.total_drag_delta().unwrap_or_default().y)
-                    .clamp(minimum, maximum);
-                self.preferred = Some(resized - size.extra);
-            }
-            if response.double_clicked()
-                || response.has_focus()
-                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Home))
-            {
-                self.preferred = None;
-                resized = (size.default + size.extra).clamp(minimum, maximum);
-            } else if response.has_focus() {
-                for (key, step) in [(Key::ArrowUp, 20.), (Key::ArrowDown, -20.)] {
-                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
-                        resized = (resized + step).clamp(minimum, maximum);
-                        self.preferred = Some(resized - size.extra);
-                    }
-                }
-            }
-            if response.drag_stopped() {
-                self.cancel_drag();
-            }
-        } else {
-            self.cancel_drag();
+        if resized.reset {
+            self.preferred = None;
+        } else if resized.response.changed() {
+            self.preferred = Some(resized.size - size.extra);
         }
         let panel = Rect::from_min_max(
-            egui::pos2(bounds.left(), bounds.bottom() - resized),
+            egui::pos2(bounds.left(), bounds.bottom() - resized.size),
             bounds.max,
-        );
-        let center = panel.center_top() - egui::vec2(0., 2.);
-        let color = if response.hovered() || response.dragged() || response.has_focus() {
-            ui.visuals().selection.stroke.color
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        ui.painter().line_segment(
-            [center - egui::vec2(18., 0.), center + egui::vec2(18., 0.)],
-            Stroke::new(2_f32, color),
         );
         Layout {
             content: Rect::from_min_max(
@@ -123,7 +77,7 @@ impl State {
                 egui::pos2(bounds.right(), (panel.top() - 6.).max(bounds.top())),
             ),
             panel,
-            handle: response,
+            handle: resized.response,
         }
     }
 }

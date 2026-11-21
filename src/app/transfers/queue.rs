@@ -30,6 +30,8 @@ impl EditorApp {
         });
         egui::ScrollArea::vertical()
             .id_salt("transfer-queue-scroll")
+            // A small tray must scroll rather than enlarge its parent panel.
+            .min_scrolled_height(0.)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if let Some(running) = &self.transfers.running {
