@@ -1,6 +1,6 @@
 # Project workspaces and optional sandboxing
 
-Choose **Open project folder** from the File menu, the workspace banner, or Ctrl+Shift+O. When connected to SSH, this browser lists the remote host's directories. Choose **Open local folder** explicitly to switch to the desktop machine. The picker displays which machine it is browsing and supports absolute paths, `~/`, the parent-folder arrow, and clicking subfolders. **Show hidden** includes dot-prefixed folders. Enter browses a typed path; Ctrl+Enter opens it as the project.
+Choose **Open project folder** from the File menu, **Open project…** in the top header, or Ctrl+Shift+O. When connected to SSH, this browser lists the remote host's directories. Choose **Open local folder** explicitly to switch to the desktop machine. The picker displays which machine it is browsing and supports absolute paths, `~/`, the parent-folder arrow, and clicking subfolders. **Show hidden** includes dot-prefixed folders. Enter browses a typed path; Ctrl+Enter opens it as the project.
 
 The project is validated before replacing the current workspace. Invalid paths leave the existing project and buffers intact. Unsaved changes require a discard decision before switching. Once opened, the explorer, relative paths, file saves, and terminal working directory all use the chosen project. Remote folder changes create a new project shell channel through the existing authenticated SSH master, without another login.
 
@@ -14,13 +14,13 @@ RODE probes the selected backend on the project host, using the complete policy 
 
 For **bwrap**, RODE prefers the executable on the project host's `PATH`. If none is available, it uses pinned bubblewrap bundled in the native RODE helper, locally or over SSH. No runtime download, package installation or Codex installation is needed. The same policy and availability probe apply. A failed system `bwrap` is not retried with the bundled copy, and the bundled copy cannot bypass restrictions on user namespaces or AppArmor. When it is selected, the status message identifies bundled bubblewrap. Update the native helper together with the editor; older installed helpers without the `bundled_bwrap` capability are not used for new connections.
 
-The persistent workspace banner reports the actual result:
+The bottom status bar reports the actual result. Hover or open its access-mode menu for the full policy and any fallback reason:
 
-- **SANDBOX · bwrap**: the probe succeeded; editor file operations and project commands use that plan.
-- **SANDBOX · bwrap · READ ONLY**: the project's base grant is read-only. More specific explicitly granted subfolders can have their own access level.
-- **SANDBOX · Landlock**, optionally **· READ ONLY**: Landlock file-access rules are enforced; the limitations below apply.
-- **NORMAL MODE · sandbox unavailable**: the requested sandbox could not start. A persistent message explains the missing prerequisite, unsupported policy or setup failure. Editing and project commands use normal host permissions.
-- **NORMAL MODE**: sandboxing was not requested.
+- **Sandbox · bwrap**: the probe succeeded; editor file operations and project commands use that plan.
+- **Read only · bwrap**: the project's base grant is read-only. More specific explicitly granted subfolders can have their own access level.
+- **Sandbox · Landlock**, or **Read only · Landlock**: Landlock file-access rules are enforced; the limitations below apply.
+- **Normal · unavailable**: the requested sandbox could not start. The access-mode menu explains the missing prerequisite, unsupported policy or setup failure. Editing and project commands use normal host permissions.
+- **Normal**: sandboxing was not requested.
 
 Sandbox preparation never installs tools or escalates privileges. The default `uvx ruff` command may populate its isolated tool cache on first use; warm that cache before disabling network access. After a sandbox has been selected successfully, a later sandbox operation failure is reported as an error; that operation is not retried outside it.
 

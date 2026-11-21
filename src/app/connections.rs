@@ -452,7 +452,7 @@ mod tests {
         assert!(app.workers.generation() > generation);
         assert!(app.ssh_master.is_none());
         assert!(app.documents[0].path.is_none());
-        app.workspace_banner(&ctx);
+        app.update_window_title(&ctx);
         assert_eq!(app.last_window_title, "RODE");
         app.set_dialog(Dialog::Folder);
         assert!(!app.project_picker.remote);
@@ -516,7 +516,7 @@ mod tests {
                 .starts_with("SSH ERROR")
         );
         assert_eq!(app.documents[0].text, "retained edits");
-        app.workspace_banner(&ctx);
+        app.update_window_title(&ctx);
         assert_eq!(app.last_window_title, "RODE");
         assert!(app.documents[0].path.is_none());
         assert!(
@@ -582,7 +582,7 @@ mod tests {
         app.set_dialog(Dialog::Folder);
         assert!(!app.project_picker.remote);
         app.set_dialog(Dialog::None);
-        app.workspace_banner(&ctx);
+        app.update_window_title(&ctx);
         assert_eq!(app.last_window_title, "RODE");
     }
 

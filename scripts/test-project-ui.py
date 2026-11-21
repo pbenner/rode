@@ -114,7 +114,7 @@ class ProjectUI(NativeUI):
         if welcome:
             self.click("welcome-open-project")
         else:
-            key("o", ("Control_L", "Shift_L"))
+            self.click("open-project")
         self.control("project-dialog-path", focused=True)
         self.control("project-dialog-host:" + ("ssh" if remote else "local"))
         # Let the initial listing finish before editing its path; its response
@@ -316,6 +316,7 @@ def run(remote=False, fallback=False):
                     ui.open_project(first, remote=True, welcome=True)
                 if fallback:
                     assert "[Sandbox]" not in ui.title()
+                    ui.value("status-access-value", "Normal · unavailable")
                 ui.edit_file(first / "alpha.rs", label + "-first-saved")
                 screenshot(window, label + "-project.png")
                 if launch_copy is not None:
@@ -365,7 +366,8 @@ def run(remote=False, fallback=False):
                     ui.append(contents, "survives-disconnect")
                     ui.resize(850, 560)
                     screenshot(window, "ssh-disconnect-compact.png")
-                    ui.command("Remote: Disconnect SSH")
+                    ui.click("status-connection")
+                    ui.click("status-disconnect")
                     ui.disconnected()
                     ui.wait(
                         lambda: (
@@ -382,7 +384,8 @@ def run(remote=False, fallback=False):
                     screenshot(window, "ssh-disconnected-local-picker.png")
                     ui.click("project-dialog-cancel")
                     ui.absent("project-dialog-path")
-                    ui.command("Remote: Reconnect SSH")
+                    ui.click("status-connection")
+                    ui.click("status-reconnect")
                     ui.project(second, remote=True)
                     ui.remote_editor(second)
                     ui.copy("source-editor", contents + "\n// survives-disconnect")

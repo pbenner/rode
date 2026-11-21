@@ -30,20 +30,7 @@ impl Tabs {
 /// Stable document identity carried through a tab drag-and-drop operation.
 struct TabDrag(u64);
 
-/// Reserve the complete banner frame before egui clips its background. Both
-/// ordinary and icon buttons must fit with the frame's top and bottom padding.
-pub(super) fn workspace_banner_panel(
-    ctx: &egui::Context,
-    palette: theme::Palette,
-) -> egui::TopBottomPanel {
-    let frame = theme::frame(palette.raised);
-    let style = ctx.style();
-    let row_height =
-        theme::control_height_for_style(ctx, &style).max(16. + 2. * style.spacing.button_padding.y);
-    egui::TopBottomPanel::top("workspace-banner")
-        .exact_height((row_height + frame.inner_margin.sum().y).max(38.))
-        .frame(frame)
-}
+mod workspace;
 
 impl EditorApp {
     /// Render a fixed-height footer, reserving the right edge for the appearance menu
@@ -112,53 +99,7 @@ impl EditorApp {
                         Layout::left_to_right(Align::Center),
                         |ui| {
                             ui.set_min_size(egui::vec2(width, 19.));
-                            let (connection, color) = match self.workspace.as_ref() {
-                                Some(w) if w.remote.is_some() => (
-                                    format!(
-                                        "SSH · {}{}",
-                                        w.remote.as_ref().unwrap().profile.endpoint(),
-                                        if w.connected { "" } else { " · offline" }
-                                    ),
-                                    if w.connected {
-                                        palette.success
-                                    } else {
-                                        palette.error
-                                    },
-                                ),
-                                _ => ("Local".into(), palette.success),
-                            };
-                            let natural = ui
-                                .painter()
-                                .layout_no_wrap(connection.clone(), FontId::proportional(12.), color)
-                                .size()
-                                .x
-                                + 8.;
-                            let host_width = natural.min(190.).min(width * 0.5);
-                            if ui
-                                .add_sized(
-                                    [host_width, 19.],
-                                    crate::keyboard::Button::new(
-                                        RichText::new(&connection)
-                                            .size(12.)
-                                            .color(color),
-                                    )
-                                    .frame(false)
-                                    .truncate(),
-                                )
-                                .on_hover_text(&connection)
-                                .clicked()
-                            {
-                                self.set_dialog(Dialog::Connect);
-                            }
-                            ui.separator();
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(&self.status).size(11.).color(palette.muted),
-                                )
-                                .truncate()
-                                .halign(Align::Min),
-                            )
-                            .on_hover_text(&self.status);
+                            self.workspace_status_ui(ui, ctx, width);
                         },
                     );
                 });

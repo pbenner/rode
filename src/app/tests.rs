@@ -4,70 +4,115 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[test]
-fn workspace_banners_paint_the_full_background_and_pad_themed_controls() {
+fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
     for scale in [0.75, 1., 1.5] {
-        for file_mode in [false, true] {
-            let ctx = egui::Context::default();
-            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            let mut app = EditorApp::new(&cc, Startup::default());
-            ctx.set_zoom_factor(scale);
-            if file_mode {
-                app.new_file();
-                app.documents[0].fixture_content().path = Some("/tmp/standalone.rs".into());
-            } else {
-                app.workspace.set_fixture(Some(remote_workspace()));
-            }
-            // Reuse panel state while changing themes, including the first
-            // frame after switching from a compact theme to larger controls.
-            for theme in [
-                "phosphor",
-                "studio",
-                "studio-neutral",
-                "studio-hacker",
-                "phosphor",
-            ] {
-                app.select_theme(theme, &ctx);
-                let palette = app.themes.active().palette;
-                let output = ctx.run(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(1380., 900.),
-                        )),
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        app.workspace_banner(ctx);
-                        egui::CentralPanel::default()
-                            .frame(egui::Frame::new().fill(palette.background))
-                            .show(ctx, |_| {});
-                    },
-                );
-                let (banner, clip) = output
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        egui::Shape::Rect(rect) if rect.fill == palette.raised => {
-                            Some((rect.rect, shape.clip_rect))
-                        }
-                        _ => None,
-                    })
-                    .max_by(|(a, _), (b, _)| a.area().total_cmp(&b.area()))
-                    .expect("banner background");
-                assert!(
-                    clip.expand(0.5).contains_rect(banner),
-                    "Banner background clipped in {theme}, scale {scale}, file_mode={file_mode}: {banner:?} in {clip:?}"
-                );
-                for label in if file_mode {
-                    vec!["Open project…"]
+        for width in [1380., 850., 480.] {
+            for file_mode in [false, true] {
+                let ctx = egui::Context::default();
+                let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                let mut app = EditorApp::new(&cc, Startup::default());
+                ctx.set_zoom_factor(scale);
+                if file_mode {
+                    app.new_file();
+                    app.documents[0].fixture_content().path = Some("/tmp/standalone.rs".into());
                 } else {
-                    vec!["Disconnect", "Open project…"]
-                } {
-                    let (button, _) = layout::tests::button_frame(&output, label);
+                    app.workspace.set_fixture(Some(remote_workspace()));
+                    let plan = &mut app.workspace.as_mut().unwrap().plan;
+                    plan.requested = true;
+                    plan.reason = "Sandbox unavailable on this host".into();
+                }
+                let temp = tempfile::tempdir().unwrap();
+                let path = temp.path().join("status.json");
+                ui_probe::install_at(&ctx, path.clone());
+                for theme in [
+                    "phosphor",
+                    "studio",
+                    "studio-neutral",
+                    "studio-hacker",
+                    "phosphor",
+                ] {
+                    app.select_theme(theme, &ctx);
+                    let mut output = None;
+                    for _ in 0..2 {
+                        output = Some(ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 900.),
+                                )),
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                app.titlebar(ctx);
+                                let top = ctx.available_rect().top();
+                                app.update_window_title(ctx);
+                                app.statusbar(ctx);
+                                assert_eq!(
+                                    ctx.available_rect().top(),
+                                    top,
+                                    "Workspace status consumed a banner row"
+                                );
+                            },
+                        ));
+                    }
+                    if width >= 850. {
+                        for label in if file_mode {
+                            ["Local", "File mode"]
+                        } else {
+                            ["SSH · researcher@test-host", "Normal · unavailable"]
+                        } {
+                            let galley = output
+                                .as_ref()
+                                .unwrap()
+                                .shapes
+                                .iter()
+                                .find_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text) if text.galley.text() == label => {
+                                        Some(&text.galley)
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or_else(|| panic!("Missing status text {label}"));
+                            assert!(
+                                !galley.elided,
+                                "Status text {label} was unnecessarily truncated in {theme}"
+                            );
+                        }
+                    }
+                    let state: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    let buttons = state["buttons"].as_array().unwrap();
+                    let rect = |name: &str| {
+                        let value = &buttons
+                            .iter()
+                            .find(|button| button["name"] == name)
+                            .unwrap_or_else(|| panic!("Missing {name}: {state}"))["rect"];
+                        let r: [f32; 4] = serde_json::from_value(value.clone()).unwrap();
+                        egui::Rect::from_min_max(egui::pos2(r[0], r[1]), egui::pos2(r[2], r[3]))
+                    };
+                    let bounds = ctx.content_rect();
+                    let footer = egui::Rect::from_min_max(
+                        egui::pos2(bounds.left(), bounds.bottom() - 27.),
+                        bounds.max,
+                    );
+                    let connection = rect("status-connection");
+                    let mode = rect("status-access");
+                    let appearance = rect("appearance-menu");
+                    for control in [connection, mode, appearance] {
+                        assert!(
+                            footer.contains_rect(control),
+                            "Footer control escapes in {theme}/{scale}: {state}"
+                        );
+                    }
                     assert!(
-                        button.top() >= banner.top() + 7.5
-                            && button.bottom() <= banner.bottom() - 7.5,
-                        "{label} lacks vertical padding in {theme}, scale {scale}: {button:?} in {banner:?}"
+                        !connection.intersects(mode)
+                            && !connection.intersects(appearance)
+                            && !mode.intersects(appearance),
+                        "Overlapping status controls: {state}"
+                    );
+                    assert!(
+                        rect("open-project").bottom() < footer.top(),
+                        "Open project is not in the top header: {state}"
                     );
                 }
             }
@@ -162,7 +207,7 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     }
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change\n");
     assert!(app.documents[app.documents.active_index()].dirty());
-    let _ = ctx.run(Default::default(), |ctx| app.workspace_banner(ctx));
+    let _ = ctx.run(Default::default(), |ctx| app.update_window_title(ctx));
     assert!(app.last_window_title.ends_with("[File mode]"));
 }
 
@@ -605,7 +650,7 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
         app.project_picker.path,
         std::env::current_dir().unwrap().to_string_lossy()
     );
-    app.workspace_banner(&ctx);
+    app.update_window_title(&ctx);
     assert_eq!(app.last_window_title, "RODE");
     app.save_document(app.documents[0].id, "/not-local.rs".into(), false, &ctx);
     assert!(!app.documents[0].saving);

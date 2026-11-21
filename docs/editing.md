@@ -146,9 +146,15 @@ Source text defaults to **15 pt**. Saved text sizes are retained; use the existi
 
 ## Workspace layout
 
+**Open project…** is in the top header and browses the currently selected local or
+SSH host. The bottom status bar contains the connection menu and actual project
+access mode; hover or open either control for full details. SSH Disconnect and
+Reconnect are in the connection menu. Connection and sandbox status share this
+footer, leaving the space below the header for the workspace.
+
 The left rail contains application areas: **Projects**, **Connections**, **System monitor**, **File transfers**, and **Stocks**. **App settings**, **Extensions**, and keyboard help sit at the bottom. Disabled extensions hide their entries. Global areas use the main content space without duplicating project tools. Returning to **Projects** restores its selected view, unsaved files, chat draft and running shell.
 
-Within Projects, the main header has an Explorer toggle and a **Project tools** button. The editor is the default view. Open **Project tools** to show **Chat**, **Terminal**, **Git**, **Problems**, **Tasks**, **Settings**, and **Debugger** when its extension is enabled. Every enabled project tool has a direct tab in that view; the tool bar wraps on narrow windows. The tool bar disappears when tools are closed or detached, giving the space back to the editor. **Settings → Environment** contains runtime paths, project variables and Python environments. Right-click a tool tab to open it in a separate window.
+Within Projects, the left activity bar groups **Explorer** and **Project tools** directly below **Projects**, followed by a separator before application views. Their highlights show whether Explorer and tools are open. The editor is the default view. Open **Project tools** to show **Chat**, **Terminal**, **Git**, **Problems**, **Tasks**, **Settings**, and **Debugger** when its extension is enabled. Every enabled project tool has a direct tab in that view; the tool bar wraps on narrow windows. The tool bar disappears when tools are closed or detached, giving the space back to the editor. **Settings → Environment** contains runtime paths, project variables and Python environments. Right-click a tool tab to open it in a separate window.
 
 The explorer remains beside the project content and can be hidden independently. Opening a project tool replaces the code view instead of shrinking it. Close **Project tools** with the same button, or open a file in the explorer, to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
 

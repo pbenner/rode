@@ -15,7 +15,7 @@ rode /path/to/project/main.py
 
 A directory opens as a project. A file opens immediately in its normal editor or preview, normally with its containing directory as the workspace. Relative paths work too, such as `rode main.py`; quote paths containing spaces. Saved sandbox settings for that directory still apply, and `--sandbox` requests isolation for it explicitly.
 
-If global sandbox defaults would reject a file's containing directory because it is your home directory or an ancestor, RODE opens just the file without a project. The window shows **File mode**, and the banner shows **Local file · Normal mode**: file reads and saves are unsandboxed, no project tools or terminal start automatically, and sandbox preferences are unchanged. This exception does not override `--sandbox`, an explicitly saved folder policy, or directory arguments. For sandboxed editing, keep files in a project subdirectory and open that project.
+If global sandbox defaults would reject a file's containing directory because it is your home directory or an ancestor, RODE opens just the file without a project. The window title and bottom status bar show **File mode**: file reads and saves are unsandboxed, no project tools or terminal start automatically, and sandbox preferences are unchanged. This exception does not override `--sandbox`, an explicitly saved folder policy, or directory arguments. For sandboxed editing, keep files in a project subdirectory and open that project.
 
 This installs **`rode`, `rode-sessiond` and `rode-sessiond-static`** into Cargo's binary directory, normally `~/.cargo/bin`, without root access. The installer builds and verifies the static Linux helper before updating the editor. RODE automatically selects it for SSH, so remote hosts do not need the desktop's glibc version or a helper environment variable. Repeat the same command to update both. Cargo/rustup may download build dependencies on the desktop; no remote compiler or Rust installation is needed.
 
@@ -42,9 +42,9 @@ On 2026-11-08, the Linux x86_64 release executable with embedded russh measured 
 
 ## First project
 
-Launch `rode /path/to/project`, open a file directly with `rode /path/to/file`, or use **File → Open project folder**. Use **Ctrl+P** to open another file by path and **Ctrl+S** to save. **Ctrl+Shift+P** opens the command palette.
+Launch `rode /path/to/project`, open a file directly with `rode /path/to/file`, or use **Open project…** in the top header (**File → Open project folder** / **Ctrl+Shift+O**). Use **Ctrl+P** to open another file by path and **Ctrl+S** to save. **Ctrl+Shift+P** opens the command palette.
 
-Open **Project tools** in the main header to select Chat, Terminal, Git, Problems, Tasks or Settings. Close it with the same button, or open a file in Explorer, to return to the editor. Application-level Connections, System monitor and File transfers are in the left activity bar. Optional extensions hide their controls when disabled; see [workspace layout](editing.md#workspace-layout).
+Open **Project tools** below **Projects** in the left activity bar to select Chat, Terminal, Git, Problems, Tasks or Settings. Close it with the same button, or open a file in Explorer, to return to the editor. Application-level Connections, System monitor and File transfers are in the left activity bar. Optional extensions hide their controls when disabled; see [workspace layout](editing.md#workspace-layout).
 
 Use **New terminal** in the terminal header for multiple native shells; **Sessions** reattaches them and shows [Slurm allocations](slurm.md). Enable **Persist** for shells that should survive exit; new shells default to ending when their last view closes.
 

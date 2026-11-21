@@ -795,7 +795,7 @@ impl eframe::App for EditorApp {
             app.navigation.begin_layout();
             if !app.in_editor(egui::ViewportId::ROOT, |app| app.pdf_fullscreen_ui(ctx)) {
                 app.titlebar(ctx);
-                app.workspace_banner(ctx);
+                app.update_window_title(ctx);
                 app.encrypted_banner(ctx);
                 app.statusbar(ctx);
                 app.activity(ctx);

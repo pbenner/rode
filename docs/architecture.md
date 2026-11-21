@@ -69,7 +69,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
 | `src/app/git_gutter.rs`, `src/app/git_gutter/` | Policy-bound HEAD reads and one bounded comparison for markers, change peeks and editor-only hunk reverts; document/version/baseline admission rejects stale changes |
 | `src/app/diff_view.rs` | Shared bounded, selectable, read-only unified diff renderer for the Git panel and source change peeks |
-| `src/app/frame.rs` | Application menus, connection banners, global navigation rail and pane entry views; routes through the existing lifecycle guards |
+| `src/app/frame.rs` | Application header, menus, global navigation rail and pane entry views; routes through the existing lifecycle guards |
 | `src/app/areas.rs`, `src/app/host_tools.rs` | Application/project presentation scopes, independent monitor preferences, captured host selection and project-independent telemetry/access-preparation completions |
 | `src/app/workers.rs`, `src/app/workers/` | Captured file/decode jobs, typed reply endpoints, private lifecycle envelopes, bounded polling and file-domain admission/completion |
 | `src/app/execution.rs` | Shared captured host/project target, generation-bound reply endpoint and mount-work guard for file, tool and session workers; separate explicit host-mode Git preparation |
@@ -79,7 +79,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/workbench/git/controller.rs` | Captured Git operations and one admission rule for commands, stash actions, patches and authentication retries; display labels do not determine mutation effects |
 | `src/app/pdf_view.rs` | Shared page-render jobs for PDF documents and slide previews, with explicit destinations and captured document/version/request identities |
 | `src/app/dialogs.rs`, `src/app/appearance.rs` | Guarded dialogs/notices, interface scale and theme preferences |
-| `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
+| `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs, footer workspace status and native titles, typed palette actions, native icons and shared asynchronous pickers |
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
 | `src/app/navigation/` | Pane focus, validated shortcut presets and native source-editing modes |
 | `src/app/input.rs`, `src/app/input/control.rs` | Input adapter and private source replay/keymap owner; frame contexts and ordered document handoffs |
@@ -175,7 +175,7 @@ transports, which retain their own codecs.
 
 The choices below explain the current implementation. Module-level rustdoc records ownership and local constraints; the main service modules also include **Design decisions** sections beside the code they constrain. The sections below describe consequences as well as benefits; they are not a list of proposed features.
 
-Keep the desktop coordinator focused on application state and shared lifecycle guards. Application menus and connection banners belong in `app/frame.rs`, file/decode dispatch in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Project-tool background work lives in `workbench/jobs.rs`, independently of tool-panel rendering and saved settings. Git operation admission lives in `workbench/git/controller.rs`; `workbench/git/jobs.rs` connects admitted operations and completion effects to the captured project workers. Git rendering consumes cached state and invokes those same operations for buttons, confirmations and credential retries. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules under the domain that owns the behavior.
+Keep the desktop coordinator focused on application state and shared lifecycle guards. Application menus and header actions belong in `app/frame.rs`; `app/chrome/workspace.rs` projects actual workspace state into footer controls and native window titles without allocating a banner or changing authority. File/decode dispatch belongs in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Project-tool background work lives in `workbench/jobs.rs`, independently of tool-panel rendering and saved settings. Git operation admission lives in `workbench/git/controller.rs`; `workbench/git/jobs.rs` connects admitted operations and completion effects to the captured project workers. Git rendering consumes cached state and invokes those same operations for buttons, confirmations and credential retries. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules under the domain that owns the behavior.
 
 ### Theme composition
 
@@ -230,7 +230,7 @@ project's selected `tool_windows::Surface` or controllers. `tool_windows::State`
 owns panel selection, remembered navigation, visibility and detached hosts for
 the application lifetime. `Workbench` owns project settings and caches; resetting
 it never reconstructs or manually preserves window fields. The Project tools toggle
-in the main header reveals the full-width tool view. Its wrapping tab bar uses
+in the left activity bar reveals the full-width tool view. Its wrapping tab bar uses
 the `ToolTab` registry and scope classification and occupies space only while
 tools are docked and open; detached tool hosts omit editor controls;
 Environment is a category of Project settings, with its own retained draft;

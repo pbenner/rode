@@ -226,7 +226,7 @@ fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
                 |ctx| {
                     app.navigation.begin_layout();
                     app.titlebar(ctx);
-                    app.workspace_banner(ctx);
+                    app.update_window_title(ctx);
                     app.activity(ctx);
                     egui::SidePanel::left("fixture-explorer")
                         .exact_width(250.)

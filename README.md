@@ -19,7 +19,7 @@ Also included:
 
 [![RODE feature tour: streamlined project tools and application navigation, native editing, SSH, notebooks, agents and selected light, dark and artistic themes](assets/rode-tour.gif)](assets/rode-tour.mp4)
 
-46-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Shows the current editor layout, header-based **Project tools**, and the **Connections** library, plus **Atelier Light**, **Atelier Dark**, **Sumi-e Light**, **Samurai**, and **SynthWave ’84**. Native captures use synthetic profiles, a real notebook kernel and loopback SSH with Landlock enforcement. Agent and Slurm scenes show setup controls without model calls or resource allocations.
+46-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Shows project editing, **Project tools**, and the **Connections** library, plus **Atelier Light**, **Atelier Dark**, **Sumi-e Light**, **Samurai**, and **SynthWave ’84**. Native captures use synthetic profiles, a real notebook kernel and loopback SSH with Landlock enforcement. Agent and Slurm scenes show setup controls without model calls or resource allocations.
 
 ```sh
 cargo xtask install
@@ -30,7 +30,7 @@ rode /path/to/project/main.py
 rode --ssh user@host --remote-path '~/project'
 ```
 
-Open **Project tools** in the main header for Chat, Terminal, Git, Problems, Tasks and Settings. Close it to restore the full editor canvas; **Detach** and **Detach tab** move tools to separate windows while retaining their sessions. Connections, file transfers and monitoring live in the left activity bar.
+Open **Project tools** below **Projects** in the left activity bar for Chat, Terminal, Git, Problems, Tasks and Settings. Close it to restore the full editor canvas; **Detach** and **Detach tab** move tools to separate windows while retaining their sessions. Connections, file transfers and monitoring live in the left activity bar.
 
 Use **Project: Settings and sandbox access** in the command palette for categorised [project settings](docs/configuration.md#project-settings): code tools, environments, sandbox access, LaTeX and presentations. Each category saves its own changes.
 

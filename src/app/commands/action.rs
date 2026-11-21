@@ -239,7 +239,9 @@ impl Command {
             Self::LockEncrypted => Definition::new("Project: Lock encrypted project", Icon::Folder),
             Self::Save => Definition::new("Save", Icon::Save).palette("Save file"),
             Self::SaveAs => Definition::new("Save as…", Icon::SaveAs).palette("Save file as"),
-            Self::Sidebar => Definition::new("Toggle tools sidebar", Icon::ChevronRight),
+            Self::Sidebar => {
+                Definition::new("Project tools", Icon::Grid).palette("Toggle tools sidebar")
+            }
             Self::Terminal => Definition::new("Toggle terminal", Icon::Terminal),
             Self::CopyTerminal => {
                 Definition::new("Copy terminal output", Icon::Copy).palette("Terminal: Copy output")
@@ -486,6 +488,7 @@ impl EditorApp {
                     || self.area_detached(areas::Area::Settings)
             }
             Command::Environment => self.environment_visible(),
+            Command::Sidebar => self.tool_surface(),
             Command::Panel(panel) => self.panel_visible(panel),
             Command::Explorer => {
                 self.explorer_visible(ctx.viewport_id())

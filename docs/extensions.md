@@ -29,7 +29,7 @@ The **File transfers** module adds local/remote browsing and a background copy
 queue while SSH is connected. Its browsers do not change the open project. See
 [File transfers](remote.md#file-transfers) for navigation, collision choices and
 the captured filesystem policy. Disabling it cancels queued/running transfers and
-hides its application view, palette command, connection-banner and Explorer entry points.
+hides its application view, palette command and Explorer entry points.
 
 ## Project bookmarks
 

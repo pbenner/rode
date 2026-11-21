@@ -314,8 +314,9 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                             app.navigation.begin_layout();
                             app.titlebar(ctx);
                             content_top = ctx.available_rect().top();
+                            app.activity(ctx);
                             egui::SidePanel::left("fixture-explorer")
-                                .exact_width(220.)
+                                .exact_width(168.)
                                 .show(ctx, |_| {});
                             app.workspace_content(ctx);
                         },
@@ -351,14 +352,39 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                     "workspace-sidebar",
                     "workspace-explorer",
                     "open-tunnels",
+                    "open-project",
                     "connect-ssh",
                 ] {
-                    assert!(has(name), "Header control {name} missing: {state}");
+                    assert!(has(name), "Navigation control {name} missing: {state}");
                 }
                 let rect = |button: &serde_json::Value| {
                     let r: [f32; 4] = serde_json::from_value(button["rect"].clone()).unwrap();
                     egui::Rect::from_min_max(egui::pos2(r[0], r[1]), egui::pos2(r[2], r[3]))
                 };
+                let mut previous = None;
+                for name in [
+                    "activity:Projects",
+                    "workspace-explorer",
+                    "workspace-sidebar",
+                ] {
+                    let bounds = rect(
+                        buttons
+                            .iter()
+                            .find(|button| button["name"] == name)
+                            .unwrap(),
+                    );
+                    assert!(
+                        bounds.left() >= 0. && bounds.right() <= 52. && bounds.top() >= content_top,
+                        "Project control is not in the activity rail: {state}"
+                    );
+                    if let Some(bottom) = previous {
+                        assert!(
+                            bounds.top() >= bottom,
+                            "Project rail controls overlap: {state}"
+                        );
+                    }
+                    previous = Some(bounds.bottom());
+                }
                 let header: Vec<_> = buttons
                     .iter()
                     .filter(|button| {
@@ -366,10 +392,9 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                             name.starts_with("menu-")
                                 || matches!(
                                     name,
-                                    "workspace-sidebar"
-                                        | "workspace-explorer"
-                                        | "workspace-search"
+                                    "workspace-search"
                                         | "open-tunnels"
+                                        | "open-project"
                                         | "connect-ssh"
                                 )
                         })
@@ -443,53 +468,60 @@ fn compact_activity_areas_do_not_overlap_the_fixed_footer() {
         egui::vec2(425., 280.),
         egui::vec2(320., 210.),
     ] {
-        let ctx = egui::Context::default();
-        let mut app = EditorApp::new(
-            &eframe::CreationContext::_new_kittest(ctx.clone()),
-            Startup::default(),
-        );
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("rail.json");
-        ui_probe::install_at(&ctx, path.clone());
-        for _ in 0..3 {
-            let _ = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                    ..Default::default()
-                },
-                |ctx| {
-                    app.titlebar(ctx);
-                    app.activity(ctx);
-                },
+        for project in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = EditorApp::new(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                Startup::default(),
             );
-        }
-        let state: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let buttons = state["buttons"].as_array().unwrap();
-        let footer = buttons
-            .iter()
-            .filter(|b| {
-                b["name"].as_str().is_some_and(|name| {
-                    matches!(
-                        name,
-                        "activity:App settings" | "activity:Extensions…" | "activity:Help"
-                    )
+            if project {
+                app.new_file();
+            }
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("rail.json");
+            ui_probe::install_at(&ctx, path.clone());
+            for _ in 0..3 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.titlebar(ctx);
+                        app.activity(ctx);
+                    },
+                );
+            }
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let buttons = state["buttons"].as_array().unwrap();
+            let footer = buttons
+                .iter()
+                .filter(|b| {
+                    b["name"].as_str().is_some_and(|name| {
+                        matches!(
+                            name,
+                            "activity:App settings" | "activity:Extensions…" | "activity:Help"
+                        )
+                    })
                 })
-            })
-            .map(|b| b["rect"][1].as_f64().unwrap())
-            .reduce(f64::min)
-            .unwrap();
-        for button in buttons.iter().filter(|b| {
-            b["name"].as_str().is_some_and(|name| {
-                Area::RAIL
-                    .into_iter()
-                    .any(|area| name == format!("activity:{}", area.command().definition().label))
-            })
-        }) {
-            assert!(
-                button["rect"][3].as_f64().unwrap() <= footer,
-                "Area overlaps footer at {size:?}: {button}"
-            );
+                .map(|b| b["rect"][1].as_f64().unwrap())
+                .reduce(f64::min)
+                .unwrap();
+            for button in buttons.iter().filter(|b| {
+                b["name"].as_str().is_some_and(|name| {
+                    Area::RAIL
+                        .into_iter()
+                        .map(Area::command)
+                        .chain([Command::Explorer, Command::Sidebar])
+                        .any(|command| name == format!("activity:{}", command.definition().label))
+                })
+            }) {
+                assert!(
+                    button["rect"][3].as_f64().unwrap() <= footer,
+                    "Area overlaps footer at {size:?}: {button}"
+                );
+            }
         }
     }
 }

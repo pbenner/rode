@@ -580,7 +580,7 @@ impl EditorApp {
                 crate::keyboard::context_menu(&root_response, |ui| {
                     self.explorer_menu(ui, &root_entry, true, ctx)
                 });
-                // The connected host already appears in the workspace banner.
+                // The connected host already appears in the bottom status bar.
                 // Reserve an extra explorer row only for actionable offline state.
                 if remote && !connected {
                     ui.label(palette.tag("○ SSH PENDING / OFFLINE"));

@@ -4,9 +4,9 @@ A native Rust code editor for local files and remote computers over SSH.
 
 RODE combines a native editor with persistent terminals, configurable light and dark themes, and project tools that run on the computer hosting your files.
 
-![RODE's current editor layout with Atelier Dark](../assets/rode-tour.png)
+![RODE editor with Atelier Dark](../assets/rode-tour.png)
 
-The **Projects** view keeps the editor canvas clear. Open **Project tools** in the main header for Chat, Terminal, Git, Problems, Tasks and Settings; close it to return to editing. Application-level **Connections**, **System monitor**, **File transfers**, **Stocks** and **App settings** live in the left activity bar. Tools and application views can open in separate native windows without duplicating their controllers or sessions. See [workspace layout](editing.md#workspace-layout).
+The **Projects** view keeps the editor canvas clear. Open **Project tools** below **Projects** in the left activity bar for Chat, Terminal, Git, Problems, Tasks and Settings; close it to return to editing. Application-level **Connections**, **System monitor**, **File transfers**, **Stocks** and **App settings** live in the left activity bar. Tools and application views can open in separate native windows without duplicating their controllers or sessions. See [workspace layout](editing.md#workspace-layout).
 
 - Edit locally or through OpenSSH aliases, direct hosts, and jump hosts.
 - Open project folders, navigate tabs, [preview Markdown](markdown.md), search within files, and use [persistent terminals](terminals.md), with multiple shells and shared reattachment.

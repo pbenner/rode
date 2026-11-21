@@ -50,7 +50,7 @@ RODE protects unsaved source buffers, then closes without asking about terminals
 - **Persist: off** ends the session when its last attached view closes. Closing one RODE window preserves a session still attached in another window.
 - Temporary shells stop with their owning window or project. They cannot enable persistence; use a native terminal for work that needs to continue.
 
-The same rule applies on project changes, desktop crashes, lost SSH connections and **Disconnect** in the SSH banner. The native service owns this choice; no whole-file editor configuration is involved. **Terminal: New persistent terminal** in the command palette (or the equivalent session-manager button) explicitly creates a session with persistence already on.
+The same rule applies on project changes, desktop crashes, lost SSH connections and **Disconnect** in the bottom connection menu. The native service owns this choice; no whole-file editor configuration is involved. **Terminal: New persistent terminal** in the command palette (or the equivalent session-manager button) explicitly creates a session with persistence already on.
 
 The editor and native helper must use the same current session protocol. A mismatch is an error; update both together and stop retained work before replacing the service. New terminals default to **Persist: off**.
 
