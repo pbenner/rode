@@ -84,6 +84,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/navigation/` | Pane focus, validated shortcut presets and native source-editing modes |
 | `src/app/input.rs`, `src/app/input/control.rs` | Input adapter and private source replay/keymap owner; frame contexts and ordered document handoffs |
 | `src/app/transitions.rs`, `src/app/transitions/control.rs` | Ownership-transition effects and private intent/confirmation controller; source, file, save, runtime and vault admission |
+| `src/app/sidebar.rs`, `src/app/connections/view.rs` | Exclusive root sidebar selection, independent Connections focus/width, and compact saved lists shared with the detached owner |
 | `src/app/saved_connections/` | Connection form intents, catalogue reloads, submitted-form identity and serialized profile writes independent of workspace lifetime |
 | `src/shared_folders.rs`, `src/app/transfers/sharing.rs`, `src/app/transfers/sharing/view.rs`, `crates/rode-host-core/src/shared_folders/` | Captured share recipes, one context-change admission rule, intent-only presentation, cancellable SSH relays and identity-checked mounts; bookmarks retain settings without services |
 | `src/app/project_dialog.rs` | Owned selected-host project discovery state, path/selection, request tokens and candidate sandbox options; emits browse/open/cancel intents |
@@ -256,7 +257,19 @@ the `ToolTab` registry and scope classification and occupies space only while
 tools are docked and open; detached tool hosts omit editor controls;
 Environment is a category of Project settings, with its own retained draft;
 secondary editor/tool windows keep their existing owners. Application navigation
-is presentation state, not execution authority.
+is presentation state, not execution authority. Welcome is an explicit area,
+independent of project readiness or open tabs. Startup prepares CWD when no local
+or SSH target is supplied, while Welcome and a hidden Explorer remain the initial
+presentation. Deselecting Projects changes only the area; its documents, tool
+selection and service owners remain intact. Explorer and Project tools are always
+present in the root rail and can enter the project view directly. Connections
+is a sidebar destination: it retains the central area rather than replacing it.
+`sidebar::State` selects Explorer, Connections or neither; a dedicated Connections
+pane identity keeps focus and geometry separate from the editor and tool panes.
+The same compact library renders in its detached host, with one owner for saved
+profiles, bookmarks and tunnel drafts. Explorer renders only project files; the
+tunnel manager owns running tunnels and setup, while the sidebar owns the saved
+configuration list.
 
 Panel selection and detachment use `refresh_project_panel` for the same Git and
 environment refresh rules. Settings drafts remain with the project owner, so
@@ -612,13 +625,16 @@ before returning. This context is confined to UI layout and native input;
 operation handlers address documents and presentation state by stable document
 and viewport IDs. Tool windows never render an additional editor.
 
-Application areas use the same native tool-window registry. `Area::tab` maps host
-panels to their existing `ToolTab::Panel` identity and Connections/App settings to
-`ToolTab::Area`; no second controller is allocated. The rail shares detach,
-raise and reattach actions with the native headers. Raising a floating area leaves
-the root selection intact; reattaching (including native close) selects its root
-page and migrates dialogs back to that owner. Projects keeps its existing editor
-and tool hosts rather than creating another workspace owner.
+The activity rail routes commands to central application areas or the Connections
+sidebar. `Area::tab` maps host panels to their existing `ToolTab::Panel` identity
+and App settings to `ToolTab::AppSettings`. The sidebar has its own
+`ToolTab::Connections` identity; it never becomes a central area. All detachable
+views share the native tool-window registry, with no second controller. The rail
+shares detach, raise and reattach actions with the native headers. Raising a
+floating view leaves the root selection intact; reattaching (including native
+close) restores its page or sidebar and migrates dialogs back to that owner.
+Projects keeps its existing editor and tool hosts rather than creating another
+workspace owner.
 
 Secondary editors render the same Explorer sidebar and activity button as the
 main window. Directory listings, expansion and file operations share the project
@@ -826,13 +842,14 @@ workers; established attachments release those slots and retain their own limits
 
 ### Daemon-owned reverse SSH tunnels
 
-`app/connections/view.rs` presents the current host, saved SSH profiles and saved
-tunnels as responsive catalogues. SSH card and compact sidebar actions share
-`app/saved_connections.rs` intents and its existing guarded connection/storage
-paths. `app/tunnels/library.rs` renders the same saved tunnel library on that page,
-in the manager and in compact welcome shortcuts; loading retains the host identity
-check and only fills the existing draft. Presentation does not start a service or
-create another connection/controller when the Connections area moves to a window.
+`app/connections/view.rs` presents saved projects, SSH profiles and tunnel setups
+in collapsible sidebar sections beneath pinned entry actions. The three lists
+share one scroll area; their renderers own rows and domain actions, while the
+Connections view owns section layout. `app/saved_connections.rs` dispatches the
+existing guarded connection/storage intents. `app/tunnels/library.rs` checks host
+identity before loading a saved setup into the manager's draft. Presentation does
+not start a service or create another connection/controller when the sidebar
+moves to a window.
 
 `crates/rode-session/src/tunnels.rs` owns bounded native SSH reverse forwards;
 `src/app/tunnels.rs` manages them over the existing authenticated host-admin path.

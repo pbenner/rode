@@ -239,7 +239,7 @@ fn saved_connection_rename_selects_the_name_without_connecting_or_changing_the_h
                 },
                 |ctx| {
                     egui::SidePanel::left("connections").show(ctx, |ui| {
-                        app.saved_connections_ui(ui, ctx, saved_connections::View::Compact);
+                        app.saved_connections_ui(ui, ctx);
                     });
                     egui::CentralPanel::default().show(ctx, |_| {});
                     app.dialogs(ctx);

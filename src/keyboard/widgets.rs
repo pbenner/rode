@@ -36,6 +36,18 @@ impl CollapsingHeader {
         target(ui, &self.label, &result.header_response);
         result
     }
+
+    /// Keep disclosure discovery while letting full-width lists render without
+    /// the indentation and guide line used for nested content.
+    pub(crate) fn show_unindented<R>(
+        self,
+        ui: &mut egui::Ui,
+        add: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> egui::CollapsingResponse<R> {
+        let result = self.inner.show_unindented(ui, add);
+        target(ui, &self.label, &result.header_response);
+        result
+    }
 }
 
 /// Match Ui::collapsing while publishing the native disclosure control.

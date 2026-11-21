@@ -3,13 +3,6 @@
 use super::*;
 use ssh::ProfileListEdit;
 
-/// Compact welcome/sidebar rows or a detailed Connections catalogue.
-#[derive(Clone, Copy)]
-pub(super) enum View {
-    Compact,
-    Details,
-}
-
 mod state;
 pub(super) use state::State;
 mod form;
@@ -71,17 +64,11 @@ impl EditorApp {
 
     /// Render saved connection intents and route connects through the shared dirty-buffer guard.
     /// Disable row edits while a preference write is awaiting acknowledgement.
-    pub(super) fn saved_connections_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        view: View,
-    ) {
+    pub(super) fn saved_connections_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let intent = ui
-            .add_enabled_ui(!self.connection_profiles.saving(), |ui| match view {
-                View::Compact => connection_rows(ui, &self.connection_profiles.profiles, palette),
-                View::Details => connection_cards(ui, &self.connection_profiles.profiles, palette),
+            .add_enabled_ui(!self.connection_profiles.saving(), |ui| {
+                connection_rows(ui, &self.connection_profiles.profiles, palette)
             })
             .inner;
         if self.connection_profiles.saving() {
@@ -174,70 +161,6 @@ fn connection_rows(
                 connection_menu(ui, profiles, index, palette, &mut intent);
             });
         });
-    }
-    intent
-}
-
-/// Cards share the same intents, profile writer and context actions as sidebar rows.
-fn connection_cards(
-    ui: &mut egui::Ui,
-    profiles: &[Profile],
-    palette: theme::Palette,
-) -> Option<Intent> {
-    let mut intent = None;
-    for (index, profile) in profiles.iter().enumerate() {
-        ui.push_id(("connection-card", index), |ui| {
-            let card = layout::card(ui, palette, |ui| {
-                let label = profile.label();
-                let heading = ui
-                    .add(
-                        egui::Label::new(RichText::new(&label).strong())
-                            .truncate()
-                            .sense(Sense::click()),
-                    )
-                    .on_hover_text(&label);
-                ui_probe::button(ui, &format!("saved-connection-menu:{index}"), &heading);
-                crate::keyboard::context_menu(&heading, |ui| {
-                    connection_menu(ui, profiles, index, palette, &mut intent)
-                });
-                let endpoint = if profile.port.is_empty() {
-                    profile.endpoint()
-                } else {
-                    format!("{} · port {}", profile.endpoint(), profile.port)
-                };
-                ui.add(egui::Label::new(RichText::new(&endpoint).color(palette.muted)).truncate())
-                    .on_hover_text(&endpoint);
-                if !profile.root.is_empty() {
-                    ui.add(egui::Label::new(&profile.root).truncate())
-                        .on_hover_text(&profile.root);
-                }
-                ui.add_space(8.);
-                ui.horizontal_wrapped(|ui| {
-                    let connect = crate::keyboard::button(ui, "Connect");
-                    ui_probe::button(ui, &format!("saved-connection-{index}"), &connect);
-                    if connect.clicked() {
-                        intent = Some(Intent::Connect(profile.clone()));
-                    }
-                    let edit = crate::keyboard::button(ui, "Edit…");
-                    ui_probe::button(ui, &format!("saved-connection-edit:{index}"), &edit);
-                    crate::keyboard::context_menu(&edit, |ui| {
-                        connection_menu(ui, profiles, index, palette, &mut intent)
-                    });
-                    if edit.clicked() {
-                        intent = Some(Intent::Edit {
-                            profile: profile.clone(),
-                            focus_name: false,
-                        });
-                    }
-                });
-            });
-            ui_probe::button(
-                ui,
-                &format!("saved-connection-card:{index}"),
-                &card.response,
-            );
-        });
-        ui.add_space(10.);
     }
     intent
 }

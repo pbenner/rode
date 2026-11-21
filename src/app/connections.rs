@@ -243,11 +243,12 @@ mod tests {
     }
 
     #[test]
-    fn explorer_shortcut_requests_connection_and_preserves_the_unsaved_buffer_guard() {
+    fn sidebar_shortcut_requests_connection_and_preserves_the_unsaved_buffer_guard() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
+        app.show_connections(&ctx);
         app.documents[0].fixture_content().text = "unsaved local edits".into();
         let profile = Profile {
             name: "Saved connection shortcut".into(),
@@ -279,7 +280,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    app.explorer(ctx);
+                    app.connections_sidebar(ctx);
                     egui::CentralPanel::default().show(ctx, |_| {});
                 },
             )
@@ -360,7 +361,7 @@ mod tests {
 
     #[test]
     fn prepared_ssh_connections_show_welcome_without_late_terminal_takeover() {
-        for ready in [false, true] {
+        for (ready, connections) in [(false, false), (true, false), (false, true)] {
             let ctx = egui::Context::default();
             let cc = eframe::CreationContext::_new_kittest(ctx.clone());
             let mut app = EditorApp::new(&cc, Startup::default());
@@ -379,7 +380,7 @@ mod tests {
             app.commit_project(response, true, Default::default(), true, None, &ctx);
             assert!(app.project_ready());
             assert!(app.session_busy(), "The background shell still starts");
-            assert!(app.show_explorer);
+            assert!(app.sidebar.selected.is_none());
             assert!(!app.panel_visible(Panel::Agent));
             assert_eq!(app.terminal_visible(), ready);
             if !ready {
@@ -394,17 +395,28 @@ mod tests {
                         },
                         |ctx| {
                             app.navigation.begin_layout();
+                            app.connections_sidebar(ctx);
                             app.explorer(ctx);
                             app.workspace_content(ctx);
                         },
                     );
                 };
                 render(&mut app);
-                assert_eq!(app.navigation.active, navigation::Pane::Editor);
-                assert!(app.navigation.rect(navigation::Pane::Explorer).is_some());
-                assert!(app.navigation.rect(navigation::Pane::Editor).is_some());
+                assert_eq!(app.areas.active, areas::Area::Welcome);
+                assert_eq!(app.navigation.active, navigation::Pane::Tools);
+                assert!(app.navigation.rect(navigation::Pane::Explorer).is_none());
+                assert!(app.navigation.rect(navigation::Pane::Tools).is_some());
                 assert!(app.documents.active().is_none());
                 assert!(!app.agents.chat.busy);
+                let surface = app.tool_windows.surface;
+                let panel = app.tool_windows.panel;
+                if connections {
+                    app.show_connections(&ctx);
+                    app.navigation.zoom = Some(navigation::Pane::Connections);
+                    app.dialog = Dialog::Open;
+                }
+                let pane = app.navigation.active;
+                let zoom = app.navigation.zoom;
 
                 // A shell may attach after Welcome has already rendered.
                 let plan = &app.workspace.as_ref().unwrap().plan;
@@ -433,8 +445,20 @@ mod tests {
                 render(&mut app);
                 assert!(!app.panel_visible(Panel::Agent));
                 assert!(!app.terminal_visible());
-                assert_eq!(app.navigation.active, navigation::Pane::Editor);
-                assert!(app.show_explorer);
+                assert_eq!(app.areas.active, areas::Area::Welcome);
+                assert_eq!(app.navigation.active, pane);
+                assert_eq!(app.navigation.zoom, zoom);
+                assert!(
+                    app.dialog
+                        == if connections {
+                            Dialog::Open
+                        } else {
+                            Dialog::None
+                        }
+                );
+                assert_eq!(app.connections_visible(), connections);
+                assert_eq!(app.tool_windows.surface, surface);
+                assert_eq!(app.tool_windows.panel, panel);
             }
         }
     }

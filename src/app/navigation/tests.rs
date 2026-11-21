@@ -170,9 +170,9 @@ fn explorer_focus_outline_clears_toolbar_controls_across_themes_and_scales() {
                 );
                 ctx.set_pixels_per_point(scale);
                 ui_probe::install_at(&ctx, path.clone());
-                app.show_explorer = true;
+                app.set_explorer_visible(egui::ViewportId::ROOT, true);
                 app.navigation.active = Pane::Explorer;
-                app.navigation.widths[0] = Some(width);
+                app.navigation.explorer_width = Some(width);
                 let mut unfocused = None;
                 for focused in [false, true] {
                     app.navigation.used = focused;
@@ -370,6 +370,7 @@ fn directions_and_zoom_restore_the_existing_layout_without_closing_documents() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
+    app.set_explorer_visible(egui::ViewportId::ROOT, true);
     app.documents[0].fixture_content().text = "keep unsaved text".into();
     app.navigation.rects[Pane::Explorer.index()] = Some(egui::Rect::from_min_max(
         egui::pos2(0., 0.),
@@ -389,7 +390,7 @@ fn directions_and_zoom_restore_the_existing_layout_without_closing_documents() {
     app.navigate(NavAction::Previous, &ctx);
     assert_eq!(app.navigation.active, Pane::Explorer);
     app.navigate(NavAction::Hide, &ctx);
-    assert!(!app.show_explorer);
+    assert!(app.sidebar.selected.is_none());
     assert_eq!(app.navigation.active, Pane::Editor);
     assert_eq!(app.documents[0].text, "keep unsaved text");
     assert!(app.documents[0].dirty());

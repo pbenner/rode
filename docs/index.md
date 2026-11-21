@@ -18,7 +18,7 @@ The **Projects** view keeps the editor canvas clear. Open **Project tools** belo
 - Work with Git branches/worktrees, Python environments, and Ruff formatting and diagnostics.
 - Inspect CPU, memory, processes, and available GPU telemetry on demand.
 - Copy files between local and SSH hosts with the [file-transfer browsers](remote.md#file-transfers), drag and drop, and a background queue.
-- Bookmark local or remote projects in the Explorer's [Saved projects](extensions.md#project-bookmarks) list.
+- Bookmark local or remote projects in the Connections sidebar’s [Saved projects](extensions.md#project-bookmarks) list.
 - Optionally isolate project access with configurable [bubblewrap or Landlock policies](sandbox.md).
 - Use [agent chat](agents.md) with Codex, Claude Code / Anthropic, local models through Ollama, and compatible ACP agents inside the project sandbox.
 

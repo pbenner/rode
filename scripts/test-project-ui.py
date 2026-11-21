@@ -60,6 +60,7 @@ class ProjectUI(NativeUI):
 
     def project(self, project, remote=False):
         wait_for_project(self.window, self.process, self.log_path, project)
+        self.value("status-connection-value", str(project))
         assert ("[SSH" in self.title()) == remote, self.title()
 
     def path(self, name, value):
@@ -191,13 +192,13 @@ class ProjectUI(NativeUI):
             ),
             "The background terminal did not attach",
         )
-        self.control("pane-Editor")
-        self.control("explorer-root")
         self.absent("agent-composer")
         if welcome:
             self.control("welcome-screen")
             self.control("welcome-open-project")
+            self.absent("pane-Explorer")
         else:
+            self.control("pane-Editor")
             self.control("source-editor", focused=True)
         self.layout(
             lambda state: all(

@@ -109,13 +109,6 @@ impl EditorApp {
                 format!("Tunnels ({})", self.tunnels.available.len()),
             );
             ui_probe::button(ui, "tunnel-tab-list", &list);
-            let saved = crate::keyboard::selectable_value(
-                ui,
-                &mut self.tunnels.page,
-                Page::Saved,
-                format!("Saved ({})", self.tunnels.saved.entries.len()),
-            );
-            ui_probe::button(ui, "tunnel-tab-saved", &saved);
             let new = crate::keyboard::selectable_value(
                 ui,
                 &mut self.tunnels.page,
@@ -159,7 +152,6 @@ impl EditorApp {
                 }
                 match page {
                     Page::Tunnels => self.tunnel_list_ui(ui, ctx, palette),
-                    Page::Saved => self.saved_tunnels_ui(ui, palette),
                     Page::New => self.tunnel_form_ui(ui, palette),
                 }
             });

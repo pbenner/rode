@@ -95,8 +95,7 @@ with fixture_directory(prefix="rode-explorer-ui-") as base:
                 button("explorer-apply")
                 ui.absent("explorer-apply")
 
-            if remote:
-                ui.navigate("e")
+            ui.navigate("f")
             menu()
             screenshot(window, "root-menu.png")
             key("Escape")

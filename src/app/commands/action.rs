@@ -480,8 +480,7 @@ impl EditorApp {
         match command {
             Command::Projects => self.areas.active == areas::Area::Projects,
             Command::Connections => {
-                self.areas.active == areas::Area::Connections
-                    || self.area_detached(areas::Area::Connections)
+                self.connections_visible() || self.tab_detached(tool_windows::ToolTab::Connections)
             }
             Command::AppSettings => {
                 self.areas.active == areas::Area::Settings
@@ -524,8 +523,8 @@ impl EditorApp {
     /// window/tab mutations use the shared input-ordered coordinator.
     pub(in crate::app) fn execute_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
-            Command::Projects => self.open_area(areas::Area::Projects, ctx),
-            Command::Connections => self.open_area(areas::Area::Connections, ctx),
+            Command::Projects => self.toggle_projects(ctx),
+            Command::Connections => self.toggle_connections(ctx),
             Command::AppSettings => self.open_area(areas::Area::Settings, ctx),
             Command::KeyboardHints => self.start_keyboard_controls(false, ctx),
             Command::FindControl => self.start_keyboard_controls(true, ctx),

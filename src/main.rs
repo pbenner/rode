@@ -274,6 +274,13 @@ fn main() -> eframe::Result {
         }
         i += 1;
     }
+    // No target defaults to CWD; Welcome only controls presentation.
+    // Explicit files/directories and SSH targets retain their normal resolution.
+    if startup.local.is_none() && startup.remote.is_none() {
+        startup.local = Some(std::env::current_dir().map_err(|error| {
+            eframe::Error::AppCreation(format!("Cannot open the current directory: {error}").into())
+        })?);
+    }
     let wake = std::sync::Arc::new(std::sync::OnceLock::<eframe::egui::Context>::new());
     let notify = wake.clone();
     let path = eframe::storage_dir("RODE")

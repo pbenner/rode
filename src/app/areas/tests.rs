@@ -25,8 +25,13 @@ fn global_areas_preserve_project_selection_drafts_and_unsaved_source() {
     app.documents[0].fixture_content().text = "unsaved source".into();
     app.agents.chat.notice("retained conversation");
     app.toggle_panel(Panel::Agent, &ctx);
+    app.show_connections(&ctx);
+    assert_eq!(app.areas.active, Area::Projects);
+    assert!(app.connections_visible());
+    assert!(app.tools_visible());
+    app.toggle_connections(&ctx);
     for area in [
-        Area::Connections,
+        Area::Welcome,
         Area::Settings,
         Area::Stocks,
         Area::Monitor,
@@ -50,10 +55,95 @@ fn global_areas_preserve_project_selection_drafts_and_unsaved_source() {
 }
 
 #[test]
+fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content() {
+    let ctx = egui::Context::default();
+    let mut app = EditorApp::new(
+        &eframe::CreationContext::_new_kittest(ctx.clone()),
+        Startup::default(),
+    );
+    assert_eq!(app.areas.active, Area::Welcome);
+    assert!(app.sidebar.selected.is_none());
+    let project = tempfile::tempdir().unwrap();
+    let response = files::local(&Request::Prepare {
+        path: project.path().to_string_lossy().into(),
+        sandbox: Default::default(),
+    })
+    .unwrap();
+    app.commit_project(response, false, Default::default(), false, None, &ctx);
+    assert!(app.project_ready());
+    assert_eq!(app.areas.active, Area::Welcome);
+    let probe = project.path().join("ui.json");
+    ui_probe::install_at(&ctx, probe.clone());
+    let render = |app: &mut EditorApp| {
+        for _ in 0..3 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000., 760.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.navigation.begin_layout();
+                    app.activity(ctx);
+                    app.explorer(ctx);
+                    app.workspace_content(ctx);
+                },
+            );
+        }
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&probe).unwrap()).unwrap();
+        let names: HashSet<_> = state["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|button| button["name"].as_str().unwrap().to_owned())
+            .collect();
+        for name in ["welcome-screen", "workspace-explorer", "workspace-sidebar"] {
+            assert!(names.contains(name), "Missing {name}: {state}");
+        }
+        for name in ["pane-Explorer", "source-editor", "agent-composer"] {
+            assert!(!names.contains(name), "Hidden {name} is exposed: {state}");
+        }
+        assert!(!app.command_selected(Command::Projects, &ctx));
+    };
+    render(&mut app);
+    app.execute_command(Command::Explorer, &ctx);
+    assert_eq!(app.areas.active, Area::Projects);
+    assert!(app.explorer_visible(egui::ViewportId::ROOT));
+    app.new_file();
+    app.documents[0].fixture_content().text = "unsaved source".into();
+    let document = app.documents[0].id;
+    app.toggle_panel(Panel::Agent, &ctx);
+    app.agents.chat.notice("retained conversation");
+    app.execute_command(Command::Projects, &ctx);
+    assert_eq!(app.areas.active, Area::Welcome);
+    assert!(!app.explorer_visible(egui::ViewportId::ROOT));
+    render(&mut app);
+    app.execute_command(Command::Sidebar, &ctx);
+    assert_eq!(app.areas.active, Area::Projects);
+    assert!(app.tools_visible());
+    assert_eq!(
+        app.agents.chat.messages.back().unwrap().text,
+        "retained conversation"
+    );
+    assert_eq!(
+        app.documents.by_id(document).unwrap().text,
+        "unsaved source"
+    );
+    assert!(app.documents.by_id(document).unwrap().dirty());
+    app.execute_command(Command::Projects, &ctx);
+    app.execute_command(Command::Projects, &ctx);
+    assert!(app.tools_visible());
+    assert!(app.project_ready());
+}
+
+#[test]
 fn scope_registry_keeps_host_and_application_tools_out_of_project_tabs() {
     for tab in ToolTab::ALL {
-        if let ToolTab::Area(area) = tab {
-            assert_eq!(area.tab(), Some(tab));
+        assert_eq!(ToolTab::for_command(tab.command()), Some(tab));
+        if matches!(tab, ToolTab::Connections | ToolTab::AppSettings) {
             assert_eq!(tab.scope(), Scope::Application);
         }
         if let ToolTab::Panel(panel) = tab {
@@ -62,7 +152,7 @@ fn scope_registry_keeps_host_and_application_tools_out_of_project_tabs() {
                 tab.scope() != Scope::Project
             );
             if let Some(area) = Area::for_panel(panel) {
-                assert!(Area::RAIL.contains(&area));
+                assert!(frame::ACTIVITY.contains(&area.command()));
                 assert_eq!(area.panel(), Some(panel));
             }
         }
@@ -79,12 +169,12 @@ fn scope_registry_keeps_host_and_application_tools_out_of_project_tabs() {
 #[test]
 fn area_windows_preserve_project_state_and_raise_without_replacing_the_root_view() {
     for detached_tools in [false, true] {
-        for area in [
-            Area::Connections,
-            Area::Settings,
-            Area::Monitor,
-            Area::Transfers,
-            Area::Stocks,
+        for (tab, area) in [
+            (ToolTab::Connections, Area::Projects),
+            (ToolTab::AppSettings, Area::Settings),
+            (ToolTab::Panel(Panel::Monitor), Area::Monitor),
+            (ToolTab::Panel(Panel::Transfers), Area::Transfers),
+            (ToolTab::Panel(Panel::Stocks), Area::Stocks),
         ] {
             let ctx = egui::Context::default();
             let mut app = EditorApp::new(
@@ -97,9 +187,8 @@ fn area_windows_preserve_project_state_and_raise_without_replacing_the_root_view
             app.agents.chat.notice("retained conversation");
             app.toggle_panel(Panel::Agent, &ctx);
             app.tool_windows.detached = detached_tools;
-            app.open_area(area, &ctx);
-            app.detach_area(area, &ctx);
-            let tab = area.tab().unwrap();
+            app.execute_command(tab.command(), &ctx);
+            app.detach_tab(tab, &ctx);
             let owner = app.tool_viewport(tab);
             assert_ne!(owner, egui::ViewportId::ROOT);
             assert_ne!(owner, EditorApp::tools_viewport());
@@ -107,16 +196,19 @@ fn area_windows_preserve_project_state_and_raise_without_replacing_the_root_view
             assert_eq!(app.areas.active, Area::Projects);
 
             // Repeated requests reuse the sole window and leave the root view alone.
-            app.detach_area(area, &ctx);
-            app.open_area(area, &ctx);
+            app.detach_tab(tab, &ctx);
+            app.execute_command(tab.command(), &ctx);
             assert_eq!(app.tool_viewport(tab), owner);
             assert_eq!(app.areas.active, Area::Projects);
             assert_eq!(app.tool_windows.surface, Surface::Tools);
             assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
             app.reattach_tool_tab(tab, &ctx);
-            assert!(!app.area_detached(area));
+            assert!(!app.tab_detached(tab));
             assert_eq!(app.tool_viewport(tab), egui::ViewportId::ROOT);
             assert_eq!(app.areas.active, area);
+            if tab == ToolTab::Connections {
+                assert!(app.connections_visible());
+            }
             assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
             assert_eq!(app.tool_windows.detached, detached_tools);
             assert_eq!(app.documents.owner(document), Some(egui::ViewportId::ROOT));
@@ -142,12 +234,12 @@ fn application_dialogs_return_with_their_area_and_other_windows_keep_their_owner
     );
     app.open_area(Area::Settings, &ctx);
     app.set_dialog(Dialog::Shortcuts);
-    app.detach_area(Area::Settings, &ctx);
+    app.detach_tab(ToolTab::AppSettings, &ctx);
     let settings = Area::Settings.tab().unwrap();
     let owner = app.tool_viewport(settings);
     assert_eq!(app.dialog_viewport, owner);
-    app.detach_area(Area::Connections, &ctx);
-    let connections = Area::Connections.tab().unwrap();
+    let connections = ToolTab::Connections;
+    app.detach_tab(connections, &ctx);
     assert_ne!(app.tool_viewport(connections), owner);
     assert_eq!(app.dialog_viewport, owner);
     app.reattach_tool_tab(connections, &ctx);
@@ -186,7 +278,7 @@ fn global_root_navigation_does_not_hide_a_secondary_editors_explorer() {
         Startup::default(),
     );
     let child = app.allocate_editor_window();
-    app.open_area(Area::Connections, &ctx);
+    app.open_area(Area::Settings, &ctx);
     for viewport in [egui::ViewportId::ROOT, child] {
         let mut input = egui::RawInput {
             viewport_id: viewport,
@@ -209,7 +301,7 @@ fn global_root_navigation_does_not_hide_a_secondary_editors_explorer() {
             })
         });
     }
-    assert_eq!(app.areas.active, Area::Connections);
+    assert_eq!(app.areas.active, Area::Settings);
 }
 
 #[test]
@@ -221,12 +313,12 @@ fn global_navigation_keeps_visible_detached_project_tools_refreshing() {
     );
     app.toggle_panel(Panel::Problems, &ctx);
     app.tool_windows.detached = true;
-    app.open_area(Area::Connections, &ctx);
+    app.open_area(Area::Settings, &ctx);
     assert!(app.tools_visible());
     assert!(app.panel_visible(Panel::Problems));
     app.tool_windows.tools_hidden = true;
     assert!(!app.panel_visible(Panel::Problems));
-    assert_eq!(app.areas.active, Area::Connections);
+    assert_eq!(app.areas.active, Area::Settings);
 }
 
 #[test]
@@ -251,12 +343,12 @@ fn invoking_a_remembered_project_tool_from_a_global_area_reveals_it() {
     );
     for panel in [Panel::Problems, Panel::Agent, Panel::Git, Panel::Settings] {
         app.toggle_panel(panel, &ctx);
-        app.open_area(Area::Connections, &ctx);
+        app.open_area(Area::Settings, &ctx);
         app.toggle_panel(panel, &ctx);
         assert_eq!(app.areas.active, Area::Projects);
         assert_eq!(app.tool_windows.panel, Some(panel));
         assert!(app.tools_visible());
-        app.open_area(Area::Connections, &ctx);
+        app.open_area(Area::Settings, &ctx);
         app.reveal_panel(panel, &ctx);
         assert_eq!(app.areas.active, Area::Projects);
         assert!(app.tools_visible());
@@ -348,13 +440,7 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                     );
                 }
                 assert_eq!(has("workspace-tab:Debugger"), debug && mode == 1);
-                for name in [
-                    "workspace-sidebar",
-                    "workspace-explorer",
-                    "open-tunnels",
-                    "open-project",
-                    "connect-ssh",
-                ] {
+                for name in ["workspace-sidebar", "workspace-explorer", "open-project"] {
                     assert!(has(name), "Navigation control {name} missing: {state}");
                 }
                 let rect = |button: &serde_json::Value| {
@@ -417,6 +503,8 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                     );
                 }
                 assert!(!has("workspace-code"));
+                assert!(!has("open-tunnels"));
+                assert!(!has("connect-ssh"));
                 assert!(!has("workspace-tools"));
                 assert!(!has("workspace-project-menu"));
                 assert_eq!(has("workspace-detach"), mode == 1);
@@ -510,9 +598,8 @@ fn compact_activity_areas_do_not_overlap_the_fixed_footer() {
                 .unwrap();
             for button in buttons.iter().filter(|b| {
                 b["name"].as_str().is_some_and(|name| {
-                    Area::RAIL
+                    frame::ACTIVITY
                         .into_iter()
-                        .map(Area::command)
                         .chain([Command::Explorer, Command::Sidebar])
                         .any(|command| name == format!("activity:{}", command.definition().label))
                 })
@@ -528,12 +615,12 @@ fn compact_activity_areas_do_not_overlap_the_fixed_footer() {
 
 #[test]
 fn late_file_reads_keep_global_areas_visible_and_existing_edits_intact() {
-    for area in [
-        Area::Connections,
-        Area::Monitor,
-        Area::Transfers,
-        Area::Stocks,
-        Area::Settings,
+    for (tab, area) in [
+        (ToolTab::Connections, Area::Projects),
+        (ToolTab::Panel(Panel::Monitor), Area::Monitor),
+        (ToolTab::Panel(Panel::Transfers), Area::Transfers),
+        (ToolTab::Panel(Panel::Stocks), Area::Stocks),
+        (ToolTab::AppSettings, Area::Settings),
     ] {
         for existing_alias in [false, true] {
             let ctx = egui::Context::default();
@@ -550,7 +637,7 @@ fn late_file_reads_keep_global_areas_visible_and_existing_edits_intact() {
                 app.documents[0].fixture_content().path = Some(canonical.into());
                 destination = app.allocate_editor_window();
             }
-            app.open_area(area, &ctx);
+            app.execute_command(tab.command(), &ctx);
             assert!(
                 !app.navigation.used,
                 "Exercise mouse navigation before keyboard pane mode"

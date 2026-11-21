@@ -19,8 +19,10 @@ pub(super) enum Pane {
     Terminal,
     Tools,
     Menus,
+    Connections,
 }
 impl Pane {
+    const COUNT: usize = 6;
     fn index(self) -> usize {
         self as usize
     }
@@ -89,11 +91,11 @@ pub(super) struct State {
     leader: Option<Instant>,
     input_viewport: egui::ViewportId,
     pub zoom: Option<Pane>,
-    pub widths: [Option<f32>; 2],
-    rects: [Option<egui::Rect>; 5],
-    viewports: [Option<egui::ViewportId>; 5],
-    native_rects: HashMap<egui::ViewportId, [Option<egui::Rect>; 5]>,
-    remembered: std::collections::HashMap<egui::ViewportId, [Option<egui::Id>; 5]>,
+    pub explorer_width: Option<f32>,
+    rects: [Option<egui::Rect>; Pane::COUNT],
+    viewports: [Option<egui::ViewportId>; Pane::COUNT],
+    native_rects: HashMap<egui::ViewportId, [Option<egui::Rect>; Pane::COUNT]>,
+    remembered: std::collections::HashMap<egui::ViewportId, [Option<egui::Id>; Pane::COUNT]>,
     pub list: List,
     modal: bool,
     restricted: bool,
@@ -111,9 +113,9 @@ impl State {
             leader: None,
             input_viewport: egui::ViewportId::ROOT,
             zoom: None,
-            widths: [None; 2],
-            rects: [None; 5],
-            viewports: [None; 5],
+            explorer_width: None,
+            rects: [None; Pane::COUNT],
+            viewports: [None; Pane::COUNT],
             native_rects: Default::default(),
             remembered: Default::default(),
             list: Default::default(),
@@ -124,13 +126,13 @@ impl State {
     /// Begin root layout measurements for this frame. Child viewport measurements remain available
     /// until their own callbacks rebuild them.
     pub fn begin_layout(&mut self) {
-        self.rects = [None; 5];
-        self.viewports = [None; 5];
+        self.rects = [None; Pane::COUNT];
+        self.viewports = [None; Pane::COUNT];
         self.begin_viewport_layout(egui::ViewportId::ROOT);
     }
     /// Reset only one host’s pane measurements after routing its input against the previous layout.
     pub fn begin_viewport_layout(&mut self, viewport: egui::ViewportId) {
-        self.native_rects.insert(viewport, [None; 5]);
+        self.native_rects.insert(viewport, [None; Pane::COUNT]);
     }
     /// Release measured geometry and remembered widget focus when a native editor is removed.
     pub fn forget_viewport(&mut self, viewport: egui::ViewportId) {
@@ -183,7 +185,7 @@ impl State {
     /// Whether asynchronous file completion may take editor focus without overriding a deliberately
     /// selected tool pane.
     pub fn accepts_editor_focus(&self) -> bool {
-        !self.used || self.active == Pane::Editor
+        self.active != Pane::Connections && (!self.used || self.active == Pane::Editor)
     }
     /// A partial prefix has no authority after its source context is replaced.
     pub(super) fn cancel_input(&mut self) {
@@ -387,37 +389,49 @@ impl EditorApp {
                     } else {
                         -1.
                     };
-                    let next = [Pane::Explorer, Pane::Editor, Pane::Terminal, Pane::Tools]
-                        .into_iter()
-                        .filter(|p| *p != current && self.pane_exists(*p, ctx.viewport_id()))
-                        .filter_map(|p| {
-                            self.navigation
-                                .rect_in(p, ctx.viewport_id())
-                                .map(|other| (p, other))
-                        })
-                        .filter(|(_, other)| {
-                            (other.center()[axis] - rect.center()[axis]) * sign > 1.
-                                && other.min[1 - axis] < rect.max[1 - axis]
-                                && other.max[1 - axis] > rect.min[1 - axis]
-                        })
-                        .min_by(|(_, a), (_, b)| {
-                            let cost = |r: egui::Rect| {
-                                (r.center()[axis] - rect.center()[axis]).abs()
-                                    + (r.center()[1 - axis] - rect.center()[1 - axis]).abs() * 0.1
-                            };
-                            cost(*a).total_cmp(&cost(*b))
-                        })
-                        .map(|(p, _)| p);
+                    let next = [
+                        Pane::Explorer,
+                        Pane::Connections,
+                        Pane::Editor,
+                        Pane::Terminal,
+                        Pane::Tools,
+                    ]
+                    .into_iter()
+                    .filter(|p| *p != current && self.pane_exists(*p, ctx.viewport_id()))
+                    .filter_map(|p| {
+                        self.navigation
+                            .rect_in(p, ctx.viewport_id())
+                            .map(|other| (p, other))
+                    })
+                    .filter(|(_, other)| {
+                        (other.center()[axis] - rect.center()[axis]) * sign > 1.
+                            && other.min[1 - axis] < rect.max[1 - axis]
+                            && other.max[1 - axis] > rect.min[1 - axis]
+                    })
+                    .min_by(|(_, a), (_, b)| {
+                        let cost = |r: egui::Rect| {
+                            (r.center()[axis] - rect.center()[axis]).abs()
+                                + (r.center()[1 - axis] - rect.center()[1 - axis]).abs() * 0.1
+                        };
+                        cost(*a).total_cmp(&cost(*b))
+                    })
+                    .map(|(p, _)| p);
                     if let Some(pane) = next {
                         self.focus_pane(pane, ctx);
                     }
                 }
             }
             Next | Previous => {
-                let panes: Vec<_> = [Pane::Explorer, Pane::Editor, Pane::Terminal, Pane::Tools]
-                    .into_iter()
-                    .filter(|p| self.pane_exists(*p, ctx.viewport_id()))
-                    .collect();
+                let panes: Vec<_> = [
+                    Pane::Explorer,
+                    Pane::Connections,
+                    Pane::Editor,
+                    Pane::Terminal,
+                    Pane::Tools,
+                ]
+                .into_iter()
+                .filter(|p| self.pane_exists(*p, ctx.viewport_id()))
+                .collect();
                 let index = panes
                     .iter()
                     .position(|p| *p == self.navigation.active)
@@ -444,7 +458,10 @@ impl EditorApp {
                 let viewport = self.navigation.viewports[self.navigation.active.index()]
                     .unwrap_or(ctx.viewport_id());
                 if viewport != egui::ViewportId::ROOT
-                    && matches!(self.navigation.active, Pane::Tools | Pane::Terminal)
+                    && matches!(
+                        self.navigation.active,
+                        Pane::Tools | Pane::Terminal | Pane::Connections
+                    )
                 {
                     let mut size = ctx
                         .input(|input| {
@@ -466,6 +483,16 @@ impl EditorApp {
                     .max(if axis == 0 { 640. } else { 420. });
                     ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::InnerSize(size));
                 } else if matches!(action, Narrower | Wider)
+                    && self.navigation.active == Pane::Connections
+                {
+                    let width = egui::containers::panel::PanelState::load(
+                        ctx,
+                        sidebar::connections_panel_id(false),
+                    )
+                    .map_or(290., |state| state.rect.width());
+                    self.sidebar.connections_width =
+                        Some(width + if action == Wider { 32. } else { -32. });
+                } else if matches!(action, Narrower | Wider)
                     && self.navigation.active == Pane::Explorer
                 {
                     let width = egui::containers::panel::PanelState::load(
@@ -475,7 +502,7 @@ impl EditorApp {
                     .map_or(250., |state| state.rect.width());
                     let width = Some(width + if action == Wider { 32. } else { -32. });
                     if ctx.viewport_id() == egui::ViewportId::ROOT {
-                        self.navigation.widths[0] = width;
+                        self.navigation.explorer_width = width;
                     } else if let Some(view) = self.editor_view_mut(ctx.viewport_id()) {
                         view.explorer_width = width;
                     }
@@ -485,7 +512,10 @@ impl EditorApp {
                 let viewport = self.navigation.viewports[self.navigation.active.index()]
                     .unwrap_or(ctx.viewport_id());
                 if viewport != egui::ViewportId::ROOT
-                    && matches!(self.navigation.active, Pane::Tools | Pane::Terminal)
+                    && matches!(
+                        self.navigation.active,
+                        Pane::Tools | Pane::Terminal | Pane::Connections
+                    )
                 {
                     let maximized = ctx
                         .input(|input| {
@@ -513,6 +543,12 @@ impl EditorApp {
                 }
             }
             Hide => {
+                if self.navigation.active == Pane::Connections
+                    && ctx.viewport_id() == egui::ViewportId::ROOT
+                {
+                    self.toggle_connections(ctx);
+                    return;
+                }
                 if self.areas.active != areas::Area::Projects
                     && ctx.viewport_id() == egui::ViewportId::ROOT
                 {
@@ -579,6 +615,10 @@ impl EditorApp {
         }
         match pane {
             Pane::Explorer => self.explorer_visible(viewport),
+            Pane::Connections => {
+                (viewport == egui::ViewportId::ROOT && self.connections_visible())
+                    || self.floating_tab(viewport) == Some(tool_windows::ToolTab::Connections)
+            }
             Pane::Editor => true,
             Pane::Terminal => self.terminal_visible(),
             Pane::Tools => self.areas.active != areas::Area::Projects || self.tools_visible(),
@@ -587,13 +627,19 @@ impl EditorApp {
     }
     /// Record focus intent and reveal the requested surface before focusing its native widget.
     pub(super) fn focus_pane(&mut self, pane: Pane, ctx: &egui::Context) {
+        if pane == Pane::Connections {
+            self.show_connections(ctx);
+            return;
+        }
         if ctx.viewport_id() == egui::ViewportId::ROOT && self.areas.active != areas::Area::Projects
         {
-            if pane == Pane::Tools {
+            if pane == Pane::Tools && self.areas.active != areas::Area::Welcome {
                 self.navigation.request_focus(pane, egui::ViewportId::ROOT);
                 return;
             }
-            if matches!(pane, Pane::Editor | Pane::Explorer | Pane::Terminal) {
+            if matches!(pane, Pane::Editor | Pane::Explorer | Pane::Terminal)
+                || self.areas.active == areas::Area::Welcome
+            {
                 self.areas.active = areas::Area::Projects;
             }
         }
@@ -654,7 +700,7 @@ impl EditorApp {
             Pane::Editor => {
                 self.focus_editor(ctx);
             }
-            Pane::Menus => {}
+            Pane::Menus | Pane::Connections => {}
         }
         ctx.request_repaint();
     }
@@ -672,7 +718,7 @@ impl EditorApp {
             self.navigation
                 .native_rects
                 .entry(ctx.viewport_id())
-                .or_insert([None; 5])[pane.index()] = Some(rect);
+                .or_insert([None; Pane::COUNT])[pane.index()] = Some(rect);
         }
         if zoom.is_none()
             && (self.navigation.viewports[pane.index()].is_none()
@@ -750,7 +796,7 @@ impl EditorApp {
                     self.navigation
                         .remembered
                         .entry(ctx.viewport_id())
-                        .or_insert([None; 5])[pane.index()] = focused;
+                        .or_insert([None; Pane::COUNT])[pane.index()] = focused;
                 }
             }
         }
@@ -774,7 +820,7 @@ impl EditorApp {
         self.navigation
             .remembered
             .entry(response.ctx.viewport_id())
-            .or_insert([None; 5])[Pane::Menus.index()] = Some(response.id);
+            .or_insert([None; Pane::COUNT])[Pane::Menus.index()] = Some(response.id);
         if self.navigation.pending == Some(Pane::Menus)
             && self.navigation.pending_viewport == response.ctx.viewport_id()
         {

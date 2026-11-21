@@ -41,17 +41,16 @@ share one application process and project; chat, terminals and project tools kee
 their existing location.
 
 Bookmark the current local or SSH project with the **bookmark icon** in the
-Explorer header. **Saved projects**, above the file tree, reopens a project with
-one click; right-click an entry to rename or remove it. This bundled **Project
-bookmarks** extension can be disabled in **View → Extensions**.
+Connections or Explorer header. **Saved projects** in the **Connections** sidebar
+reopens a project with one click; right-click an entry to rename or remove it.
+This bundled **Project bookmarks** extension can be disabled in **View → Extensions**.
 
 For a coordinated light/dark interface, choose **Atelier Light** or **Atelier Dark**
 from **View → Color theme**. Both include matching code and terminal palettes;
 see [themes](docs/themes.md).
 
-Manage saved SSH connections in **Connections** in the left activity bar, or in
-the Explorer when no folder is open. Right-click a profile card's title or an
-Explorer row to rename, edit or remove it; drag Explorer rows to save your preferred order.
+Manage saved SSH connections in the **Connections** sidebar. Right-click a profile
+row to rename, edit or remove it; drag rows to save your preferred order.
 
 Files normally use their containing folder as the workspace. With sandbox defaults enabled, a file directly in your home directory opens in **File mode · Normal mode** instead: no project or project tools are started, and your sandbox preferences stay unchanged. Explicit `--sandbox` requests and saved folder policies still apply. See [file startup](docs/getting-started.md#run).
 

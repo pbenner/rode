@@ -349,7 +349,9 @@ impl EditorApp {
             ctx.request_repaint_after(Duration::from_secs(2));
         }
     }
-    fn attach_info(&mut self, info: rode_session::Info, ctx: &egui::Context) {
+    /// Attach the owned view independently of presentation. A delayed creation
+    /// reply may reveal it only while the user still has the terminal selected.
+    fn attach_info(&mut self, info: rode_session::Info, ctx: &egui::Context, reveal: bool) {
         if !self.compatible_session(&info) {
             self.notify(
                 "Open this terminal's project and sandbox policy before attaching.",
@@ -357,7 +359,9 @@ impl EditorApp {
             );
             return;
         }
-        self.terminal_intent();
+        if reveal {
+            self.terminal_intent();
+        }
         if self
             .sessions
             .active
@@ -365,9 +369,11 @@ impl EditorApp {
             .is_some_and(|active| active.key == info.id)
             && self.terminal.as_ref().is_some_and(Terminal::is_alive)
         {
-            self.dialog = Dialog::None;
             self.show_terminal = true;
-            Terminal::focus(ctx);
+            if reveal {
+                self.dialog = Dialog::None;
+                Terminal::focus(ctx);
+            }
             return;
         }
         if let Some(index) = self
@@ -378,8 +384,10 @@ impl EditorApp {
         {
             let slot = self.sessions.other.remove(index);
             self.adopt_terminal(slot.terminal, slot.meta);
-            self.dialog = Dialog::None;
-            Terminal::focus(ctx);
+            if reveal {
+                self.dialog = Dialog::None;
+                Terminal::focus(ctx);
+            }
             return;
         }
         if self.sessions.other.len() >= 15 {
@@ -408,10 +416,12 @@ impl EditorApp {
                         native: Some(info),
                     },
                 );
-                if self.dialog == Dialog::Sessions {
-                    self.dialog = Dialog::None;
+                if reveal {
+                    if self.dialog == Dialog::Sessions {
+                        self.dialog = Dialog::None;
+                    }
+                    Terminal::focus(ctx);
                 }
-                Terminal::focus(ctx);
             }
             Err(error) => self.notify(format!("{error:#}"), true),
         }
@@ -484,18 +494,14 @@ impl EditorApp {
                 if info.persistent != persistent {
                     self.notify("The running terminal service predates persistence controls. This session remains persistent; existing jobs were preserved. Finish old sessions before restarting the service.", true);
                 }
-                let restore = (self.navigation.active != navigation::Pane::Terminal)
-                    .then_some(self.navigation.active);
-                let restore_composer = restore == Some(navigation::Pane::Tools)
-                    && self.tool_windows.panel == Some(Panel::Agent)
-                    && ctx.memory(|memory| memory.has_focus(egui::Id::new("agent-composer")));
-                self.attach_info(info.clone(), ctx);
+                // Background attachment has no presentation effects. Avoid
+                // replaying navigation, which can clear another pane's focus,
+                // zoom or modal after the user has moved away from the terminal.
+                let reveal = self.areas.active == areas::Area::Projects
+                    && self.navigation.active == navigation::Pane::Terminal;
+                self.attach_info(info.clone(), ctx, reveal);
                 if let Some(error) = self.sessions.finish_creation(&info) {
                     self.notify(error, true);
-                }
-                if let Some(pane) = restore {
-                    self.focus_pane(pane, ctx);
-                    self.agents.focus |= restore_composer;
                 }
             }
             self.sessions.update_info(&mut self.terminal, info);
@@ -601,7 +607,7 @@ impl EditorApp {
                                 .on_hover_text("Open this session's original project and sandbox policy to attach.");
                             super::ui_probe::button(ui, &format!("session-attach:{}", info.id), &attach);
                             if attach.clicked() {
-                                self.attach_info(info.clone(), ctx);
+                                self.attach_info(info.clone(), ctx, true);
                             }
                             if ui.add_enabled(compatible && !self.sessions.busy, crate::keyboard::Button::new("Rename")).clicked() {
                                 self.sessions.rename = Some((info.id.clone(), info.name.clone()));
@@ -647,7 +653,7 @@ impl EditorApp {
                         ui.label(format!("{}{}", meta.name, if alive { "" } else { " · view ended" }));
                         if crate::keyboard::button(ui, "Show").clicked() {
                             if let Some(info) = meta.native.clone() {
-                                self.attach_info(info, ctx);
+                                self.attach_info(info, ctx, true);
                             } else if let Some(index) = self.sessions.other.iter().position(|slot| slot.meta.key == meta.key) {
                                 let slot = self.sessions.other.remove(index);
                                 self.adopt_terminal(slot.terminal, slot.meta);

@@ -367,7 +367,7 @@ impl EditorApp {
                         }
                     }
                     if crate::keyboard::button(ui, "Manage connections…").clicked() {
-                        self.open_area(areas::Area::Connections, ctx);
+                        self.show_connections(ctx);
                         ui.close();
                     }
                 });

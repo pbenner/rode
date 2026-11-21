@@ -53,12 +53,6 @@ impl Summary {
         } else {
             Connection::Offline
         };
-        let label = match connection {
-            Connection::Local => "Local".into(),
-            Connection::Connected => format!("SSH · {}", host.as_ref().unwrap()),
-            Connection::Connecting => "SSH · connecting…".into(),
-            Connection::Offline => format!("SSH · {} · offline", host.as_ref().unwrap()),
-        };
         let state = match connection {
             Connection::Local => "Local project".into(),
             Connection::Connected => format!("SSH connected · {}", host.as_ref().unwrap()),
@@ -125,7 +119,7 @@ impl Summary {
         Self {
             title,
             connection,
-            label,
+            label: workspace.root.clone(),
             details: format!("{state}\nProject: {}", workspace.root),
             mode: Some(mode),
             mode_details,
@@ -184,12 +178,17 @@ impl EditorApp {
                 .x
                 + 8.
         };
-        let host_width = natural_width(&summary.label).min(190.).min(width * 0.45);
-        let mode_width = summary
-            .mode
-            .as_ref()
-            .map_or(0., |mode| natural_width(mode).min(170.).min(width * 0.35));
-        slot(ui, host_width, |ui| {
+        // Project paths need more room than a short transport label. Reserve
+        // the access mode, both gaps and a bounded share for transient messages;
+        // the native button truncates within the remaining path slot.
+        let available = (width - 2. * ui.spacing().item_spacing.x).max(0.);
+        let mode_width = summary.mode.as_ref().map_or(0., |mode| {
+            natural_width(mode).min(170.).min(available * 0.35)
+        });
+        let message_width = (available * 0.2).min(140.);
+        let path_width =
+            natural_width(&summary.label).min((available - mode_width - message_width).max(0.));
+        slot(ui, path_width, |ui| {
             ui.add_enabled_ui(!self.foreign_modal(ctx), |ui| {
                 let response = crate::keyboard::MenuButton::from_button(
                     egui::Button::new(RichText::new(&summary.label).size(12.).color(color))
@@ -302,6 +301,7 @@ mod tests {
             .set_fixture(Some(crate::app::tests::remote_workspace()));
         let summary = Summary::new(&app);
         assert_eq!(summary.connection, Connection::Connected);
+        assert_eq!(summary.label, "/scratch/researcher/project");
         assert!(
             summary
                 .details
@@ -338,6 +338,7 @@ mod tests {
         app.workspace.as_mut().unwrap().connected = false;
         let summary = Summary::new(&app);
         assert_eq!(summary.connection, Connection::Offline);
+        assert_eq!(summary.label, "/scratch/researcher/project");
         assert_eq!(summary.mode.as_deref(), Some("Offline"));
         assert!(summary.warning);
         assert!(summary.title.contains("offline"));
@@ -347,15 +348,18 @@ mod tests {
         app.workspace.begin_preparation();
         let summary = Summary::new(&app);
         assert_eq!(summary.connection, Connection::Connecting);
+        assert_eq!(summary.label, "/scratch/researcher/project");
         assert_eq!(summary.mode.as_deref(), Some("Opening project…"));
         assert!(summary.title.contains("[Opening project]"));
         assert!(app.workspace.preparing());
 
         let mut local = crate::app::tests::remote_workspace();
         local.remote = None;
+        local.root = "/home/researcher/local-project".into();
         app.workspace.set_fixture(Some(local));
         let summary = Summary::new(&app);
         assert_eq!(summary.connection, Connection::Local);
+        assert_eq!(summary.label, "/home/researcher/local-project");
         assert_eq!(summary.mode.as_deref(), Some("Normal"));
         assert!(summary.details.contains("Local project"));
         assert!(!summary.title.contains("SSH"));

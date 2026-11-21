@@ -320,6 +320,7 @@ fn opening_tools_at_minimum_width_does_not_resize_the_explorer() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
+    app.set_explorer_visible(egui::ViewportId::ROOT, true);
     render_width(&mut app, &ctx, 850.);
     let before = app
         .navigation

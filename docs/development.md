@@ -181,7 +181,7 @@ version updates. Existing application/navigation regressions exercise these
 contracts; `scripts/test-navigation-ui.py` checks actual keyboard/pane behavior
 on an isolated authenticated display.
 
-`cargo test --lib saved_connection` checks Explorer profile context menus,
+`cargo test --lib saved_connection` checks Connections sidebar profile context menus,
 dragging in both directions, Escape cancellation, ordinary clicks and failed
 write acknowledgements without opening windows or connecting to a host.
 `cargo test --lib saved_profile` checks persisted ordering, removal, stale

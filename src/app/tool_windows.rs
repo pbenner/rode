@@ -32,12 +32,13 @@ pub(in crate::app) enum Surface {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// Remembered tool destination restored when the tools/terminal surface is shown again.
+/// Detachable view identity shared by root navigation and native window ownership.
 pub(in crate::app) enum ToolTab {
     Terminal,
     Panel(Panel),
-    /// Non-project pages share the same native-window lifetime as tool panels.
-    Area(areas::Area),
+    /// The Connections sidebar keeps the same controller when detached.
+    Connections,
+    AppSettings,
 }
 
 impl ToolTab {
@@ -52,13 +53,32 @@ impl ToolTab {
         Self::Panel(Panel::Debug),
         Self::Panel(Panel::Stocks),
         Self::Panel(Panel::Transfers),
-        Self::Area(areas::Area::Connections),
-        Self::Area(areas::Area::Settings),
+        Self::Connections,
+        Self::AppSettings,
     ];
+
+    pub(in crate::app) fn command(self) -> Command {
+        match self {
+            Self::Terminal => Command::Terminal,
+            Self::Panel(panel) => Command::Panel(panel),
+            Self::Connections => Command::Connections,
+            Self::AppSettings => Command::AppSettings,
+        }
+    }
+
+    pub(in crate::app) fn for_command(command: Command) -> Option<Self> {
+        match command {
+            Command::Terminal => Some(Self::Terminal),
+            Command::Panel(panel) => Some(Self::Panel(panel)),
+            Command::Connections => Some(Self::Connections),
+            Command::AppSettings => Some(Self::AppSettings),
+            _ => None,
+        }
+    }
 
     pub(in crate::app) fn label(self) -> &'static str {
         match self {
-            Self::Area(area) => area.command().definition().label,
+            Self::Connections | Self::AppSettings => self.command().definition().label,
             Self::Terminal => "Terminal",
             Self::Panel(Panel::Agent) => "Chat",
             Self::Panel(Panel::Git) => "Git",
@@ -76,7 +96,7 @@ impl ToolTab {
         match self {
             Self::Terminal => areas::Scope::Project,
             Self::Panel(panel) => panel.scope(),
-            Self::Area(_) => areas::Scope::Application,
+            Self::Connections | Self::AppSettings => areas::Scope::Application,
         }
     }
 
@@ -90,7 +110,8 @@ impl ToolTab {
     pub(in crate::app) fn pane(self) -> navigation::Pane {
         match self {
             Self::Terminal => navigation::Pane::Terminal,
-            Self::Panel(_) | Self::Area(_) => navigation::Pane::Tools,
+            Self::Connections => navigation::Pane::Connections,
+            Self::Panel(_) | Self::AppSettings => navigation::Pane::Tools,
         }
     }
 
@@ -179,8 +200,11 @@ impl EditorApp {
 
     /// Move presentation only. Controllers and unsaved input stay in the same application state.
     pub(in crate::app) fn detach_tab(&mut self, tab: ToolTab, ctx: &egui::Context) {
-        if self.tab_detached(tab) {
+        if self.tab_detached(tab) || !self.command_visible(tab.command()) {
             return;
+        }
+        if let ToolTab::Panel(panel) = tab {
+            self.initialize_host_tool(panel);
         }
         let previous_owner = self.tool_viewport(tab);
         // Terminal startup records focus intent. Set its host first so it
@@ -194,7 +218,7 @@ impl EditorApp {
                 }
             }
             ToolTab::Panel(panel) => self.refresh_project_panel(panel, ctx),
-            ToolTab::Area(_) => {}
+            ToolTab::Connections | ToolTab::AppSettings => {}
         }
         if self.dialog_viewport == previous_owner && self.dialog != Dialog::None {
             self.dialog_viewport = tab.viewport();
@@ -213,6 +237,9 @@ impl EditorApp {
                 }
             }
         }
+        if self.areas.active.tab() == Some(tab) {
+            self.areas.active = areas::Area::Projects;
+        }
         self.navigation.zoom = None;
         self.focus_tool_tab(tab, ctx);
         ctx.request_repaint_of(egui::ViewportId::ROOT);
@@ -227,23 +254,49 @@ impl EditorApp {
         if self.dialog_viewport == tab.viewport() {
             self.dialog_viewport = self.tool_viewport(tab);
         }
-        let area = match tab {
-            ToolTab::Area(area) => Some(area),
-            ToolTab::Panel(panel) => areas::Area::for_panel(panel),
-            ToolTab::Terminal => None,
-        };
-        if let Some(area) = area {
-            self.open_area(area, ctx);
-            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
-            return;
-        }
-        self.tool_windows.surface = Surface::Editor;
+        self.reveal_tool_tab(tab, ctx);
+        ctx.send_viewport_cmd_to(self.tool_viewport(tab), egui::ViewportCommand::Focus);
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
+    }
+
+    /// Route the view to its own presentation destination, independently of its host.
+    fn reveal_tool_tab(&mut self, tab: ToolTab, ctx: &egui::Context) {
         match tab {
             ToolTab::Terminal => self.focus_pane(navigation::Pane::Terminal, ctx),
-            ToolTab::Panel(panel) => self.toggle_panel(panel, ctx),
-            ToolTab::Area(_) => unreachable!("Application areas reattach to the root above"),
+            ToolTab::Panel(panel) => self.reveal_panel(panel, ctx),
+            ToolTab::Connections => self.show_connections(ctx),
+            ToolTab::AppSettings => self.open_area(areas::Area::Settings, ctx),
         }
-        ctx.request_repaint_of(egui::ViewportId::ROOT);
+    }
+
+    /// Rail actions share the registry's detach, raise and reattach operations.
+    pub(super) fn tool_window_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        tab: ToolTab,
+        ctx: &egui::Context,
+    ) {
+        if self.tab_detached(tab) {
+            let show = crate::keyboard::button(ui, "Show window");
+            ui_probe::button(ui, "area-show-window", &show);
+            if show.clicked() {
+                self.focus_tool_tab(tab, ctx);
+                ui.close();
+            }
+            let reattach = crate::keyboard::button(ui, "Reattach to main window");
+            ui_probe::button(ui, "area-reattach", &reattach);
+            if reattach.clicked() {
+                self.reattach_tool_tab(tab, ctx);
+                ui.close();
+            }
+        } else {
+            let detach = crate::keyboard::button(ui, "Open in separate window");
+            ui_probe::button(ui, "area-detach", &detach);
+            if detach.clicked() {
+                self.detach_tab(tab, ctx);
+                ui.close();
+            }
+        }
     }
 
     /// Record source-editor focus intent and select the docked editor without discarding tool state.
@@ -300,11 +353,10 @@ impl EditorApp {
     /// Hide or restore the last tool surface, initially Chat, updating pane focus
     /// and detached-window visibility.
     pub(in crate::app) fn toggle_sidebar(&mut self, ctx: &egui::Context) {
+        let visible = self.areas.active == areas::Area::Projects && self.tool_surface();
         if self.areas.active != areas::Area::Projects {
             self.open_area(areas::Area::Projects, ctx);
-            return;
         }
-        let visible = self.tool_surface();
         self.navigation.zoom = None;
         if visible {
             self.remember_tool_tab();
@@ -323,7 +375,7 @@ impl EditorApp {
                     && match tab {
                         ToolTab::Panel(panel) => self.panel_enabled(*panel),
                         ToolTab::Terminal => true,
-                        ToolTab::Area(_) => false,
+                        ToolTab::Connections | ToolTab::AppSettings => false,
                     }
             };
             let remembered = self.tool_windows.last_tool.filter(enabled);
@@ -446,11 +498,7 @@ impl EditorApp {
             }
         });
         if response.clicked() {
-            match tab {
-                ToolTab::Terminal => self.focus_pane(navigation::Pane::Terminal, ctx),
-                ToolTab::Panel(panel) => self.reveal_panel(panel, ctx),
-                ToolTab::Area(area) => self.open_area(area, ctx),
-            }
+            self.reveal_tool_tab(tab, ctx);
         }
     }
 
@@ -616,6 +664,9 @@ impl EditorApp {
 
     /// Render one docked editor/tool/terminal surface with common focus and navigation boundaries.
     pub(in crate::app) fn workspace_content(&mut self, ctx: &egui::Context) {
+        if self.navigation.zoom == Some(navigation::Pane::Connections) {
+            return;
+        }
         if self.areas.active != areas::Area::Projects {
             self.global_content(ctx);
             return;
@@ -799,7 +850,8 @@ impl EditorApp {
         match tab {
             ToolTab::Terminal => self.terminal_content(ui, ctx),
             ToolTab::Panel(panel) => self.panel_content(panel, ui, ctx),
-            ToolTab::Area(area) => self.area_content(area, ui, ctx),
+            ToolTab::Connections => self.connections_content(ui, ctx),
+            ToolTab::AppSettings => self.area_content(areas::Area::Settings, ui, ctx),
         }
     }
 }

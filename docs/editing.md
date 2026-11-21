@@ -147,14 +147,24 @@ Source text defaults to **15 pt**. Saved text sizes are retained; use the existi
 ## Workspace layout
 
 **Open project…** is in the top header and browses the currently selected local or
-SSH host. The bottom status bar contains the connection menu and actual project
-access mode; hover or open either control for full details. SSH Disconnect and
+SSH host. The bottom status bar shows the open project's folder path and actual
+access mode. Long paths truncate to fit; hover or open the path control for the
+full path, host and connection details. SSH Disconnect and
 Reconnect are in the connection menu. Connection and sandbox status share this
 footer, leaving the space below the header for the workspace.
 
-The left rail contains application areas: **Projects**, **Connections**, **System monitor**, **File transfers**, and **Stocks**. **App settings**, **Extensions**, and keyboard help sit at the bottom. Disabled extensions hide their entries. Global areas use the main content space without duplicating project tools. Returning to **Projects** restores its selected view, unsaved files, chat draft and running shell.
+The left rail contains **Projects**, **Connections**, **System monitor**, **File transfers**, and **Stocks**. **App settings**, **Extensions**, and keyboard help sit at the bottom. Disabled extensions hide their entries. Connections opens a resizable sidebar beside the current content; the other application views use the main content space without duplicating project tools. Returning to **Projects** restores its selected view, unsaved files, chat draft and running shell.
 
-Within Projects, the left activity bar groups **Explorer** and **Project tools** directly below **Projects**, followed by a separator before application views. Their highlights show whether Explorer and tools are open. The editor is the default view. Open **Project tools** to show **Chat**, **Terminal**, **Git**, **Problems**, **Tasks**, **Settings**, and **Debugger** when its extension is enabled. Every enabled project tool has a direct tab in that view; the tool bar wraps on narrow windows. The tool bar disappears when tools are closed or detached, giving the space back to the editor. **Settings → Environment** contains runtime paths, project variables and Python environments. Right-click a tool tab to open it in a separate window.
+The left activity bar groups **Explorer** and **Project tools** directly below **Projects**, followed by a separator before application views. Their highlights show whether Explorer and tools are open. Open **Project tools** to show **Chat**, **Terminal**, **Git**, **Problems**, **Tasks**, **Settings**, and **Debugger** when its extension is enabled. Every enabled project tool has a direct tab in that view; the tool bar wraps on narrow windows. The tool bar disappears when tools are closed or detached, giving the space back to the editor. **Settings → Environment** contains runtime paths, project variables and Python environments. Right-click a tool tab to open it in a separate window.
+
+Welcome is the initial view, with Explorer hidden and the current working directory prepared as the project when no path is supplied. **Projects**, **Explorer** and **Project tools** are always available in the left rail, including while viewing application tools. Clicking the selected **Projects** icon deselects it and returns to Welcome; clicking it again restores the project view. Welcome leaves open files, unsaved edits, chats, terminals and detached windows intact. Opening a file or selecting Explorer or Project tools enters the project directly.
+
+**Connections** and **Explorer** use the same left sidebar space. Connections
+keeps **Open project…**, **Connect SSH…** and **New tunnel…** above the saved
+projects, SSH profiles and tunnel setups. All three saved-list sections can be
+collapsed and use full-width rows without vertical guide lines. Switching between
+the two retains the current editor/tool view and each sidebar’s layout. The top-right header keeps
+**Open project…**; SSH and tunnel entry buttons live in Connections.
 
 The explorer remains beside the project content and can be hidden independently. Opening a project tool replaces the code view instead of shrinking it. Close **Project tools** with the same button, or open a file in the explorer, to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
 
@@ -162,7 +172,7 @@ Choose **Detach** at the far right of the project tab bar to move the selected p
 
 Choose **Detach tab** beside **Detach**, or right-click a tool and choose **Open in separate window**, to detach just that tool. Several tools can detach independently; each keeps its existing controller. Use **Reattach** in its window, or close it, to return it. Tool commands raise its existing window. Conversations, drafts, running shells and tool state stay intact when moving between windows.
 
-The **Connections**, **System monitor**, **File transfers**, **Stocks** and **App settings** icons in the left rail also offer **Open in separate window** on right-click (or the keyboard context-menu shortcut). Detaching the current page returns the main window to **Projects**. Clicking a detached icon raises its existing window without changing the main window's page. Right-click the icon and choose **Reattach to main window**, use **Reattach** in the separate window, or close that window to bring the page back. These windows share one application process: monitor sampling, transfers, host selections and drafts continue without being restarted or duplicated.
+The **Connections**, **System monitor**, **File transfers**, **Stocks** and **App settings** icons in the left rail also offer **Open in separate window** on right-click (or the keyboard context-menu shortcut). Detaching the current application page returns the main window to **Projects**; detaching Connections leaves the central view unchanged. Clicking a detached icon raises its existing window without changing the main window's page. Right-click the icon and choose **Reattach to main window**, use **Reattach** in the separate window, or close that window to bring the page back. These windows share one application process: monitor sampling, transfers, host selections and drafts continue without being restarted or duplicated.
 
 The terminal fills this workspace rather than occupying a separate bottom panel. **Ctrl+Shift+T** selects the terminal or returns to code. **Ctrl+~** (also **Ctrl+`**) hides or restores the tools sidebar. Its first opening selects **Chat** when enabled; later openings restore the selected tab, whether that is Chat, Terminal, Git or another tool. If the remembered tab is detached or disabled, opening tools selects an available docked panel. When all panels are detached, it raises an enabled tool window. Hiding it keeps the shell and agent running, and preserves drafts. A detached tools window hides and reopens without docking itself. Resize a detached tools window using its native borders. Paths and status text retain their full hover text, and find/replace adapts to narrow windows. Unsaved files still require a discard decision when closed.
 

@@ -76,10 +76,13 @@ pub(super) fn valid_name(name: &str) -> bool {
 }
 
 impl EditorApp {
-    /// Sidebar visibility belongs to its native host; directory data stays project-scoped.
+    /// Effective visibility belongs to the native host and, for the root, its
+    /// selected area. Directory data stays project-scoped; the visibility
+    /// preference stays with its host.
     pub(super) fn explorer_visible(&self, viewport: egui::ViewportId) -> bool {
         if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
-            self.show_explorer
+            self.sidebar.selected == Some(sidebar::View::Explorer)
+                && self.areas.active == areas::Area::Projects
         } else {
             self.editor_view(viewport)
                 .is_none_or(|view| view.show_explorer)
@@ -87,13 +90,18 @@ impl EditorApp {
     }
 
     /// Change only the selected host’s Explorer preference and clear incompatible zoom. Tool
-    /// callers use root layout state.
+    /// callers use root layout state. Revealing the root Explorer enters Projects.
     pub(super) fn set_explorer_visible(&mut self, viewport: egui::ViewportId, visible: bool) {
         if visible || self.pane_zoom(viewport) == Some(navigation::Pane::Explorer) {
             self.set_pane_zoom(viewport, None);
         }
         if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
-            self.show_explorer = visible;
+            if visible {
+                self.areas.active = areas::Area::Projects;
+                self.sidebar.selected = Some(sidebar::View::Explorer);
+            } else if self.sidebar.selected == Some(sidebar::View::Explorer) {
+                self.sidebar.selected = None;
+            }
         } else if let Some(view) = self.editor_view_mut(viewport) {
             view.show_explorer = visible;
         }
@@ -476,7 +484,7 @@ impl EditorApp {
         let maximum = (ctx.available_rect().width() - minimum_editor).clamp(180., 450.);
         let zoom = self.pane_zoom(viewport) == Some(navigation::Pane::Explorer);
         let width = if viewport == egui::ViewportId::ROOT {
-            self.navigation.widths[0].take()
+            self.navigation.explorer_width.take()
         } else {
             self.editor_view_mut(viewport)
                 .and_then(|view| view.explorer_width.take())
@@ -555,7 +563,6 @@ impl EditorApp {
                 });
             }
             ui.add_space(12.0);
-            self.project_bookmarks_ui(ui, ctx);
             if let Some(workspace) = self.workspace.as_ref() {
                 let root = workspace.root.clone();
                 let remote = workspace.remote.is_some();
@@ -598,49 +605,10 @@ impl EditorApp {
                 ui.separator();
                 self.tree(ui, &root, ctx);
             } else {
-                ui.label(
-                    RichText::new("NO FOLDER OPEN")
-                        .size(12.0)
-                        .color(palette.muted),
-                );
-                ui.add_space(10.0);
-                ui.label("Open a local project or connect to another computer with SSH.");
-                ui.add_space(10.0);
-                let action_size = egui::vec2(ui.available_width(), 32.);
-                if ui
-                    .add_sized(action_size, IconButton::new(Icon::Folder, "Open folder"))
-                    .clicked()
-                {
+                ui.label(palette.tag("No project folder available."));
+                if crate::keyboard::button(ui, "Open project…").clicked() {
                     self.set_dialog(Dialog::Folder);
                 }
-                if ui
-                    .add_sized(action_size, IconButton::new(Icon::Remote, "Connect SSH"))
-                    .clicked()
-                {
-                    self.set_dialog(Dialog::Connect);
-                }
-                ui.add_space(28.0);
-                ui.separator();
-                ui.add_space(12.0);
-                // Saved hosts and tunnel setups share the remaining sidebar
-                // space, so a large host list cannot hide the tunnel shortcuts.
-                egui::ScrollArea::vertical()
-                    .id_salt(("welcome-connections", viewport))
-                    .max_height(ui.available_height())
-                    .min_scrolled_height(0.)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.label(palette.tag("CONNECTIONS"));
-                        self.saved_connections_ui(ui, ctx, saved_connections::View::Compact);
-                        if self.connection_profiles.profiles.is_empty() {
-                            ui.label(
-                                RichText::new("Saved SSH profiles appear here.")
-                                    .small()
-                                    .color(palette.muted),
-                            );
-                        }
-                        self.saved_tunnel_shortcuts_ui(ui);
-                    });
             }
             palette.paint_explorer_artwork(ui);
         });

@@ -11,28 +11,20 @@ pub(super) enum Scope {
     Project,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Area {
-    #[default]
     Projects,
-    Connections,
     Monitor,
     Transfers,
     Stocks,
     Settings,
+    #[default]
+    Welcome,
 }
 impl Area {
-    pub const RAIL: [Self; 5] = [
-        Self::Projects,
-        Self::Connections,
-        Self::Monitor,
-        Self::Transfers,
-        Self::Stocks,
-    ];
     pub fn command(self) -> Command {
         match self {
-            Self::Projects => Command::Projects,
-            Self::Connections => Command::Connections,
+            Self::Welcome | Self::Projects => Command::Projects,
             Self::Monitor => Command::Panel(Panel::Monitor),
             Self::Transfers => Command::Panel(Panel::Transfers),
             Self::Stocks => Command::Panel(Panel::Stocks),
@@ -60,19 +52,9 @@ impl Area {
     /// keeps its editor/tool hosts instead of duplicating the entire workspace.
     pub fn tab(self) -> Option<tool_windows::ToolTab> {
         match self {
-            Self::Projects => None,
-            Self::Connections | Self::Settings => Some(tool_windows::ToolTab::Area(self)),
+            Self::Welcome | Self::Projects => None,
+            Self::Settings => Some(tool_windows::ToolTab::AppSettings),
             _ => self.panel().map(tool_windows::ToolTab::Panel),
-        }
-    }
-
-    pub fn for_command(command: Command) -> Option<Self> {
-        match command {
-            Command::Projects => Some(Self::Projects),
-            Command::Connections => Some(Self::Connections),
-            Command::AppSettings => Some(Self::Settings),
-            Command::Panel(panel) => Self::for_panel(panel),
-            _ => None,
         }
     }
 }
@@ -151,53 +133,21 @@ impl State {
 }
 
 impl EditorApp {
+    /// Welcome is a presentation choice, never a project close. Keep document,
+    /// tool and detached-window owners intact when deselecting Projects.
+    pub(super) fn toggle_projects(&mut self, ctx: &egui::Context) {
+        self.open_area(
+            if self.areas.active == Area::Projects {
+                Area::Welcome
+            } else {
+                Area::Projects
+            },
+            ctx,
+        );
+    }
+
     pub(super) fn area_detached(&self, area: Area) -> bool {
         area.tab().is_some_and(|tab| self.tab_detached(tab))
-    }
-
-    /// Move presentation into the shared viewport registry. Host bindings and
-    /// controllers remain in place, and the main window returns to its project.
-    pub(super) fn detach_area(&mut self, area: Area, ctx: &egui::Context) {
-        let Some(tab) = area.tab().filter(|_| self.command_visible(area.command())) else {
-            return;
-        };
-        if let Some(panel) = area.panel() {
-            self.initialize_host_tool(panel);
-        }
-        self.detach_tab(tab, ctx);
-        if self.areas.active == area {
-            self.areas.active = Area::Projects;
-            self.navigation.zoom = None;
-            ctx.request_repaint_of(egui::ViewportId::ROOT);
-        }
-    }
-
-    /// Shared rail actions work with the keyboard context-menu shortcut too.
-    pub(super) fn area_window_menu(&mut self, ui: &mut egui::Ui, area: Area, ctx: &egui::Context) {
-        let Some(tab) = area.tab() else {
-            return;
-        };
-        if self.tab_detached(tab) {
-            let show = crate::keyboard::button(ui, "Show window");
-            ui_probe::button(ui, "area-show-window", &show);
-            if show.clicked() {
-                self.focus_tool_tab(tab, ctx);
-                ui.close();
-            }
-            let reattach = crate::keyboard::button(ui, "Reattach to main window");
-            ui_probe::button(ui, "area-reattach", &reattach);
-            if reattach.clicked() {
-                self.reattach_tool_tab(tab, ctx);
-                ui.close();
-            }
-        } else {
-            let detach = crate::keyboard::button(ui, "Open in separate window");
-            ui_probe::button(ui, "area-detach", &detach);
-            if detach.clicked() {
-                self.detach_area(area, ctx);
-                ui.close();
-            }
-        }
     }
 
     /// Do not mutate the selected project surface while visiting a global area.
@@ -237,19 +187,12 @@ impl EditorApp {
         let area = self.areas.active;
         let palette = self.themes.active().palette;
         egui::CentralPanel::default()
-            .frame(layout::pane_frame(palette.panel))
-            .show(ctx, |ui| {
-                if self.area_detached(area) {
-                    let mut ui = self.pane_ui(ui, navigation::Pane::Tools);
-                    ui.label(format!(
-                        "{} is open in its own window.",
-                        area.command().definition().label
-                    ));
-                    self.area_window_menu(&mut ui, area, ctx);
-                } else {
-                    self.area_content(area, ui, ctx);
-                }
-            });
+            .frame(layout::pane_frame(if area == Area::Welcome {
+                palette.background
+            } else {
+                palette.panel
+            }))
+            .show(ctx, |ui| self.area_content(area, ui, ctx));
     }
 
     /// Render an area in its sole current host, using the same application state.
@@ -259,20 +202,24 @@ impl EditorApp {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
     ) {
-        if let Some(panel) = area.panel() {
-            self.panel_content(panel, ui, ctx);
-            return;
-        }
-        let mut ui = self.pane_ui(ui, navigation::Pane::Tools);
-        layout::page(&mut ui, layout::PAGE_WIDTH, |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt(("application-area", area.command().definition().label))
-                .show(ui, |ui| match area {
-                    Area::Connections => self.connections_ui(ui, ctx),
-                    Area::Settings => self.application_settings_ui(ui, ctx),
-                    _ => {}
+        match area {
+            Area::Welcome => {
+                let mut ui = self.pane_ui(ui, navigation::Pane::Tools);
+                self.welcome(&mut ui);
+            }
+            Area::Settings => {
+                let mut ui = self.pane_ui(ui, navigation::Pane::Tools);
+                layout::page(&mut ui, layout::PAGE_WIDTH, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt(("application-area", area.command().definition().label))
+                        .show(ui, |ui| self.application_settings_ui(ui, ctx));
                 });
-        });
+            }
+            Area::Monitor | Area::Transfers | Area::Stocks => {
+                self.panel_content(area.panel().unwrap(), ui, ctx);
+            }
+            Area::Projects => unreachable!("Projects render through workspace_content"),
+        }
     }
     fn application_settings_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.migrate_monitor_preferences();

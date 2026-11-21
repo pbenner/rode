@@ -453,6 +453,7 @@ fn remote_monitor_waits_for_authentication_before_sampling() {
         plan: Default::default(),
         sandbox_options: Default::default(),
     }));
+    app.areas.active = areas::Area::Monitor;
     app.tool_windows.panel = Some(Panel::Monitor);
     app.host_tools.monitoring.set_active(true);
     assert!(!app.monitor_host_ready());

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
     for scale in [0.75, 1., 1.5] {
         for width in [1380., 850., 480.] {
-            for file_mode in [false, true] {
+            for (file_mode, long_path) in [(false, false), (false, true), (true, false)] {
                 let ctx = egui::Context::default();
                 let cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 let mut app = EditorApp::new(&cc, Startup::default());
@@ -17,6 +17,12 @@ fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
                     app.documents[0].fixture_content().path = Some("/tmp/standalone.rs".into());
                 } else {
                     app.workspace.set_fixture(Some(remote_workspace()));
+                    if long_path {
+                        app.workspace.as_mut().unwrap().root = format!(
+                            "/scratch/{}/研究 notebook project",
+                            "a-long-project-parent/".repeat(20)
+                        );
+                    }
                     let plan = &mut app.workspace.as_mut().unwrap().plan;
                     plan.requested = true;
                     plan.reason = "Sandbox unavailable on this host".into();
@@ -55,11 +61,11 @@ fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
                             },
                         ));
                     }
-                    if width >= 850. {
+                    if width >= 850. && !long_path {
                         for label in if file_mode {
                             ["Local", "File mode"]
                         } else {
-                            ["SSH · researcher@test-host", "Normal · unavailable"]
+                            ["/scratch/researcher/project", "Normal · unavailable"]
                         } {
                             let galley = output
                                 .as_ref()

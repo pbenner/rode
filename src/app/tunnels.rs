@@ -18,7 +18,6 @@ mod ui;
 enum Page {
     #[default]
     Tunnels,
-    Saved,
     New,
 }
 

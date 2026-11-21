@@ -68,6 +68,7 @@ mod project_dialog;
 mod sandbox_presets;
 mod saved_connections;
 mod sessions;
+mod sidebar;
 mod stocks;
 mod terminal_colors;
 mod tool_windows;
@@ -214,7 +215,7 @@ pub struct EditorApp {
     startup_restore: Option<bool>,
     last_window_title: String,
     show_terminal: bool,
-    show_explorer: bool,
+    sidebar: sidebar::State,
     show_hidden: bool,
     dialog: Dialog,
     dialog_focus: bool,
@@ -341,7 +342,7 @@ impl EditorApp {
             startup_restore: None,
             last_window_title: String::new(),
             show_terminal: false,
-            show_explorer: true,
+            sidebar: Default::default(),
             show_hidden: false,
             dialog: Dialog::None,
             dialog_focus: false,
@@ -799,6 +800,7 @@ impl eframe::App for EditorApp {
                 app.encrypted_banner(ctx);
                 app.statusbar(ctx);
                 app.activity(ctx);
+                app.connections_sidebar(ctx);
                 app.explorer(ctx);
                 app.workspace_content(ctx);
             }

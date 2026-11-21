@@ -6,6 +6,16 @@
 
 use super::*;
 
+/// The rail mixes a project destination, a sidebar and host tools. It is not a
+/// catalogue of central pages: Connections leaves the central view intact.
+pub(super) const ACTIVITY: [Command; 5] = [
+    Command::Projects,
+    Command::Connections,
+    Command::Panel(Panel::Monitor),
+    Command::Panel(Panel::Transfers),
+    Command::Panel(Panel::Stocks),
+];
+
 impl EditorApp {
     /// Menus and workspace search share the header space left by fixed actions.
     /// Keep their existing widget identities while the parent clips or scrolls this region.
@@ -87,21 +97,6 @@ impl EditorApp {
                     ui.spacing_mut().item_spacing.x = 4.;
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let connect = if compact {
-                        IconButton::toolbar(Icon::Remote, "Connect SSH")
-                    } else {
-                        IconButton::new(Icon::Remote, "Connect SSH")
-                    };
-                    let connect = ui.add(connect.color(palette.accent));
-                    ui_probe::button(ui, "connect-ssh", &connect);
-                    if connect.clicked() {
-                        self.set_dialog(Dialog::Connect);
-                    }
-                    let tunnels = self.tunnel_status_button(ui, palette);
-                    ui_probe::button(ui, "open-tunnels", &tunnels);
-                    if tunnels.clicked() {
-                        self.set_dialog(Dialog::Tunnels);
-                    }
                     let open = if compact {
                         IconButton::toolbar(Icon::Folder, "Open project…")
                     } else {
@@ -142,14 +137,7 @@ impl EditorApp {
     /// Render feature-gated activity actions without treating selection as tool-process activation.
     pub(super) fn activity(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        let project_controls = ctx.viewport_id() == egui::ViewportId::ROOT
-            && self.areas.active == areas::Area::Projects
-            && (self.workspace.is_some()
-                || !self.documents.is_empty()
-                || self.tool_surface()
-                || tool_windows::ToolTab::ALL
-                    .into_iter()
-                    .any(|tab| self.tab_detached(tab)));
+        let project_controls = ctx.viewport_id() == egui::ViewportId::ROOT;
         egui::SidePanel::left("activity")
             .exact_width(52.0)
             .resizable(false)
@@ -162,11 +150,10 @@ impl EditorApp {
                 ui.spacing_mut().item_spacing.y = 0.;
                 ui.spacing_mut().button_padding = egui::vec2(0., 2.);
                 let mut commands = Vec::new();
-                for area in areas::Area::RAIL {
-                    let command = area.command();
+                for command in ACTIVITY {
                     if self.command_visible(command) {
                         commands.push(command);
-                        if area == areas::Area::Projects && project_controls {
+                        if command == Command::Projects && project_controls {
                             commands.extend([Command::Explorer, Command::Sidebar]);
                         }
                     }
@@ -234,15 +221,22 @@ impl EditorApp {
         } else {
             format!("{} · {shortcut}", definition.label)
         };
-        let area = areas::Area::for_command(command).filter(|area| area.tab().is_some());
-        if let Some(area) = area {
-            hint.push_str(if self.area_detached(area) {
+        let tab = tool_windows::ToolTab::for_command(command);
+        if let Some(tab) = tab {
+            hint.push_str(if self.tab_detached(tab) {
                 "\nRight-click to reattach to the main window"
             } else {
                 "\nRight-click to open in a separate window"
             });
         }
         let selected = self.command_selected(command, ctx);
+        if command == Command::Projects {
+            hint.push_str(if selected {
+                "\nClick to return to Welcome"
+            } else {
+                "\nShow the project workspace"
+            });
+        }
         let response = ui.add_sized(
             [36.0, button_height],
             IconButton::icon(definition.icon, &hint)
@@ -283,8 +277,8 @@ impl EditorApp {
                 ),
             );
         }
-        if let Some(area) = area {
-            crate::keyboard::context_menu(&response, |ui| self.area_window_menu(ui, area, ctx));
+        if let Some(tab) = tab {
+            crate::keyboard::context_menu(&response, |ui| self.tool_window_menu(ui, tab, ctx));
         }
         if response.clicked() {
             keyboard::consume_activation(&response);

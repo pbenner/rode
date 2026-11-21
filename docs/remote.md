@@ -6,7 +6,7 @@ operations or project terminals. The remote machine still needs a running SSH
 server and a POSIX shell. External programs such as Git-over-SSH retain their own
 client requirements.
 
-Click **Connect SSH**. Every connection can configure:
+Open **Connections** in the left rail, then choose **Connect SSH…**. Every connection can configure:
 
 - Client backend: **Rust (default)** or **OpenSSH**
 - SSH config alias, hostname, or `user@hostname`
@@ -16,16 +16,16 @@ Click **Connect SSH**. Every connection can configure:
 - An optional preinstalled remote helper path
 - X11 forwarding when available (enabled by default)
 - An optional **Connection name**, such as `Work cluster` or `Home server`, shown
-  in the Explorer and connection picker instead of the SSH address
+  in Connections and the connection picker instead of the SSH address
 
-The left-rail **Connections** page shows saved SSH profiles and tunnel setups
-alongside the current host. Profile cards show the address and project folder,
-with **Connect** and **Edit…** actions. The two catalogues sit beside each other
-in wide windows and stack in smaller windows, including detached Connections windows.
+The left-rail **Connections** button opens a resizable sidebar beside the current
+editor, Welcome screen or application tool. Click it again to hide it. The top
+provides **Open project…**, **Connect SSH…** and **New tunnel…**; below are saved
+projects, SSH connections and saved tunnels in one scrolling list. Explorer
+contains the project file browser, independently of these saved locations.
+The same Connections sidebar can detach through its rail context menu.
 
-Saved profiles also appear under **Connections** in the Explorer when no folder is
-open, with **Saved tunnels** directly below them. Click a connection to connect,
-or right-click it (or a profile card's title) to **Edit connection…**,
+Click a saved SSH connection to connect, or right-click it to **Edit connection…**,
 **Rename…**, **Remove saved connection**, **Move up** or **Move down**. Rename opens
 the connection form with the name selected; type a name and click **Save profile**.
 The name is the first field and does not change the SSH address. You can also drag a row
@@ -38,11 +38,12 @@ name is preserved rather than overwritten.
 
 Blank optional fields defer to your OpenSSH configuration. Passwords, key passphrases, MFA, and host-key confirmation are handled interactively in the terminal. RODE does not store credentials or disable host-key verification. SSH agent forwarding is governed by your own SSH config. Work channels preserve the authenticated master's agent-forwarding policy; agent forwarding remains off unless you enable it for that host.
 
-Once a connection finishes opening the workspace, RODE shows the standard welcome
-screen and keeps Explorer available. Choose **Open project folder** to browse
-folders on the connected SSH host before starting work. Reconnecting with open
-buffers returns to the editor and preserves their unsaved changes. The project
-shell starts in the background; use **Toggle terminal** when you need it.
+Once a connection finishes opening the workspace, RODE shows Welcome with Explorer
+hidden. Choose **Open project folder** to browse folders on the connected SSH host,
+or select **Explorer** or **Project tools** in the left rail to start work.
+Reconnecting with open buffers returns to the editor and preserves their unsaved
+changes. The project shell starts in the background; use **Toggle terminal** when
+you need it.
 
 To use your desktop's SSH agent for Git operations on a remote host, enable `ForwardAgent yes` for that host in your desktop SSH config, then reconnect RODE and open a new terminal. The desktop process must have access to the agent when it connects. In a normal-mode remote terminal, `ssh-add -l` should list the forwarded identities, and the Git tab uses the same agent. Existing persistent terminals retain their original environment. This is separate from the project's sandbox setting.
 
@@ -278,8 +279,9 @@ launch unrestricted remote commands.
 
 ## Compute-node return tunnels
 
-Open **Tunnels** beside **Connect SSH**, from **File → SSH tunnels**, or from the
-command palette. With a local project or no project open, it manages **This
+Use **New tunnel…** at the top of Connections, or its **Tunnels** status button
+below the saved lists. **File → SSH tunnels** and the command palette also open
+the tunnel manager. With a local project or no project open, it manages **This
 computer** and needs no initial SSH connection. With an SSH workspace selected,
 it manages that remote host; a lost SSH connection never falls back to the local
 service. The dialog identifies which host owns the tunnels.
@@ -349,7 +351,7 @@ hostname. These labels do not change the fixed loopback destination on the compu
 its draft survives tab switches. Background status checks do not disable setup fields or actions.
 Tabs and the Start/Close controls remain visible while the form scrolls.
 
-The titlebar **Tunnels** button shows the connected count, or connected/total
+The Connections sidebar’s **Tunnels** status button shows the connected count, or connected/total
 when some retained tunnels are connecting, reconnecting or need attention.
 Hover for the breakdown. **Tunnels (?)** means status is unknown or the host
 is unavailable. Status is checked every 15 seconds outside the list and every
@@ -357,15 +359,16 @@ is unavailable. Status is checked every 15 seconds outside the list and every
 never start a tunnel service or reconnect SSH.
 
 Choose **Save configuration** in setup or on a running tunnel's card to keep it
-across editor and service restarts. The **Connections** page and the manager's
-**Saved** tab share the same reusable setups and deletion confirmation. Choose
-**Load setup** to fill the form, review it, then choose **Start tunnel**. Loading
-does not connect or start a service. **Update configuration** saves changes,
-including a renamed setup. **Delete…** removes only the saved setup.
+across editor and service restarts. Saved setups appear in the **Connections**
+sidebar, below SSH connections. Click a setup to fill the form, review it, then
+choose **Start tunnel**. Loading does not connect or start a service. The tunnel
+manager has **Tunnels** and **New tunnel** tabs; saved setups are managed in the
+sidebar. **Update configuration** saves changes, including a renamed setup.
+Use the remove icon beside a saved tunnel and confirm **Delete configuration**
+to remove only its saved setup; running tunnels remain intact.
 
-On the welcome screen, saved tunnels appear below saved SSH connections in the
-Explorer. A shortcut opens its setup for the current host; a setup belonging to a
-different host opens the saved library so you can see which SSH host is required.
+Setups for another host are disabled; hover for the host required to load them.
+Their remove controls remain available without connecting to that host.
 
 Saved setups belong to their tunnel host: local setups include this computer's
 hostname; remote setups use the original SSH host/alias, login, port override and
@@ -556,7 +559,7 @@ One authenticated stdio channel owns the native gateway and up to four concurren
 
 ## Connection and workspace lifetime
 
-Saved profiles live in `${XDG_CONFIG_HOME:-~/.config}/rode/connections.json`. **Save profile** persists connection settings, not passwords. Clicking a saved connection in the explorer connects immediately using that profile; unsaved edits still require a decision before switching. Use **Connect SSH** to open the form for new connections or editing profiles. **Remote: Reconnect SSH** in the command palette restores the last connection. A dedicated SSH client process owns the authenticated connection; project terminals use separate channels. Hiding or detaching a project terminal leaves the connection available. **New** creates an independent shell with persistence off; **Sessions** discovers/reattaches existing ones. Enable **Persist: on** in the terminal header to leave work running when RODE closes without an exit prompt; tmux/screen is not required. See [terminal lifetime and remote helper setup](terminals.md).
+Saved profiles live in `${XDG_CONFIG_HOME:-~/.config}/rode/connections.json`. **Save profile** persists connection settings, not passwords. Clicking a saved connection in Connections connects immediately using that profile; unsaved edits still require a decision before switching. Use **Connect SSH** to open the form for new connections or editing profiles. **Remote: Reconnect SSH** in the command palette restores the last connection. A dedicated SSH client process owns the authenticated connection; project terminals use separate channels. Hiding or detaching a project terminal leaves the connection available. **New** creates an independent shell with persistence off; **Sessions** discovers/reattaches existing ones. Enable **Persist: on** in the terminal header to leave work running when RODE closes without an exit prompt; tmux/screen is not required. See [terminal lifetime and remote helper setup](terminals.md).
 
 The Rust SSH master receives its launch profile through an owner-only file in its private connection directory, which it removes after opening. Its process arguments contain only the internal mode, socket path and a SHA-256 digest that detects substituted profile data before authentication. Helper discovery and bootstrap scripts travel over the existing SSH input stream, followed by any executable upload; `ps` shows a short launcher instead of the full script. Host verification, interactive login and helper digest checks still apply. Restart the editor and reconnect to use these launch changes; existing processes keep their original arguments.
 

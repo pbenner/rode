@@ -416,8 +416,13 @@ class NativeUI:
         )
 
     def project_editor(self):
-        """Close the root tools view through its toggle, preserving its selected tab."""
+        """Enter Projects or close its tools view, preserving the selected tool tab."""
         names = {button["name"] for button in self.layout()["buttons"]}
+        if "pane-Editor" not in names and not any(
+            name.startswith("workspace-tab:") for name in names
+        ):
+            self.click("activity:Projects")
+            names = {button["name"] for button in self.layout()["buttons"]}
         if "pane-Editor" not in names:
             self.click("workspace-sidebar")
         return self.control("pane-Editor")

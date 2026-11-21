@@ -224,7 +224,7 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = app(&ctx, egui::ViewportId::ROOT);
             app.navigation.zoom = Some(navigation::Pane::Explorer);
-            let explorer = app.show_explorer;
+            let explorer = app.sidebar.selected;
             let source = app
                 .documents
                 .active()
@@ -253,7 +253,7 @@ mod tests {
             });
             assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|command| matches!(command, egui::ViewportCommand::Fullscreen(value) if *value == native)));
             assert!(app.editor.pdf_fullscreen.is_none());
-            assert_eq!(app.show_explorer, explorer);
+            assert_eq!(app.sidebar.selected, explorer);
             assert_eq!(app.navigation.zoom, Some(navigation::Pane::Explorer));
             assert_eq!(app.navigation.active, navigation::Pane::Explorer);
         }

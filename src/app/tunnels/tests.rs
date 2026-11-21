@@ -152,6 +152,7 @@ fn local_tunnel_manager_is_reachable_without_a_workspace_and_offers_return_detai
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     assert!(app.workspace.is_none());
+    app.show_connections(&ctx);
     let mut title_frame = |events| {
         ctx.run(
             egui::RawInput {
@@ -162,7 +163,10 @@ fn local_tunnel_manager_is_reachable_without_a_workspace_and_offers_return_detai
                 events,
                 ..Default::default()
             },
-            |ctx| app.titlebar(ctx),
+            |ctx| {
+                app.connections_sidebar(ctx);
+                egui::CentralPanel::default().show(ctx, |_| {});
+            },
         )
     };
     title_frame(vec![]);
@@ -384,10 +388,7 @@ fn tunnel_controls_render_without_starting_workers_and_background_checks_leave_a
             attempts: 1,
         }];
         app.tunnels.spec.listen_on = ListenOn::AllInterfaces;
-        for (page_index, page) in [Page::Tunnels, Page::Saved, Page::New]
-            .into_iter()
-            .enumerate()
-        {
+        for (page_index, page) in [Page::Tunnels, Page::New].into_iter().enumerate() {
             app.tunnels.page = page;
             for frame in 0..3 {
                 let _ = ctx.run(
@@ -442,7 +443,14 @@ fn dialog_frame(
             events,
             ..Default::default()
         },
-        |ctx| app.dialogs(ctx),
+        |ctx| {
+            if app.dialog == Dialog::None {
+                app.connections_sidebar(ctx);
+                egui::CentralPanel::default().show(ctx, |_| {});
+            } else {
+                app.dialogs(ctx);
+            }
+        },
     )
 }
 fn text_bounds(output: &egui::FullOutput, label: &str) -> (egui::Rect, egui::Rect) {
@@ -607,14 +615,14 @@ fn tunnel_modal_keeps_navigation_and_actions_visible_across_sizes_and_themes() {
                     },
                     false,
                 );
-                for page in [Page::Tunnels, Page::Saved, Page::New] {
+                for page in [Page::Tunnels, Page::New] {
                     app.tunnels.page = page;
                     for _ in 0..3 {
                         dialog_frame(&mut app, &ctx, size, vec![]);
                     }
                     let output = dialog_frame(&mut app, &ctx, size, vec![]);
                     let screen = ctx.content_rect();
-                    for label in ["New tunnel", "Tunnels (8)", "Saved (1)", "Close"]
+                    for label in ["New tunnel", "Tunnels (8)", "Close"]
                         .into_iter()
                         .chain((page == Page::New).then_some("Start tunnel"))
                     {
@@ -734,9 +742,9 @@ fn saved_tunnel_setup_survives_restart_and_supports_load_rename_and_confirmed_de
             reopened.workspace.set_fixture(app.workspace.take_fixture());
         }
         reopened.tunnel_tick(&ctx); // Workspace generation changes retain the library.
-        reopened.dialog = Dialog::Tunnels;
-        reopened.tunnels.page = Page::Saved;
-        click(&mut reopened, &ctx, "Load setup");
+        reopened.dialog = Dialog::None;
+        reopened.show_connections(&ctx);
+        click(&mut reopened, &ctx, "Compute access");
         assert_eq!(reopened.tunnels.page, Page::New);
         assert_eq!(reopened.tunnels.spec, saved_spec());
         assert_eq!(reopened.tunnels.relay_jump, "desktop-relay-alias");
@@ -747,11 +755,11 @@ fn saved_tunnel_setup_survives_restart_and_supports_load_rename_and_confirmed_de
         assert_eq!(reopened.tunnels.saved_id.as_deref(), Some(id.as_str()));
         assert_eq!(reopened.tunnels.saved.entries.len(), 1);
         assert_eq!(reopened.tunnels.saved.entries[&id].spec.listen_port, 22444);
-        click(&mut reopened, &ctx, "Saved (1)");
-        click(&mut reopened, &ctx, "Delete…");
+        click(&mut reopened, &ctx, "Close");
+        reopened.tunnels.delete_saved = Some(id.clone());
         click(&mut reopened, &ctx, "Cancel");
         assert!(reopened.tunnels.saved.entries.contains_key(&id));
-        click(&mut reopened, &ctx, "Delete…");
+        reopened.tunnels.delete_saved = Some(id.clone());
         click(&mut reopened, &ctx, "Delete configuration");
         assert!(reopened.tunnels.saved.entries.is_empty());
         assert!(reopened.tunnels.saved_id.is_none());
@@ -766,7 +774,7 @@ fn saved_tunnel_setup_survives_restart_and_supports_load_rename_and_confirmed_de
 }
 
 #[test]
-fn connections_catalogues_and_welcome_shortcuts_share_host_bound_setup_without_starting_work() {
+fn connections_sidebar_orders_actions_and_host_bound_lists_without_replacing_the_editor() {
     use crate::ssh::tunnels::{Host as SavedHost, Saved};
     for (width, remote) in [(1100., false), (620., false), (900., true)] {
         let ctx = egui::Context::default();
@@ -807,11 +815,11 @@ fn connections_catalogues_and_welcome_shortcuts_share_host_bound_setup_without_s
                 },
             );
         }
-        app.areas.active = areas::Area::Connections;
+        app.show_connections(&ctx);
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("library.json");
         ui_probe::install_at(&ctx, path.clone());
-        let frame = |app: &mut EditorApp, events, sidebar| {
+        let frame = |app: &mut EditorApp, events| {
             ctx.run(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -822,91 +830,63 @@ fn connections_catalogues_and_welcome_shortcuts_share_host_bound_setup_without_s
                     ..Default::default()
                 },
                 |ctx| {
-                    if sidebar {
-                        app.explorer(ctx);
-                    } else {
-                        app.global_content(ctx);
-                    }
+                    app.connections_sidebar(ctx);
+                    app.explorer(ctx);
+                    app.workspace_content(ctx);
                 },
             )
         };
         for _ in 0..3 {
-            frame(&mut app, vec![], false);
+            frame(&mut app, vec![]);
         }
         let state: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let buttons = state["buttons"].as_array().unwrap();
-        let button = |name: &str| {
-            buttons
-                .iter()
-                .find(|button| button["name"] == name)
-                .unwrap()
-                .clone()
-        };
+        let button = |name| buttons.iter().find(|b| b["name"] == name).unwrap().clone();
+        assert_eq!(app.areas.active, areas::Area::Projects);
+        assert!(buttons.iter().any(|b| b["name"] == "source-editor"));
+        assert!(!buttons.iter().any(|b| b["name"] == "pane-Explorer"));
         assert_eq!(button("tunnel-saved-load:current")["enabled"], true);
         assert_eq!(button("tunnel-saved-load:foreign")["enabled"], false);
-        let connection = button("saved-connection-0");
+        let pane = button("pane-Connections");
+        let mut bottom = 0.;
+        for name in [
+            "connections-open-project",
+            "connections-new-ssh",
+            "connections-new-tunnel",
+            "saved-connection-0",
+            "tunnel-saved-load:current",
+        ] {
+            let b = button(name);
+            let rect: [f64; 4] = serde_json::from_value(b["rect"].clone()).unwrap();
+            assert!(
+                rect[0] >= pane["rect"][0].as_f64().unwrap()
+                    && rect[2] <= pane["rect"][2].as_f64().unwrap(),
+                "{state}"
+            );
+            assert!(
+                rect[1] >= bottom,
+                "Rows overlap or are out of order: {state}"
+            );
+            bottom = rect[3];
+        }
         let load = button("tunnel-saved-load:current");
-        if width >= 900. {
-            assert!(
-                connection["rect"][2].as_f64().unwrap() < load["rect"][0].as_f64().unwrap(),
-                "{state}"
-            );
-        } else {
-            assert!(
-                connection["rect"][3].as_f64().unwrap() < load["rect"][1].as_f64().unwrap(),
-                "{state}"
-            );
-        }
-        for button in buttons {
-            assert!(
-                button["rect"][0].as_f64().unwrap() >= 0.
-                    && button["rect"][2].as_f64().unwrap() <= width as f64,
-                "{state}"
+        let rect: [f32; 4] = serde_json::from_value(load["rect"].clone()).unwrap();
+        let point = egui::pos2((rect[0] + rect[2]) / 2., (rect[1] + rect[3]) / 2.);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
             );
         }
-        let cards: Vec<_> = buttons
-            .iter()
-            .filter(|button| {
-                button["name"].as_str().is_some_and(|name| {
-                    name.starts_with("saved-connection-card:")
-                        || name.starts_with("tunnel-saved-card:")
-                })
-            })
-            .collect();
-        let left = cards
-            .iter()
-            .map(|card| card["rect"][0].as_f64().unwrap())
-            .fold(f64::INFINITY, f64::min);
-        assert_eq!(cards.len(), 3, "{state}");
-        let right = cards
-            .iter()
-            .map(|card| card["rect"][2].as_f64().unwrap())
-            .fold(0., f64::max);
-        assert!(
-            right - left <= layout::PAGE_WIDTH as f64 - 24. + 1.,
-            "Catalogue cards overflow the reading width: {state}"
-        );
-        let activate = |app: &mut EditorApp, button: &serde_json::Value, sidebar| {
-            let rect: [f32; 4] = serde_json::from_value(button["rect"].clone()).unwrap();
-            let point = egui::pos2((rect[0] + rect[2]) / 2., (rect[1] + rect[3]) / 2.);
-            for pressed in [true, false] {
-                frame(
-                    app,
-                    vec![
-                        egui::Event::PointerMoved(point),
-                        egui::Event::PointerButton {
-                            pos: point,
-                            button: egui::PointerButton::Primary,
-                            pressed,
-                            modifiers: Default::default(),
-                        },
-                    ],
-                    sidebar,
-                );
-            }
-        };
-        activate(&mut app, &load, false);
         assert!(app.dialog == Dialog::Tunnels);
         assert_eq!(app.tunnels.page, Page::New);
         assert_eq!(app.tunnels.spec, saved_spec());
@@ -914,35 +894,22 @@ fn connections_catalogues_and_welcome_shortcuts_share_host_bound_setup_without_s
         assert!(app.ssh_master.is_none());
         assert_eq!(app.documents[0].text, "unsaved source");
         assert!(app.documents[0].dirty());
-        if !remote {
-            app.dialog = Dialog::None;
-            app.areas.active = areas::Area::Projects;
-            for _ in 0..3 {
-                frame(&mut app, vec![], true);
-            }
-            let state: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            let buttons = state["buttons"].as_array().unwrap();
-            assert!(
-                buttons
-                    .iter()
-                    .any(|button| button["name"] == "saved-connection-0")
-            );
-            let foreign = buttons
-                .iter()
-                .find(|button| button["name"] == "saved-tunnel-shortcut:foreign")
-                .unwrap();
-            activate(&mut app, foreign, true);
-            assert!(app.dialog == Dialog::Tunnels);
-            assert_eq!(app.tunnels.page, Page::Saved);
-            assert_eq!(app.tunnels.spec, saved_spec());
-            assert!(app.tunnels.pending.is_none() && app.ssh_master.is_none());
+        app.dialog = Dialog::None;
+        app.set_explorer_visible(egui::ViewportId::ROOT, true);
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
         }
-        if let Some(remote) = app
-            .workspace
-            .as_ref()
-            .and_then(|workspace| workspace.remote.as_ref())
-        {
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let buttons = state["buttons"].as_array().unwrap();
+        assert!(buttons.iter().any(|b| b["name"] == "pane-Explorer"));
+        assert!(
+            !buttons
+                .iter()
+                .any(|b| b["name"] == "saved-connection-0"
+                    || b["name"] == "tunnel-saved-load:current")
+        );
+        if let Some(remote) = app.workspace.as_ref().and_then(|w| w.remote.as_ref()) {
             remote.cleanup();
         }
     }
@@ -1012,8 +979,8 @@ fn saved_tunnel_loads_are_bound_to_the_selected_host_account_port_and_config() {
             "config" => remote.profile.config = "~/.ssh/other-config".into(),
             _ => unreachable!(),
         }
-        app.dialog = Dialog::Tunnels;
-        app.tunnels.page = Page::Saved;
+        app.dialog = Dialog::None;
+        app.show_connections(&ctx);
         dialog_frame(&mut app, &ctx, egui::vec2(900., 1000.), vec![]);
         let state: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -1027,7 +994,7 @@ fn saved_tunnel_loads_are_bound_to_the_selected_host_account_port_and_config() {
         );
         let before = app.tunnels.spec.clone();
         app.load_tunnel_configuration(&id);
-        assert_eq!(app.tunnels.page, Page::Saved);
+        assert_eq!(app.tunnels.page, Page::Tunnels);
         assert_eq!(app.tunnels.spec, before);
         assert!(app.tunnels.error.contains("before loading"));
         assert!(app.tunnels.pending.is_none());
@@ -1172,7 +1139,7 @@ fn observed_tunnel(status: Status) -> Info {
 }
 
 #[test]
-fn titlebar_tunnel_counts_distinguish_connected_pending_failed_and_unknown() {
+fn sidebar_tunnel_counts_distinguish_connected_pending_failed_and_unknown() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
@@ -1209,7 +1176,11 @@ fn titlebar_tunnel_counts_distinguish_connected_pending_failed_and_unknown() {
                         )),
                         ..Default::default()
                     },
-                    |ctx| app.titlebar(ctx),
+                    |ctx| {
+                        app.show_connections(ctx);
+                        app.connections_sidebar(ctx);
+                        egui::CentralPanel::default().show(ctx, |_| {});
+                    },
                 );
                 let (rect, clip) = text_bounds(&output, label);
                 assert!(clip.contains_rect(rect) && ctx.content_rect().contains_rect(rect));
@@ -1293,7 +1264,11 @@ fn locking_offline_and_changed_hosts_cannot_advertise_a_previous_connected_count
     app.tunnel_tick(&ctx);
     assert!(app.tunnels.background.is_none() && app.tunnels.pending.is_none());
     assert!(app.tunnels.observation.is_none());
-    let output = ctx.run(egui::RawInput::default(), |ctx| app.titlebar(ctx));
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        app.show_connections(ctx);
+        app.connections_sidebar(ctx);
+        egui::CentralPanel::default().show(ctx, |_| {});
+    });
     text_bounds(&output, "Tunnels (?)");
     app.workspace.as_mut().unwrap().connected = true;
     app.workspace.as_mut().unwrap().ready = false;

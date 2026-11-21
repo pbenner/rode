@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Application areas preserve project drafts, file buffers and the original shell."""
 
+import contextlib
 import json
 import os
 import socket
@@ -11,6 +12,7 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 )
 from ui_fixture import native_session, project_args
 from ui_harness import (
+    BINARY,
     fixture_directory,
     fixture_environment,
     focus_window,
@@ -66,35 +68,106 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
     data = Path(environment["XDG_DATA_HOME"]) / "rode"
     data.mkdir()
     (data / "app.ron").write_text(json.dumps({"tunnel_profiles": json.dumps(saved)}))
+    # No path argument prepares CWD while Welcome remains an independent view.
+    with (
+        contextlib.chdir(project),
+        native_session([str(BINARY), "--theme", "carbon"], environment, project, "cwd") as ui,
+    ):
+        ui.control("welcome-screen")
+        ui.control("workspace-explorer")
+        ui.control("workspace-sidebar-closed")
+        ui.absent("pane-Explorer")
+        screenshot(ui.window, "welcome-cwd.png")
+        ui.click("workspace-explorer")
+        ui.control(f"explorer-row:{source}")
+        ui.click("activity:Projects")
+        ui.control("welcome-screen")
+        ui.absent("pane-Explorer")
+        ui.click("workspace-sidebar")
+        ui.control("agent-composer")
+        ui.click("activity:Projects")
+        ui.control("welcome-screen")
+        ui.absent("agent-composer")
+        assert ui.layout()["project"]["root"] == str(project)
+
     with native_session(project_args(project), environment, project, "areas") as ui:
+        ui.control("welcome-screen")
+        ui.absent("pane-Explorer")
         ui.open_file("main.txt")
         ui.document(source)
         key("End", ("Control_L",))
         text("unsaved project edit")
         ui.source("original source\nunsaved project edit")
+        ui.click("workspace-explorer")
+        ui.click("bookmark-project")
+        ui.control("project-bookmarked")
+        ui.dismiss_notice()
+        ui.click("activity:Connections")
+        ui.control("pane-Connections")
+        ui.layout(
+            lambda state: any(b["name"].startswith("saved-project:") for b in state["buttons"]),
+            "The project bookmark did not move to Connections",
+        )
+        ui.control("source-editor")
+        ui.absent("pane-Explorer")
+        ui.click("workspace-explorer")
+        ui.control("pane-Explorer")
+        ui.absent("saved-connection-0")
+        ui.layout(
+            lambda state: not any(b["name"].startswith("saved-project:") for b in state["buttons"]),
+            "Explorer still contains the saved-project library",
+        )
+        ui.click("workspace-explorer")
         ui.click("workspace-tab:Chat")
         ui.click("agent-composer")
         text("draft retained across application areas")
         ui.value("agent-composer-value", "draft retained across application areas")
         ui.click("activity:System monitor")
         ui.control("monitor-start")
-        ui.absent("workspace-sidebar")
+        ui.control("workspace-sidebar")
         ui.absent("pane-Explorer")
         ui.click("activity:Connections")
-        ui.absent("workspace-sidebar")
+        ui.control("workspace-sidebar")
         ui.control("saved-connection-0")
         ui.control("tunnel-saved-load:local-setup")
         ui.control("tunnel-saved-load:remote-setup", enabled=False)
-        cards = [
+        ui.control("pane-Connections")
+        ui.control("monitor-start")
+        ui.absent("connect-ssh")
+        ui.absent("open-tunnels")
+        bookmark = next(
+            button["name"]
+            for button in ui.layout()["buttons"]
+            if button["name"].startswith("saved-project:")
+        )
+        for section, row in (
+            ("Saved projects", bookmark),
+            ("SSH connections", "saved-connection-0"),
+            ("Saved tunnels", "tunnel-saved-load:local-setup"),
+        ):
+            ui.click("connections-section:" + section)
+            ui.absent(row)
+            ui.click("connections-section:" + section)
+            ui.control(row)
+        ui.control("tunnel-saved-load:remote-setup", enabled=False)
+        rows = [
             button["rect"]
             for button in ui.layout()["buttons"]
-            if button["name"].startswith(("saved-connection-card:", "tunnel-saved-card:"))
+            if button["name"].startswith(("saved-connection-", "tunnel-saved-load:"))
         ]
-        assert len(cards) == 4, cards
-        assert max(rect[2] for rect in cards) - min(rect[0] for rect in cards) <= 977, cards
+        assert len(rows) == 4, rows
+        assert max(rect[2] for rect in rows) - min(rect[0] for rect in rows) <= 450, rows
         screenshot(ui.window, "connections-library.png")
+        ui.click("tunnel-saved-remove:remote-setup")
+        ui.control("tunnel-saved-confirm-delete:remote-setup")
+        ui.click("tunnel-saved-cancel-delete:remote-setup")
+        ui.control("tunnel-saved-load:remote-setup", enabled=False)
+        ui.click("tunnel-saved-remove:remote-setup")
+        ui.click("tunnel-saved-confirm-delete:remote-setup")
+        ui.absent("tunnel-saved-load:remote-setup")
         ui.click("tunnel-saved-load:local-setup")
         ui.control("tunnel-start")
+        ui.absent("tunnel-tab-saved")
         ui.click("tunnel-field-Name")
         ui.copy("tunnel-field-Name", "Local compute return")
         ui.click("tunnel-close")
@@ -103,7 +176,7 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
         ui.command("Agent: Chat")
         ui.value("agent-composer-value", "draft retained across application areas")
         ui.click("activity:Connections")
-        ui.click("activity:Projects")
+        ui.absent("pane-Connections")
         ui.value("agent-composer-value", "draft retained across application areas")
         ui.project_editor()
         ui.source("original source\nunsaved project edit")
@@ -131,7 +204,7 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
             project / "returned-shell.pid"
         ).read_text()
         ui.click("activity:App settings")
-        ui.absent("workspace-sidebar")
+        ui.control("workspace-sidebar")
         screenshot(ui.window, "app-settings.png")
         ui.click("activity:Projects")
         ui.project_editor()
@@ -201,10 +274,15 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
                 child.click(f"workspace-reattach:{title}")
             else:
                 request_close(child.window)
-            ui.absent("workspace-sidebar")
+            ui.control("workspace-sidebar")
             if title == "Monitor":
                 ui.control("monitor-stop")
-            ui.click("activity:Projects")
+            if title == "Connections":
+                ui.control("pane-Connections")
+                ui.click("activity:Connections")
+                ui.absent("pane-Connections")
+            else:
+                ui.click("activity:Projects")
             ui.source("original source\nunsaved project edit")
         ui.click("workspace-tab:Chat")
         ui.value("agent-composer-value", "draft retained across application areas")

@@ -16,11 +16,10 @@ Settings saves lock the configuration, read its latest contents, apply only the 
 
 Existing windows keep their current in-memory settings. Other windows' changes are loaded on a new launch; the SSH connection picker reloads saved profiles when opened. RODE does not watch configuration files continuously or change an active sandbox/agent behind your back. Window size/layout uses the last saved GUI state as the default for future launches.
 
-Manage saved SSH profiles from **Connections** in the left activity bar or the
-Explorer's **Connections** list when no folder is open. Right-click a profile card's
-title or an Explorer row to rename, edit, remove or move it; drag Explorer rows to
-reorder them. An optional
-**Connection name** labels it in the Explorer and picker without changing the SSH
+Manage saved SSH profiles in the **SSH connections** section of the
+**Connections** sidebar. Right-click a profile row to rename, edit, remove or
+move it; drag rows to reorder them. An optional
+**Connection name** labels it in the sidebar and picker without changing the SSH
 address. **Rename…** selects that field; **Save profile** applies the change. The order is the
 array order in `connections.json`. Reordering moves one current record relative
 to another under the same writer lock, preserving other windows' additions,

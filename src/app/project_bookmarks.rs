@@ -1,4 +1,4 @@
-//! A bundled Explorer extension for explicit project bookmarks.
+//! A bundled extension for explicit project bookmarks in Connections.
 //!
 //! The extension preference map is the only persistence owner. UI edits touch
 //! individual records so the existing writer can merge concurrent changes.
@@ -324,7 +324,7 @@ impl EditorApp {
         });
     }
 
-    /// Render saved local/SSH locations and their management actions in Explorer. Reopening uses
+    /// Render saved local/SSH locations and their management actions in Connections. Reopening uses
     /// normal guarded project/connection transitions.
     pub(super) fn project_bookmarks_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if !self.feature(FEATURE) {
@@ -335,70 +335,138 @@ impl EditorApp {
         let mut open = None;
         let mut edit = None;
         let mut rename = None;
-        crate::keyboard::CollapsingHeader::new("Saved projects").id_salt("project-bookmarks").default_open(true).show(ui, |ui| {
-            if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() || self.exit_pending() { ui.disable(); }
-            if let Some(error) = &self.project_bookmarks.error {
-                ui.colored_label(palette.error, error);
-                ui.small("Existing bookmarks were preserved. Correct the project-bookmarks extension settings to edit this list.");
-                return;
+        if self.foreign_modal(ctx)
+            || self.dialog != Dialog::None
+            || self.pending.modal()
+            || self.exit_pending()
+        {
+            ui.disable();
+        }
+        if let Some(error) = &self.project_bookmarks.error {
+            ui.colored_label(palette.error, error);
+            ui.small("Existing bookmarks were preserved. Correct the project-bookmarks extension settings to edit this list.");
+            return;
+        }
+        if self.project_bookmarks.projects.is_empty() {
+            ui.label(palette.tag("No saved projects yet."));
+        }
+        let current = self.bookmark_candidate().map(|b| b.project.id());
+        let mut projects: Vec<_> = self.project_bookmarks.projects.iter().collect();
+        projects.sort_by(|(a_id, a), (b_id, b)| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a_id.cmp(b_id))
+        });
+        for (id, bookmark) in projects {
+            let label = format!("{} · {}", bookmark.name, bookmark.project.host());
+            let response = ui
+                .add_sized(
+                    [ui.available_width(), 30.],
+                    IconButton::new(
+                        if matches!(bookmark.project, Project::Local { .. }) {
+                            Icon::Folder
+                        } else {
+                            Icon::Remote
+                        },
+                        &label,
+                    )
+                    .selected(current.as_ref() == Some(id))
+                    .truncate(),
+                )
+                .on_hover_text(format!(
+                    "{}\n{}\nRight-click to rename or remove",
+                    bookmark.project.host(),
+                    bookmark.project.root()
+                ));
+            ui_probe::button(ui, &format!("saved-project:{id}"), &response);
+            if response.clicked() {
+                open = Some(bookmark.clone());
             }
-            if self.project_bookmarks.projects.is_empty() {
-                ui.label(palette.tag("No saved projects yet."));
-            }
-            let current = self.bookmark_candidate().map(|b| b.project.id());
-            let mut projects: Vec<_> = self.project_bookmarks.projects.iter().collect();
-            projects.sort_by(|(a_id, a), (b_id, b)| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a_id.cmp(b_id)));
-            egui::ScrollArea::vertical().id_salt("saved-project-list").max_height((ui.ctx().content_rect().height() * 0.25).clamp(64., 220.)).auto_shrink([false, true]).show(ui, |ui| {
-                for (id, bookmark) in projects {
-                    let label = format!("{} · {}", bookmark.name, bookmark.project.host());
-                    let response = ui.add_sized([ui.available_width(), 30.], IconButton::new(if matches!(bookmark.project, Project::Local { .. }) { Icon::Folder } else { Icon::Remote }, &label).selected(current.as_ref() == Some(id)).truncate()).on_hover_text(format!("{}\n{}\nRight-click to rename or remove", bookmark.project.host(), bookmark.project.root()));
-                    ui_probe::button(ui, &format!("saved-project:{id}"), &response);
-                    if response.clicked() { open = Some(bookmark.clone()); }
-                    crate::keyboard::context_menu(&response, |ui| {
-                        let change_name = crate::keyboard::button(ui, "Rename bookmark…");
-                        ui_probe::button(ui, &format!("bookmark-rename:{id}"), &change_name);
-                        if change_name.clicked() { rename = Some((id.clone(), bookmark.name.clone())); ui.close(); }
-                        if matches!(bookmark.project, Project::Ssh { .. }) {
-                            let mut include = bookmark.shared_folders.is_some();
-                            let configs = self.bookmark_share_configs();
-                            let can_capture = current.as_ref() == Some(id) && configs.is_some();
-                            let include_control = ui.add_enabled_ui(can_capture, |ui| {
-                                crate::keyboard::checkbox(ui, &mut include, "Include shared-folder settings")
-                            }).inner;
-                            ui_probe::button(ui, &format!("bookmark-shares:{id}"), &include_control);
-                            if include_control.changed() {
-                                edit = Some(Edit::Shares(id.clone(), if include { self.bookmark_share_configs() } else { None }));
-                            }
-                            if include && current.as_ref() == Some(id) {
-                                let update = ui.add_enabled(can_capture, crate::keyboard::Button::new("Update saved shared folders"));
-                                ui_probe::button(ui, &format!("bookmark-shares-update:{id}"), &update);
-                                if update.clicked() {
-                                    edit = Some(Edit::Shares(id.clone(), configs)); ui.close();
-                                }
-                            }
+            crate::keyboard::context_menu(&response, |ui| {
+                let change_name = crate::keyboard::button(ui, "Rename bookmark…");
+                ui_probe::button(ui, &format!("bookmark-rename:{id}"), &change_name);
+                if change_name.clicked() {
+                    rename = Some((id.clone(), bookmark.name.clone()));
+                    ui.close();
+                }
+                if matches!(bookmark.project, Project::Ssh { .. }) {
+                    let mut include = bookmark.shared_folders.is_some();
+                    let configs = self.bookmark_share_configs();
+                    let can_capture = current.as_ref() == Some(id) && configs.is_some();
+                    let include_control = ui
+                        .add_enabled_ui(can_capture, |ui| {
+                            crate::keyboard::checkbox(
+                                ui,
+                                &mut include,
+                                "Include shared-folder settings",
+                            )
+                        })
+                        .inner;
+                    ui_probe::button(ui, &format!("bookmark-shares:{id}"), &include_control);
+                    if include_control.changed() {
+                        edit = Some(Edit::Shares(
+                            id.clone(),
+                            if include {
+                                self.bookmark_share_configs()
+                            } else {
+                                None
+                            },
+                        ));
+                    }
+                    if include && current.as_ref() == Some(id) {
+                        let update = ui.add_enabled(
+                            can_capture,
+                            crate::keyboard::Button::new("Update saved shared folders"),
+                        );
+                        ui_probe::button(ui, &format!("bookmark-shares-update:{id}"), &update);
+                        if update.clicked() {
+                            edit = Some(Edit::Shares(id.clone(), configs));
+                            ui.close();
                         }
-                        let remove = crate::keyboard::button(ui, RichText::new("Remove bookmark").color(palette.error));
-                        ui_probe::button(ui, &format!("bookmark-remove:{id}"), &remove);
-                        if remove.clicked() { edit = Some(Edit::Remove(id.clone())); ui.close(); }
-                    });
+                    }
+                }
+                let remove = crate::keyboard::button(
+                    ui,
+                    RichText::new("Remove bookmark").color(palette.error),
+                );
+                ui_probe::button(ui, &format!("bookmark-remove:{id}"), &remove);
+                if remove.clicked() {
+                    edit = Some(Edit::Remove(id.clone()));
+                    ui.close();
                 }
             });
-            if let Some((id, name)) = &mut self.project_bookmarks.rename {
-                let field = ui.add(crate::keyboard::named("Project name", egui::TextEdit::singleline(name).hint_text("Project name").desired_width(ui.available_width())));
-                ui_probe::button(ui, "bookmark-name", &field);
-                ui_probe::value(ui, "bookmark-name-value", &field, name);
-                if std::mem::take(&mut self.project_bookmarks.rename_focus) { field.request_focus(); }
-                let enter = (field.has_focus() || field.lost_focus()) && ui.input(|i| i.key_pressed(Key::Enter));
-                let mut cancel = false;
-                ui.horizontal(|ui| {
-                    let save = ui.add_enabled(model::validate_name(name).is_ok(), crate::keyboard::Button::new("Save name"));
-                    ui_probe::button(ui, "bookmark-name-save", &save);
-                    if save.clicked() || (enter && model::validate_name(name).is_ok()) { edit = Some(Edit::Rename(id.clone(), name.trim().into())); }
-                    cancel = crate::keyboard::button(ui, "Cancel").clicked();
-                });
-                if cancel { self.project_bookmarks.rename = None; }
+        }
+        if let Some((id, name)) = &mut self.project_bookmarks.rename {
+            let field = ui.add(crate::keyboard::named(
+                "Project name",
+                egui::TextEdit::singleline(name)
+                    .hint_text("Project name")
+                    .desired_width(ui.available_width()),
+            ));
+            ui_probe::button(ui, "bookmark-name", &field);
+            ui_probe::value(ui, "bookmark-name-value", &field, name);
+            if std::mem::take(&mut self.project_bookmarks.rename_focus) {
+                field.request_focus();
             }
-        });
+            let enter = (field.has_focus() || field.lost_focus())
+                && ui.input(|i| i.key_pressed(Key::Enter));
+            let mut cancel = false;
+            ui.horizontal(|ui| {
+                let save = ui.add_enabled(
+                    model::validate_name(name).is_ok(),
+                    crate::keyboard::Button::new("Save name"),
+                );
+                ui_probe::button(ui, "bookmark-name-save", &save);
+                if save.clicked() || (enter && model::validate_name(name).is_ok()) {
+                    edit = Some(Edit::Rename(id.clone(), name.trim().into()));
+                }
+                cancel = crate::keyboard::button(ui, "Cancel").clicked();
+            });
+            if cancel {
+                self.project_bookmarks.rename = None;
+            }
+        }
         if let Some(form) = rename {
             self.project_bookmarks.rename = Some(form);
             self.project_bookmarks.rename_focus = true;
@@ -412,7 +480,6 @@ impl EditorApp {
         if let Some(bookmark) = open {
             self.reopen_bookmark(bookmark, ctx);
         }
-        ui.separator();
     }
 }
 

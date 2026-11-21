@@ -13,7 +13,9 @@ rode /path/to/project
 rode /path/to/project/main.py
 ```
 
-A directory opens as a project. A file opens immediately in its normal editor or preview, normally with its containing directory as the workspace. Relative paths work too, such as `rode main.py`; quote paths containing spaces. Saved sandbox settings for that directory still apply, and `--sandbox` requests isolation for it explicitly.
+A directory opens as a project; launching `rode` without a path uses the current working directory. The window starts on Welcome with Explorer hidden. **Projects**, **Explorer** and **Project tools** remain available in the left activity bar. Select Projects to enter the workspace, or select Explorer or Project tools directly. Clicking Projects again returns to Welcome without closing files or stopping work.
+
+A file argument opens immediately in its normal editor or preview, normally with its containing directory as the workspace. Relative paths work too, such as `rode main.py`; quote paths containing spaces. Saved sandbox settings for that directory still apply, and `--sandbox` requests isolation for it explicitly.
 
 If global sandbox defaults would reject a file's containing directory because it is your home directory or an ancestor, RODE opens just the file without a project. The window title and bottom status bar show **File mode**: file reads and saves are unsandboxed, no project tools or terminal start automatically, and sandbox preferences are unchanged. This exception does not override `--sandbox`, an explicitly saved folder policy, or directory arguments. For sandboxed editing, keep files in a project subdirectory and open that project.
 

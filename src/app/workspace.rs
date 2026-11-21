@@ -194,17 +194,20 @@ impl EditorApp {
         if plan.requested && !plan.active {
             self.notify(plan.reason.clone(), false);
         }
+        let show_welcome = open_file.is_none() && self.areas.active == areas::Area::Welcome;
         self.show_terminal |= remote || options.enabled;
         if let Some(path) = open_file {
             self.open_file_in(path, egui::ViewportId::ROOT, ctx);
         } else if self.show_terminal {
             self.start_project_terminal(ctx);
         }
-        if opening_connection {
-            // Leave folder selection available after login. The existing editor
-            // shows Welcome without tabs, or the preserved buffers on reconnect.
-            // Editor focus also prevents a late shell attachment from taking over.
-            self.show_explorer = true;
+        if show_welcome || (opening_connection && self.documents.active().is_none()) {
+            // A fresh login stays on Welcome. Late shell attachment must not
+            // take over this presentation or the remembered project view.
+            self.open_area(areas::Area::Welcome, ctx);
+        } else if opening_connection {
+            // Reconnect resumes retained buffers, including unsaved recovery
+            // text, through the existing editor rather than the login terminal.
             self.focus_editor_in(egui::ViewportId::ROOT, ctx);
         }
     }

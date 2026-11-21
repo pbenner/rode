@@ -102,7 +102,7 @@ for backend in ("russh", "openssh"):
                 ui.value(f"share-status:{index}", "Not mounted", timeout=30)
                 assert not list(destination.iterdir())
             screenshot(ui.window, backend + "-shares.png")
-            ui.click("activity:Projects")
+            ui.click("activity:Connections")
             ui.click("bookmark-project")
             state = ui.layout(
                 lambda s: any(b["name"].startswith("saved-project:") for b in s["buttons"]),
@@ -117,6 +117,7 @@ for backend in ("russh", "openssh"):
             key("Escape")
         # Settings persist but must never start mounts merely by loading a bookmark.
         with native_session(args, env, project, backend + "-restored") as ui:
+            ui.click("activity:Connections")
             ui.click(bookmark)
             ui.command("Remote: File transfers")
             ui.control("share-add")
