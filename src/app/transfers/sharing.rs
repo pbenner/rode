@@ -1,7 +1,31 @@
 //! Project/host-bound shared-folder recipes and worker acknowledgements. Saved
 //! recipes are inert: only Mount starts a service, and a bookmark restores settings.
 use super::*;
-use crate::shared_folders::{Config, Control, Direction, Event as MountEvent};
+use crate::shared_folders::{Config, Control, Event as MountEvent};
+mod view;
+
+/// Changes that retarget or release the authority retained by a live mount.
+#[derive(Clone, Copy)]
+pub(in crate::app) enum ContextChange {
+    Project,
+    Host,
+    Access,
+    Disable,
+    Quit,
+}
+impl ContextChange {
+    fn blocked(self) -> &'static str {
+        match self {
+            Self::Project => {
+                "Unmount shared folders before changing projects, connections or sandbox policy."
+            }
+            Self::Host => "Unmount shared folders before changing the host.",
+            Self::Access => "Unmount shared folders before changing file access permissions.",
+            Self::Disable => "Unmount shared folders before disabling File transfers.",
+            Self::Quit => "Unmount shared folders in File transfers before closing RODE.",
+        }
+    }
+}
 
 struct Row {
     id: u64,
@@ -25,8 +49,7 @@ enum Reply {
 }
 pub(in crate::app) struct Sharing {
     pub open: bool,
-    draft: Config,
-    adding: bool,
+    view: view::View,
     rows: Vec<Row>,
     serial: u64,
     generation: u64,
@@ -39,8 +62,7 @@ impl Default for Sharing {
         let (tx, rx) = mpsc::channel();
         Self {
             open: false,
-            draft: Default::default(),
-            adding: false,
+            view: Default::default(),
             rows: vec![],
             serial: 0,
             generation: 0,
@@ -51,6 +73,41 @@ impl Default for Sharing {
     }
 }
 impl Sharing {
+    /// One admission rule for UI availability and every context-changing adapter.
+    /// The worker count includes cancelled rows until cleanup has finished.
+    pub(in crate::app) fn admit(&self, change: ContextChange) -> Result<(), &'static str> {
+        if self.pending() {
+            Err(change.blocked())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn stop(&mut self, id: u64) {
+        let Some(row) = self
+            .rows
+            .iter_mut()
+            .find(|row| row.id == id && !row.unmounting)
+        else {
+            return;
+        };
+        let Some(control) = &row.running else {
+            return;
+        };
+        row.unmounting = true;
+        row.message = if row.ready {
+            "Unmounting…"
+        } else {
+            "Cancelling mount…"
+        }
+        .into();
+        if row.ready {
+            control.unmount.store(true, Ordering::Release);
+        } else {
+            control.cancel.store(true, Ordering::Release);
+        }
+    }
+
     pub(in crate::app) fn pending(&self) -> bool {
         self.pending.load(Ordering::Acquire) > 0
     }
@@ -65,8 +122,7 @@ impl Sharing {
         }
         self.generation = self.generation.wrapping_add(1);
         self.rows.clear();
-        self.adding = false;
-        self.draft = Default::default();
+        self.view = Default::default();
     }
     pub(in crate::app) fn restore(&mut self, configs: Vec<Config>) {
         self.reset();
@@ -95,6 +151,17 @@ impl Drop for Sharing {
 }
 
 impl EditorApp {
+    /// Use the same domain admission for direct calls, shortcuts and native actions.
+    pub(in crate::app) fn allow_shared_folder_change(&mut self, change: ContextChange) -> bool {
+        match self.transfers.sharing.admit(change) {
+            Ok(()) => true,
+            Err(message) => {
+                self.notify(message, false);
+                false
+            }
+        }
+    }
+
     fn start_shared_folder(&mut self, id: u64, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Transfers)
             || self.vaults.locking()
@@ -193,267 +260,37 @@ impl EditorApp {
             }
         }
     }
+    /// Render facts and route the view's intents through controller admission.
     pub(in crate::app) fn shared_folders_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let available = self.transfer_host_endpoint().is_some();
-        let mut start = None;
-        let mut remove = None;
-        super::ui::surface(palette).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.strong("Shared folders");
-                let add = ui.add_enabled(
-                    self.transfers.sharing.rows.len() < 8,
-                    crate::keyboard::Button::new("Add shared folder"),
-                );
-                ui_probe::button(ui, "share-add", &add);
-                if add.clicked() {
-                    self.transfers.sharing.adding = true;
+        let state = &mut self.transfers.sharing;
+        let intent = state.view.show(ui, &state.rows, palette, available);
+        match intent {
+            Some(view::Intent::Mount(id)) => self.start_shared_folder(id, ctx),
+            Some(view::Intent::Stop(id)) => self.transfers.sharing.stop(id),
+            Some(view::Intent::Remove(id)) => self
+                .transfers
+                .sharing
+                .rows
+                .retain(|row| row.id != id || row.running.is_some()),
+            Some(view::Intent::Add(config)) => {
+                let state = &mut self.transfers.sharing;
+                if state.rows.len() < 8
+                    && config.validate().is_ok()
+                    && !state.rows.iter().any(|row| {
+                        row.config.direction == config.direction
+                            && row.config.destination == config.destination
+                    })
+                {
+                    state.insert(config);
+                    state.view.saved();
                 }
-            });
-            ui.weak("Live access · SSHFS and FUSE are needed on the receiving host");
-            for row in &mut self.transfers.sharing.rows {
-                ui.push_id(row.id, |ui| {
-                    ui.separator();
-                    ui.horizontal_wrapped(|ui| {
-                        ui.strong(match row.config.direction {
-                            Direction::LocalToRemote => "Local → SSH host",
-                            Direction::RemoteToLocal => "SSH host → Local",
-                        });
-                        ui.weak(if row.config.read_only {
-                            "Read only"
-                        } else {
-                            "Read and write"
-                        });
-                        if let Some(control) = &row.running {
-                            if !row.ready || row.unmounting {
-                                ui.spinner();
-                            }
-                            let button = ui.add_enabled(
-                                !row.unmounting,
-                                crate::keyboard::Button::new(if row.ready {
-                                    "Unmount"
-                                } else {
-                                    "Cancel mount"
-                                }),
-                            );
-                            ui_probe::button(ui, &format!("share-unmount:{}", row.id), &button);
-                            if button.clicked() {
-                                row.unmounting = true;
-                                row.message = if row.ready {
-                                    "Unmounting…"
-                                } else {
-                                    "Cancelling mount…"
-                                }
-                                .into();
-                                if row.ready {
-                                    control.unmount.store(true, Ordering::Release);
-                                } else {
-                                    control.cancel.store(true, Ordering::Release);
-                                }
-                            }
-                        } else {
-                            let button =
-                                ui.add_enabled(available, crate::keyboard::Button::new("Mount"));
-                            ui_probe::button(ui, &format!("share-mount:{}", row.id), &button);
-                            if button.clicked() {
-                                start = Some(row.id);
-                            }
-                            let button = crate::keyboard::button(ui, "Remove");
-                            ui_probe::button(ui, &format!("share-remove:{}", row.id), &button);
-                            if button.clicked() {
-                                remove = Some(row.id);
-                            }
-                        }
-                    });
-                    ui.add(
-                        egui::Label::new(format!(
-                            "{} → {}",
-                            row.config.source, row.config.destination
-                        ))
-                        .wrap(),
-                    );
-                    let color = if row.ready && row.message == "Mounted" {
-                        palette.success
-                    } else if !row.unmounting
-                        && row.message != "Not mounted"
-                        && (row.running.is_none() || row.ready)
-                    {
-                        palette.error
-                    } else {
-                        palette.muted
-                    };
-                    let message =
-                        ui.add(egui::Label::new(RichText::new(&row.message).color(color)).wrap());
-                    ui_probe::value(
-                        ui,
-                        &format!("share-status:{}", row.id),
-                        &message,
-                        &row.message,
-                    );
-                    if row.ready {
-                        ui_probe::button(ui, &format!("share-ready:{}", row.id), &message);
-                        if !row.unmounting && row.message != "Mounted" {
-                            ui_probe::button(
-                                ui,
-                                &format!("share-unmount-error:{}", row.id),
-                                &message,
-                            );
-                        }
-                    } else if row.running.is_none() && row.message != "Not mounted" {
-                        ui_probe::button(ui, &format!("share-error:{}", row.id), &message);
-                    }
-                });
             }
-            if self.transfers.sharing.adding {
-                self.transfers.sharing.form(ui);
-            }
-        });
-        if let Some(id) = remove {
-            self.transfers.sharing.rows.retain(|row| row.id != id);
+            None => {}
         }
-        if let Some(id) = start {
-            self.start_shared_folder(id, ctx);
-        }
-    }
-}
-
-impl Sharing {
-    fn form(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
-        let direction = crate::keyboard::ComboBox::new("share-direction", "Share direction")
-            .selected_text(match self.draft.direction {
-                Direction::LocalToRemote => "Local folder on SSH host",
-                Direction::RemoteToLocal => "SSH folder on this computer",
-            })
-            .show_ui(ui, |ui| {
-                for (direction, label, name) in [
-                    (
-                        Direction::LocalToRemote,
-                        "Local folder on SSH host",
-                        "share-local-to-remote",
-                    ),
-                    (
-                        Direction::RemoteToLocal,
-                        "SSH folder on this computer",
-                        "share-remote-to-local",
-                    ),
-                ] {
-                    let choice = crate::keyboard::selectable_value(
-                        ui,
-                        &mut self.draft.direction,
-                        direction,
-                        label,
-                    );
-                    ui_probe::button(ui, name, &choice);
-                }
-            });
-        ui_probe::button(ui, "share-direction", &direction.response);
-        for (name, label, value) in [
-            ("share-source", "Source folder", &mut self.draft.source),
-            (
-                "share-destination",
-                "Empty mount folder",
-                &mut self.draft.destination,
-            ),
-        ] {
-            ui.label(label);
-            let field = ui.add(crate::keyboard::named(
-                label,
-                egui::TextEdit::singleline(value)
-                    .desired_width(ui.available_width())
-                    .hint_text("/absolute/path or ~/folder"),
-            ));
-            ui_probe::button(ui, name, &field);
-            ui_probe::value(ui, &format!("{name}-value"), &field, value);
-        }
-        let readonly = crate::keyboard::checkbox(ui, &mut self.draft.read_only, "Read only");
-        ui_probe::button(ui, "share-read-only", &readonly);
-        ui.weak("Create an empty mount folder first. Only the selected source is shared. Sandboxed programs still need permission to access the mount path.");
-        let valid = self.draft.validate().is_ok()
-            && !self.rows.iter().any(|row| {
-                row.config.direction == self.draft.direction
-                    && row.config.destination == self.draft.destination
-            });
-        ui.horizontal(|ui| {
-            let add = ui.add_enabled(valid, crate::keyboard::Button::new("Save shared folder"));
-            ui_probe::button(ui, "share-save", &add);
-            if add.clicked() {
-                self.insert(self.draft.clone());
-                self.draft = Default::default();
-                self.adding = false;
-            }
-            let cancel = crate::keyboard::button(ui, "Cancel");
-            ui_probe::button(ui, "share-cancel", &cancel);
-            if cancel.clicked() {
-                self.adding = false;
-            }
-        });
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn active_shares_guard_transitions_and_forced_reset_cancels_owned_work() {
-        let ctx = egui::Context::default();
-        let mut app = EditorApp::new(
-            &eframe::CreationContext::_new_kittest(ctx.clone()),
-            Startup::default(),
-        );
-        app.workspace
-            .set_fixture(Some(crate::app::tests::remote_workspace()));
-        app.bind_project_transfers();
-        let config = Config {
-            source: "/chosen/source".into(),
-            destination: "/chosen/mount".into(),
-            ..Default::default()
-        };
-        app.transfers.sharing.restore(vec![config]);
-        let control = Arc::new(Control::default());
-        app.transfers.sharing.rows[0].running = Some(control.clone());
-        let work = Pending::new(&app.transfers.sharing.pending);
-        app.guarded(Action::Disconnect, &ctx);
-        assert!(app.workspace.as_ref().unwrap().connected);
-        app.guarded(Action::Quit, &ctx);
-        assert!(!app.exit_pending());
-        app.prepare_project(
-            "/different/project".into(),
-            Default::default(),
-            true,
-            false,
-            None,
-            &ctx,
-        );
-        assert!(!app.workspace.preparing());
-        let candidate = app.workspace.begin_preparation();
-        app.workspace.hold_prepared(
-            candidate,
-            workspace::Prepared {
-                response: Response::default(),
-                remote: true,
-                options: Default::default(),
-                open_file: None,
-                keep_buffers: false,
-                approved_documents: vec![],
-            },
-        );
-        app.guarded(Action::PreparedProject { id: candidate }, &ctx);
-        assert!(
-            app.workspace.prepared(candidate).is_none(),
-            "Rejected candidates must release their resources"
-        );
-        app.set_extension(crate::extensions::Feature::Transfers.id(), false);
-        assert!(app.feature(crate::extensions::Feature::Transfers));
-        app.transfers.reset();
-        assert!(control.cancel.load(Ordering::Acquire));
-        assert!(app.transfers.sharing.configs().is_empty());
-        assert!(
-            app.transfers.pending(),
-            "Cleanup must retain its lifetime barrier"
-        );
-        drop(work);
-        assert!(!app.transfers.pending());
-    }
-}
+mod tests;

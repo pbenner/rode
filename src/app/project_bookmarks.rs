@@ -238,7 +238,12 @@ impl EditorApp {
             .bookmark_candidate()
             .is_some_and(|current| current.project.id() == project.id());
         if matches && self.project_ready() {
-            if self.transfers.sharing.pending() {
+            if self
+                .transfers
+                .sharing
+                .admit(transfers::ContextChange::Project)
+                .is_err()
+            {
                 return;
             }
             let (_, shares) = self.project_bookmarks.restore_shares.take().unwrap();

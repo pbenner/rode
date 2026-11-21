@@ -17,9 +17,9 @@ Also included:
 - [Multi-language highlighting and tools](docs/languages.md), [Git branches/worktrees, project environments and tasks](docs/project-tools.md), [Python/native debugging](docs/debugger.md), and [extensions](docs/extensions.md).
 - On-demand [CPU/GPU host monitoring](docs/project-tools.md#host-monitor).
 
-[![RODE feature tour: streamlined project tools and application navigation, native editing, SSH, notebooks, agents and selected light, dark and artistic themes](assets/rode-tour.gif)](assets/rode-tour.mp4)
+[![RODE feature tour: activity-bar navigation, native editing, SSH, notebooks, agent edit undo and selected light, dark and artistic themes](assets/rode-tour.gif)](assets/rode-tour.mp4)
 
-46-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Shows project editing, **Project tools**, and the **Connections** library, plus **Atelier Light**, **Atelier Dark**, **Sumi-e Light**, **Samurai**, and **SynthWave ’84**. Native captures use synthetic profiles, a real notebook kernel and loopback SSH with Landlock enforcement. Agent and Slurm scenes show setup controls without model calls or resource allocations.
+52-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Shows the current activity-bar navigation, **Project tools**, the **Connections** library and **Undo last edits**, plus **Atelier Light**, **Atelier Dark**, **Sumi-e Light**, **Samurai**, and **SynthWave ’84**. Native captures use synthetic profiles, a real notebook kernel and loopback SSH in normal mode; sandbox controls are shown without enforcement. A labelled offline agent fixture makes a real file edit and undoes it without model inference. The Slurm scene requests no allocation.
 
 ```sh
 cargo xtask install

@@ -7,6 +7,7 @@ mod drag;
 mod operations;
 mod queue;
 mod sharing;
+pub(in crate::app) use sharing::ContextChange;
 #[cfg(test)]
 mod tests;
 mod ui;

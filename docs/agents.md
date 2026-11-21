@@ -4,6 +4,8 @@ Open **View → Workspace panels → Agent chat**, use **Project tools → Chat*
 
 Follow-up messages keep the current conversation. Background interpreter discovery does not replace it. If its desktop connection is lost or its backend, project policy or interpreter selection no longer matches, sending keeps your draft and attachments and explains the conflict. Reattach a live conversation through **Running**, or choose **New chat** explicitly to start over.
 
+After a prompt finishes, **Undo last edits** restores its recorded text-file changes on the original project host. Created and deleted text files are included. Conversation history remains intact; no model request is sent. Save or discard unsaved editor buffers first. If any affected file has changed since the record was prepared, Undo refuses the operation to preserve those later edits. Clean editor buffers reload after acknowledgement. See [Undo scope and limits](#undo-scope-and-limits) below.
+
 Successful commands and other completed tool activity collapse into **Completed activity** groups automatically. Open a group to inspect its commands and output; running, failed or interrupted tools stay visible. In **Agent settings**, enable **Keep completed tool activity visible** to retain every tool row. This display preference is saved across projects and restarts and can change during a turn without restarting the agent. It changes presentation only: existing transcript limits and backend history retention still apply. Older helpers without tool lifecycle metadata keep tools visible until the turn ends.
 
 Chat typesets inline LaTeX maths in `\(…\)` or `$…$`, and display equations in `\[…\]` or `$$…$$`, for every provider. Symbols, fractions, roots, scripts and matrices render natively using an embedded math font; no TeX installation or network service is needed. Code spans and code blocks remain literal. Formula rendering runs on a worker and follows the current theme. Wide equations fit the chat panel. Unsupported, incomplete or oversized formulas remain readable as source. Each formula is limited to 4096 source bytes, 32 parser nesting levels and 2048 × 512 raster dimensions / 256 Ki pixels; the window retains at most 256 cached entries. Formula textures and reserved results share an 8 MiB budget, with at most four pending renders, including completed images awaiting the UI.
@@ -37,6 +39,16 @@ At the start of the message box (**Ctrl+Home**), press **Up** repeatedly to brow
 The agent starts in the opened project folder, on the computer hosting that project. The panel identifies **LOCAL** or **SSH**, the folder, and the actual sandbox mode. Hover the host/mode row for applied network/read-only details or the reason a requested sandbox could not start; this remains available in a detached chat window. Without an opened folder, it uses RODE's startup working directory. Opening the panel starts no process. Sending a message or explicitly opening **History** starts the selected agent; history browsing sends no model prompt.
 
 **New chat** stays visible but disabled while the current agent is working, stopping or being reattached. Use **Stop** to interrupt active work, then wait until the agent is idle before starting a new conversation. Clicking New chat cannot discard an active turn or its queued work.
+
+## Undo scope and limits
+
+**Undo last edits** supports Codex's accumulated turn diff, completed ACP full-file edit records (including Claude), and RODE's native file tools. Backends with no usable edit record leave the button disabled and explain why when hovered. Stop ongoing work before undoing; an Undo request pauses queued follow-ups.
+
+It works locally and with either SSH backend, including folders without a Git repository. The project host needs the `git` executable as a patch engine. RODE uses a disposable private Git directory; the project's index, commits, references and configuration are not modified. The operation stays within the session's captured project permissions. Read-only projects cannot undo writes.
+
+Only the latest prompt's recorded text edits are reversible. Commands' other effects, unreported changes, binary files and unsupported move/copy records are not restored. Git diffs need text file headers. Records are bounded to 512 KiB of patch data, 64 paths, 16 MiB per affected file and 64 MiB of file verification in total. Full-file ACP/native records also have a 256 KiB source-text budget. Oversized or incomplete records disable Undo.
+
+The record is held in the live host session's memory. Persistent chats retain it across desktop detach/reattach; starting another prompt, replacing the conversation or ending the session discards it. This is separate from an editor's text Undo history and from reverting conversation history.
 
 ## Queued follow-ups
 

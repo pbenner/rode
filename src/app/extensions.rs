@@ -94,11 +94,10 @@ impl EditorApp {
     /// Change feature enablement, invalidate source-tool epochs and cancel affected owned work
     /// without replacing source buffers or abandoning protected save acknowledgements.
     pub(super) fn set_extension(&mut self, id: &str, enabled: bool) {
-        if id == Feature::Transfers.id() && !enabled && self.transfers.sharing.pending() {
-            self.notify(
-                "Unmount shared folders before disabling File transfers.",
-                false,
-            );
+        if id == Feature::Transfers.id()
+            && !enabled
+            && !self.allow_shared_folder_change(transfers::ContextChange::Disable)
+        {
             return;
         }
         self.cancel_extensions();

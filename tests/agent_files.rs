@@ -59,6 +59,65 @@ fn log(root: &Path) -> Vec<Value> {
 }
 
 #[test]
+fn native_edit_journal_undo_restores_updates_deletions_and_creations_without_model_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    fs::write(root.join("updated.txt"), "original\n").unwrap();
+    fs::write(root.join("deleted.txt"), "restore me\n").unwrap();
+    let launch = fixture(
+        root,
+        json!([
+            {"params":{"tool":"rode_write_file","arguments":{"path":"updated.txt","text":"changed\n",
+                "revision":rode_host_core::files::digest(b"original\n")}}},
+            {"params":{"tool":"rode_write_file","arguments":{"path":"created.txt","text":"new\n","revision":null}}},
+            {"params":{"tool":"rode_delete_file","arguments":{"path":"deleted.txt",
+                "revision":rode_host_core::files::digest(b"restore me\n")}}}
+        ]),
+    );
+    let mut chat = Chat::default();
+    chat.use_service();
+    chat.submit(launch.clone(), "Edit these files".into(), Arc::new(|| {}))
+        .unwrap();
+    wait(&mut chat);
+    let view = chat.undo_view().expect("Host undo view");
+    assert_eq!(view.files.len(), 3, "{}", view.reason);
+    let conversation = chat.conversation_id().map(str::to_owned);
+    assert_eq!(
+        fs::read_to_string(root.join("updated.txt")).unwrap(),
+        "changed\n"
+    );
+    assert!(!root.join("deleted.txt").exists());
+    assert!(root.join("created.txt").exists());
+    assert!(
+        !fs::read_to_string(root.join("file-agent-rpc.jsonl"))
+            .unwrap()
+            .contains("_rode_undo")
+    );
+    chat.undo_last_prompt(&launch).unwrap();
+    wait(&mut chat);
+    assert_eq!(chat.undo_view().unwrap().revision, 1);
+    assert!(chat.undo_view().unwrap().files.is_empty());
+    assert_eq!(
+        fs::read_to_string(root.join("updated.txt")).unwrap(),
+        "original\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("deleted.txt")).unwrap(),
+        "restore me\n"
+    );
+    assert!(!root.join("created.txt").exists());
+    assert_eq!(chat.conversation_id(), conversation.as_deref());
+    assert_eq!(
+        log(root)
+            .iter()
+            .filter(|call| call["method"] == "turn/start")
+            .count(),
+        1
+    );
+    chat.disconnect();
+}
+
+#[test]
 #[ignore = "isolated child with an explicit agent PATH"]
 fn file_only_command_name_child() {
     let root = std::path::PathBuf::from(std::env::var_os("RODE_FILE_ONLY_PROJECT").unwrap());

@@ -17,6 +17,7 @@ pub(super) struct Facts<'a> {
 /// Explicit user intents applied in the same order as the original UI commands.
 #[derive(Default)]
 pub(super) struct Actions {
+    pub undo: bool,
     pub save: bool,
     pub attach: bool,
     pub discover_models: bool,
@@ -126,6 +127,7 @@ impl Agents {
         let mut answer = None;
         let mut use_host_tone = None;
         let mut history_action = history::Action::default();
+        let mut undo_last = false;
         let remote = environment.remote.clone();
         let agents = self;
         let installing = agents.runtime.installing();
@@ -154,7 +156,19 @@ impl Agents {
             }
             if actions.settings { agents.settings = !agents.settings; }
             new_chat |= actions.new_chat;
-            ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate()).on_hover_text(&mode_detail);
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate()).on_hover_text(&mode_detail);
+                if let Some(undo) = agents.chat.undo_view() {
+                    let enabled = !undo.files.is_empty() && !agents.chat.busy && !offline && !modal && unsaved == 0 && !read_only && !agents.history_open && !agents.chat.queue_pending();
+                    let reason = if unsaved > 0 { "Save or discard editor changes before undoing agent edits." } else if agents.chat.busy { "Wait for the agent to finish." } else { &undo.reason };
+                    let button = ui.add_enabled(enabled, crate::keyboard::Button::new("Undo last edits"))
+                        .on_hover_text(format!("Restore the last prompt's recorded file edits. Later edits are protected.\n{}", undo.files.join("\n")))
+                        .on_disabled_hover_text(reason);
+                    ui_probe::button(ui, "agent-undo", &button);
+                    ui_probe::value(ui, "agent-undo-revision", &button, &undo.revision.to_string());
+                    undo_last = button.clicked();
+                }
+            });
             ui.add(egui::Label::new(palette.tag(&root)).truncate()).on_hover_text(&root);
             if agents.settings && !answering {
                 egui::ScrollArea::vertical().id_salt("agent-settings-scroll")
@@ -196,6 +210,7 @@ impl Agents {
                             ui.label("Codex executable (auto: discover)");
                             let executable = ui.add(crate::keyboard::named("Codex executable", egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("auto, or /path/to/codex").char_limit(4096))).on_hover_text("Use Install Codex below, the optional rode-codex package or an installed executable. Sign in locally with rode --codex login. SSH projects use Codex and credentials on that host.");
                             ui_probe::button(ui, "agent-codex-executable", &executable);
+                            ui_probe::value(ui, "agent-codex-executable-value", &executable, &agents.config.codex);
                             if agents.config.provider == Provider::Local {
                                 ui.label("Local model API base URL");
                                 ui.add(crate::keyboard::named("Local model server URL", egui::TextEdit::singleline(&mut agents.config.local_url).desired_width(f32::INFINITY).char_limit(2048))).on_hover_text("An Ollama /v1 or compatible Responses endpoint reachable from the project host. localhost means this host.");
@@ -506,6 +521,7 @@ impl Agents {
             agents.chat.notice(&error.to_string());
         }
         Some(Actions {
+            undo: undo_last,
             save,
             attach,
             discover_models,

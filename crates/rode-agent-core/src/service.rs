@@ -135,6 +135,9 @@ pub struct Info {
 /// Current chat presentation; bounded exactly as the foreground controller.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatView {
+    /// Reversible file edits for the last completed prompt, owned by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<crate::undo::View>,
     /// A failed backend is retained until explicit recovery or termination.
     pub recoverable: bool,
     /// Backend conversation identity, used to protect open chats from history deletion.
@@ -252,6 +255,11 @@ impl Update {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Command {
+    /// Reverse the last prompt's recorded file edits, rejecting a stale turn.
+    Undo {
+        /// Exact completed-turn identity displayed by the controlling view.
+        turn: u64,
+    },
     /// Save or dispatch a conversation-owned queued prompt.
     Queue {
         /// Unique controlling-view request used to acknowledge durable ownership.

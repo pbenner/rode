@@ -226,6 +226,11 @@ impl Chat {
     pub(super) fn codex_update(&mut self, method: &str, params: &Value) -> Result<()> {
         let item = &params["item"];
         match method {
+            "turn/diff/updated" if self.busy && params["turnId"].as_str() == Some(&self.turn) => {
+                if let Some(diff) = params["diff"].as_str() {
+                    self.undo.aggregate(diff);
+                }
+            }
             "turn/started" => {
                 self.turn = params["turn"]["id"].as_str().unwrap_or_default().into();
             }
@@ -327,6 +332,7 @@ impl Chat {
                 }
             }
             "tool_call" | "tool_call_update" => {
+                self.undo.acp(update);
                 let id = update["toolCallId"].as_str().unwrap_or("tool");
                 let title = update["title"].as_str().unwrap_or("Tool");
                 self.replace(id, Role::Tool, title, &pretty(update));

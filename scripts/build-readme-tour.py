@@ -124,7 +124,7 @@ def main():
             *source,
             "-filter_complex",
             "scale=960:-2:flags=lanczos,split[a][b];"
-            "[a]palettegen=max_colors=128:stats_mode=full[p];"
+            "[a]palettegen=max_colors=96:stats_mode=full[p];"
             "[b][p]paletteuse=dither=none:diff_mode=rectangle",
             "-t",
             duration,

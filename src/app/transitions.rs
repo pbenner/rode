@@ -107,9 +107,13 @@ impl EditorApp {
     /// Submit a potentially destructive action through the shared transition controller.
     /// Invalidate conflicting preparation and release candidates rejected by an existing action.
     pub(in crate::app) fn guarded(&mut self, action: Action, ctx: &egui::Context) {
-        if self.transfers.sharing.pending() && !matches!(action, Action::CloseTab(_)) {
+        let change = match &action {
+            Action::CloseTab(_) => None,
+            Action::Quit => Some(transfers::ContextChange::Quit),
+            _ => Some(transfers::ContextChange::Project),
+        };
+        if change.is_some_and(|change| !self.allow_shared_folder_change(change)) {
             self.release_guarded_action(action);
-            self.notify("Unmount shared folders in File transfers before changing projects, disconnecting or closing RODE.", false);
             return;
         }
         if let Action::PreparedProject { .. } = &action {

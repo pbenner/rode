@@ -244,8 +244,8 @@ fn execute(request: &Request, root: &Root) -> Result<Value> {
 }
 
 /// An opened root, rather than a mutable current working directory, owns all lookups.
-struct Root {
-    directory: File,
+pub(crate) struct Root {
+    pub(crate) directory: File,
     path: PathBuf,
     configuration: Vec<PathBuf>,
 }
@@ -289,7 +289,7 @@ impl Root {
         }
         Ok(())
     }
-    fn open(root: &str, additional_configuration: &[String]) -> Result<Self> {
+    pub(crate) fn open(root: &str, additional_configuration: &[String]) -> Result<Self> {
         ensure!(
             Path::new(root).is_absolute(),
             "A canonical project directory is required"
@@ -348,7 +348,7 @@ impl Root {
             .any(|path| absolute.starts_with(path))
     }
 
-    fn relative(&self, path: &str, directory: bool) -> Result<PathBuf> {
+    pub(crate) fn relative(&self, path: &str, directory: bool) -> Result<PathBuf> {
         ensure!(
             path.len() <= 4096 && !path.contains('\0'),
             "Invalid project-relative path"
@@ -383,7 +383,7 @@ impl Root {
         Ok(relative)
     }
 
-    fn file(&self, path: &Path, flags: i32) -> Result<File> {
+    pub(crate) fn file(&self, path: &Path, flags: i32) -> Result<File> {
         open(self.directory.as_raw_fd(), path, flags, true).with_context(|| {
             format!(
                 "Cannot access project path {} (symlinks and nested mounts are unavailable)",

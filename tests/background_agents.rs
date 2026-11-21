@@ -114,7 +114,13 @@ impl Fixture {
                 ..Default::default()
             },
             executable,
-            file_tool_plan: None,
+            file_tool_plan: self.root.join("enable-undo").exists().then(|| {
+                serde_json::to_value(rode::sandbox::Plan {
+                    root: self.root.to_string_lossy().into(),
+                    ..Default::default()
+                })
+                .unwrap()
+            }),
             env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
             python: "off".into(),
             persistent: persistent.into(),
@@ -182,6 +188,73 @@ impl Fixture {
             events,
             last: std::cell::RefCell::new(None),
         }
+    }
+}
+
+#[test]
+fn last_prompt_undo_survives_reattachment_and_refuses_later_edits_for_each_backend() {
+    for provider in [
+        Provider::Codex,
+        Provider::Local,
+        Provider::Claude,
+        Provider::Acp,
+    ] {
+        let fixture = Fixture::new();
+        fs::write(fixture.root.join("enable-undo"), "yes").unwrap();
+        fs::write(fixture.root.join("continue"), "yes").unwrap();
+        fs::write(fixture.root.join("edited.txt"), "before\n").unwrap();
+        let info = fixture.create(provider, Persistence::On, "undo-edit");
+        let mut view = fixture.attach(&info);
+        let first = view
+            .until(|s| !s.chat.busy && s.chat.undo.as_ref().is_some_and(|u| !u.files.is_empty()));
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("edited.txt")).unwrap(),
+            "after 1\n"
+        );
+        drop(view);
+        wait(|| fixture.infos().iter().all(|i| !i.attached));
+        view = fixture.attach(&info);
+        let restored = view.until(|s| s.chat.undo.as_ref().is_some_and(|u| !u.files.is_empty()));
+        assert_eq!(restored.chat.undo.unwrap().turn, first.chat.completed);
+        view.send(Action::Undo {
+            turn: first.chat.completed,
+        });
+        view.until(|s| {
+            s.chat
+                .undo
+                .as_ref()
+                .is_some_and(|u| u.files.is_empty() && u.revision == 1)
+        });
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("edited.txt")).unwrap(),
+            "before\n"
+        );
+        view.send(Action::Submit {
+            text: "undo-edit".into(),
+            attachments: vec![],
+            config: Box::new(first.chat.config),
+        });
+        let next = view.until(|s| {
+            s.chat.completed > first.chat.completed
+                && s.chat.undo.as_ref().is_some_and(|u| !u.files.is_empty())
+        });
+        fs::write(fixture.root.join("edited.txt"), "my later changes\n").unwrap();
+        view.send(Action::Undo {
+            turn: first.chat.completed,
+        });
+        view.until(|s| !s.error.is_empty());
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("edited.txt")).unwrap(),
+            "my later changes\n"
+        );
+        view.send(Action::Undo {
+            turn: next.chat.completed,
+        });
+        view.until(|s| s.error.contains("changed after this prompt"));
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("edited.txt")).unwrap(),
+            "my later changes\n"
+        );
     }
 }
 

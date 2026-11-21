@@ -85,7 +85,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/input.rs`, `src/app/input/control.rs` | Input adapter and private source replay/keymap owner; frame contexts and ordered document handoffs |
 | `src/app/transitions.rs`, `src/app/transitions/control.rs` | Ownership-transition effects and private intent/confirmation controller; source, file, save, runtime and vault admission |
 | `src/app/saved_connections/` | Connection form intents, catalogue reloads, submitted-form identity and serialized profile writes independent of workspace lifetime |
-| `src/shared_folders.rs`, `src/app/transfers/sharing.rs`, `crates/rode-host-core/src/shared_folders/` | Captured share recipes, cancellable SSH relays, capability-scoped SFTP serving and identity-checked SSHFS mount ownership; bookmarks retain settings without services |
+| `src/shared_folders.rs`, `src/app/transfers/sharing.rs`, `src/app/transfers/sharing/view.rs`, `crates/rode-host-core/src/shared_folders/` | Captured share recipes, one context-change admission rule, intent-only presentation, cancellable SSH relays and identity-checked mounts; bookmarks retain settings without services |
 | `src/app/project_dialog.rs` | Owned selected-host project discovery state, path/selection, request tokens and candidate sandbox options; emits browse/open/cancel intents |
 | `src/app/explorer/` | Project-scoped directory cache, flattened rows, keyboard selection and acknowledged mutation effects |
 | `src/app/explorer.rs`, `crates/rode-host-core/src/files/mutations.rs` | Explorer menus/forms, acknowledged path updates and bounded native filesystem mutations on the captured project host |
@@ -128,6 +128,8 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/notebook/`, `src/notebook.rs`, `crates/rode-host-core/src/notebook_kernel.py`, `src/app/notebook_view.rs`, `notebook_view/ui.rs`, `notebook_view/source.rs` | Metadata-preserving notebook model, kernel ownership/versioned execution, cell/output rendering and stateful source editing |
 | `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` and `crates/rode-host-core/src/` modules | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
 | `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `src/bin/rode-sessiond.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs, the Cargo-installed headless frontend and view lifetimes |
+| `src/terminal/session.rs`, `src/terminal/view.rs` | Terminal construction and I/O workers separated from native rendering, focus and shell input; the public terminal API and backend ownership remain stable |
+| `src/pipe.rs` | Shared cancellation-aware nonblocking pipe I/O; callers retain idle, operation and cleanup deadline policies |
 | `src/terminal/backend.rs` | Typed raw-PTY, framed-attachment, debugger-stream and retained-output ownership; backend-specific input, resize and cleanup |
 | `crates/rode-session/src/tunnels.rs`, `src/app/tunnels.rs`, `src/ssh.rs` | Daemon-owned reverse SSH forwarding, reconnect/trust state, explicit host controls and return profiles preserving compute identity |
 | `src/slurm.rs`, `crates/rode-host-core/src/slurm/`, `src/app/sessions/allocation.rs`, `crates/rode-session/src/workspace.rs` | Interactive allocations, persistent notebook reservations, captured execution targets, stdio compute steps, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
@@ -135,6 +137,10 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |
 | `scripts/rust_tests.py`, `scripts/test-rust-tests.py` | Isolated native Cargo test execution, private home/runtime fixtures and checked cleanup/exit propagation |
 | `tests/`, `tests/fixtures/`, `scripts/test-*.py` | Service integration tests, deterministic peers and isolated native UI checks |
+
+## Agent file Undo
+
+File Undo belongs to the host-owned conversation controller. The agent core retains a bounded edit journal outside the rolling transcript, using Codex turn diffs, ACP full-file tool edits or private before/after snapshots from native file tools. The service prepares one reverse patch at turn completion and publishes only its turn identity, paths, availability and refresh revision to the desktop. The original sandbox plan launches a bounded one-shot helper; it validates regular project paths and post-turn hashes/modes before using an isolated temporary Git directory to check and apply the reverse patch. The project's actual Git index and history are never used. Undo acknowledgements trigger clean-buffer reloads; pending requests remain an admission barrier across stale idle snapshots. See [Agent chat](agents.md#undo-scope-and-limits) for scope and limits.
 
 ## Current service boundaries
 
@@ -195,6 +201,20 @@ source picture as code scrolls past. Explorer and welcome surfaces may instead
 fit artwork around their occupied controls. Painting allocates no layout space
 or interaction IDs and preserves source selection and focus. See the
 [theme format](../themes/README.md) for inherited artwork settings.
+
+### Transfer and mount admission
+
+The shared-folder controller owns one typed context-change admission rule for
+projects/connections, host selection, file access, extension disabling and quit.
+UI availability and mutating adapters consult that same rule. Worker ownership,
+including cancelled rows still cleaning up, keeps those changes blocked until
+cleanup completes. Forced connection loss still cancels owned work. The view
+edits its draft and emits add/remove/mount/stop intents; it never signals workers.
+
+Copies and mounted shares use the same nonblocking pipe implementation. Copy
+streams choose an idle timeout; shared-folder reads allow indefinite inactivity
+and only pending writes have a fixed deadline. Successful I/O renews idle budgets
+without extending operation or cleanup deadlines.
 
 ### Native UI and work on demand
 

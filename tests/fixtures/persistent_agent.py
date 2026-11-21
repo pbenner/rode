@@ -95,6 +95,43 @@ def work(message, number, prompt):
             return
     if cancelled.is_set():
         return
+    if prompt == "undo-edit":
+        path = root / "edited.txt"
+        before = path.read_text()
+        after = f"after {number}\n"
+        path.write_text(after)
+        if acp:
+            notify(
+                "session/update",
+                dict(
+                    sessionId="native-thread",
+                    update=dict(
+                        sessionUpdate="tool_call",
+                        toolCallId=f"edit-{number}",
+                        status="in_progress",
+                        content=[dict(type="diff", path=str(path), oldText=before, newText=after)],
+                    ),
+                ),
+            )
+            notify(
+                "session/update",
+                dict(
+                    sessionId="native-thread",
+                    update=dict(
+                        sessionUpdate="tool_call_update",
+                        toolCallId=f"edit-{number}",
+                        status="completed",
+                    ),
+                ),
+            )
+        else:
+            diff = (
+                "diff --git a/edited.txt b/edited.txt\n--- a/edited.txt\n+++ b/edited.txt\n"
+                f"@@ -1 +1 @@\n-{before.rstrip(chr(10))}\n+{after.rstrip(chr(10))}\n"
+            )
+            notify(
+                "turn/diff/updated", dict(threadId="native-thread", turnId=str(number), diff=diff)
+            )
     if prompt == "overflow-stdout" and not (root / "overflowed").exists():
         snapshot("overflowed", prompt)
         sys.stdout.write("x" * (32 * 1024 * 1024 + 1) + "\n")

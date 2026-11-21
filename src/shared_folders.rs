@@ -1,12 +1,12 @@
 //! Backend-independent SSHFS plumbing. Dedicated non-PTY channels reuse the
 //! selected master; the GUI never authenticates again or handles SFTP packets.
 //! Each relay has bounded buffers and cancellation-aware nonblocking pipe I/O.
+use crate::pipe::Pipe;
 use anyhow::{Context, Result, ensure};
 pub(crate) use rode_host_core::shared_folders::{Config, Direction, Mount};
 use rode_host_core::shared_folders::{Export, write_header};
 use std::{
     io::{Read, Write},
-    os::fd::AsRawFd,
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -23,7 +23,7 @@ pub(crate) enum Event {
 /// Commands to a running mount; explicit unmount and forced teardown differ.
 #[derive(Default)]
 pub(crate) struct Control {
-    pub cancel: AtomicBool,
+    pub cancel: Arc<AtomicBool>,
     pub unmount: AtomicBool,
 }
 
@@ -120,83 +120,19 @@ impl Drop for Process {
     }
 }
 
-struct Pipe<T> {
-    inner: T,
-    cancel: Arc<Control>,
-}
-impl<T: AsRawFd> Pipe<T> {
-    fn new(inner: T, cancel: Arc<Control>) -> Result<Self> {
-        let fd = inner.as_raw_fd();
-        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-        ensure!(
-            flags >= 0 && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0,
-            "Cannot make sharing pipe nonblocking"
-        );
-        Ok(Self { inner, cancel })
-    }
-    fn wait(&self, events: libc::c_short, deadline: Option<Instant>) -> std::io::Result<()> {
-        loop {
-            if self.cancel.cancel.load(Ordering::Acquire) {
-                return Err(std::io::ErrorKind::ConnectionAborted.into());
-            }
-            if deadline.is_some_and(|end| Instant::now() >= end) {
-                return Err(std::io::ErrorKind::TimedOut.into());
-            }
-            let mut fd = libc::pollfd {
-                fd: self.inner.as_raw_fd(),
-                events,
-                revents: 0,
-            };
-            let count = unsafe { libc::poll(&mut fd, 1, 100) };
-            if count > 0 {
-                return Ok(());
-            }
-            if count < 0
-                && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
-            {
-                return Err(std::io::Error::last_os_error());
-            }
-        }
-    }
-}
 fn relay(
     mut read: Pipe<std::process::ChildStdout>,
     mut write: Pipe<std::process::ChildStdin>,
 ) -> Result<()> {
     let mut bytes = [0; 64 * 1024];
     loop {
-        // Idle shares may remain mounted for days. Only a pending write has a
-        // deadline; inactivity is not a failed connection.
-        read.wait(libc::POLLIN, None)?;
-        let count = match read.inner.read(&mut bytes) {
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                ) =>
-            {
-                continue;
-            }
-            result => result?,
-        };
+        let count = read.read(&mut bytes)?;
         if count == 0 {
             return Ok(());
         }
-        let mut at = 0;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while at < count {
-            write.wait(libc::POLLOUT, Some(deadline))?;
-            match write.inner.write(&bytes[at..count]) {
-                Ok(0) => anyhow::bail!("Shared-folder pipe closed"),
-                Ok(n) => at += n,
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                    ) => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
+        // Shares have no idle timeout; only a pending write has a fixed budget.
+        write.deadline(Instant::now() + Duration::from_secs(30));
+        write.write_all(&bytes[..count])?;
     }
 }
 
@@ -279,10 +215,19 @@ pub(crate) fn run(
         &mount,
         Some(ready.clone()),
     )?;
-    let requests = Pipe::new(mounting.child.stdout.take().unwrap(), control.clone())?;
-    let request_target = Pipe::new(exporting.child.stdin.take().unwrap(), control.clone())?;
-    let replies = Pipe::new(exporting.child.stdout.take().unwrap(), control.clone())?;
-    let reply_target = Pipe::new(mounting.child.stdin.take().unwrap(), control.clone())?;
+    let requests = Pipe::new(
+        mounting.child.stdout.take().unwrap(),
+        control.cancel.clone(),
+    )?;
+    let request_target = Pipe::new(
+        exporting.child.stdin.take().unwrap(),
+        control.cancel.clone(),
+    )?;
+    let replies = Pipe::new(
+        exporting.child.stdout.take().unwrap(),
+        control.cancel.clone(),
+    )?;
+    let reply_target = Pipe::new(mounting.child.stdin.take().unwrap(), control.cancel.clone())?;
     let (tx, rx) = std::sync::mpsc::channel();
     let tx2 = tx.clone();
     let a = std::thread::spawn(move || {

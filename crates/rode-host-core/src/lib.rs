@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 pub mod agent_commands;
 pub mod agent_files;
+pub mod agent_undo;
 /// Pinned bubblewrap fallback available through the native helper's early dispatch.
 pub use rode_bwrap as bwrap;
 pub mod command;

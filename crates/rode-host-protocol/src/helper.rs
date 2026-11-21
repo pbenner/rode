@@ -47,6 +47,7 @@ pub const CAPABILITIES: &[&str] = &[
     "large_document_transfer",
     "streaming_file_transfers",
     "shared_folders",
+    "agent_undo",
     "connection_heartbeats",
     "agent_auto_persist",
     "private_home_tmp",

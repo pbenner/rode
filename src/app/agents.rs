@@ -58,6 +58,7 @@ pub(super) struct Agents {
     pending: bool,
     pub focus: bool,
     completed: u64,
+    undo_revision: u64,
     local_root: String,
     browser: Option<agent::history::Browser>,
     history_open: bool,
@@ -103,6 +104,7 @@ impl Agents {
             pending: false,
             focus: false,
             completed: 0,
+            undo_revision: 0,
             browser: None,
             history_open: false,
             history_filter: String::new(),
@@ -373,6 +375,21 @@ impl EditorApp {
                 );
             } else {
                 self.send_agent(ctx);
+            }
+        }
+        if actions.undo {
+            if self.documents.iter().any(|document| document.dirty()) {
+                self.agents
+                    .chat
+                    .notice("Save or discard editor changes before undoing agent edits.");
+            } else if let Err(error) = self
+                .agents
+                .chat
+                .undo_last_prompt(&self.agents.launch(&environment))
+            {
+                self.agents
+                    .chat
+                    .notice(&format!("Cannot undo agent edits: {error:#}"));
             }
         }
         let running = actions.running || actions.history.running;

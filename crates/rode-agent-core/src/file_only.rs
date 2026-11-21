@@ -58,12 +58,8 @@ impl Jobs {
         let worker = std::thread::Builder::new()
             .name("rode-agent-files".into())
             .spawn(move || {
-                let value = if tool == "rode_run_command" {
-                    factory.command_tool(&arguments, &stopped)
-                } else {
-                    factory.file_tool(&tool, &arguments, &stopped)
-                }
-                .map_err(|e| format!("{e:#}"));
+                let value = run_tool(factory.as_ref(), &tool, &arguments, &stopped)
+                    .map_err(|e| format!("{e:#}"));
                 let _ = send.send(value);
                 wake();
             })?;
@@ -259,4 +255,55 @@ pub fn tools() -> Value {
         tools.push(json!({"type":"function","name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}));
     }
     tools.into()
+}
+
+/// Capture native edits privately. A failed/mismatched source read disables Undo
+/// but never changes the mutation's own revision and policy checks or its result.
+fn run_tool(
+    factory: &dyn crate::Factory,
+    tool: &str,
+    arguments: &Value,
+    stopped: &AtomicBool,
+) -> Result<Value> {
+    let mutating = matches!(tool, "rode_write_file" | "rode_delete_file");
+    let before = if mutating && !arguments["revision"].is_null() {
+        factory
+            .file_tool(
+                "rode_read_file",
+                &json!({"path":arguments["path"]}),
+                stopped,
+            )
+            .and_then(|value| {
+                ensure!(
+                    value["revision"] == arguments["revision"],
+                    "File changed before undo capture"
+                );
+                value["text"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| anyhow::anyhow!("File tool returned no undo source"))
+            })
+            .map(Some)
+    } else {
+        Ok(None)
+    };
+    let mut value = if tool == "rode_run_command" {
+        factory.command_tool(arguments, stopped)
+    } else {
+        factory.file_tool(tool, arguments, stopped)
+    }?;
+    if mutating && let Some(object) = value.as_object_mut() {
+        match before {
+            Ok(before) => {
+                object.insert("_rode_undo".into(), json!({
+                    "path": arguments["path"], "before": before,
+                    "after": if tool == "rode_write_file" { arguments["text"].clone() } else { Value::Null }
+                }));
+            }
+            Err(_) => {
+                object.insert("_rode_undo_failed".into(), true.into());
+            }
+        }
+    }
+    Ok(value)
 }

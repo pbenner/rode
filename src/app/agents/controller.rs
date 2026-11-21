@@ -284,6 +284,11 @@ impl Agents {
         }
         let was_busy = self.chat.busy;
         self.chat.poll();
+        let revision = self.chat.undo_view().map_or(0, |view| view.revision);
+        if self.undo_revision != revision {
+            self.undo_revision = revision;
+            effects.refresh_documents = true;
+        }
         if self
             .catalog
             .as_ref()

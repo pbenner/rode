@@ -13,6 +13,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -112,6 +113,9 @@ def main():
             '[project]\nname = "signal-lab"\nversion = "0.1.0"\nrequires-python = ">=3.11"\n'
         )
         (project / ".gitignore").write_text(".venv\n__pycache__/\n.tour-*\n")
+        agent = project / ".tour-agent.py"
+        shutil.copyfile(ROOT / "scripts/readme_agent.py", agent)
+        agent.chmod(0o755)
         (project / ".venv").symlink_to(python.parent.parent)
         notebook = project / "results.ipynb"
         notebook.write_text(
@@ -301,6 +305,10 @@ def main():
                 native.open_file("analysis.py")
                 native.control("git-change-modified:4")
                 native.control("workspace-sidebar-closed")
+                native.control("activity:Project tools")
+                native.control("workspace-explorer")
+                native.control("status-connection")
+                native.control("open-project")
                 native.absent("workspace-tab:Chat")
                 native.absent("workspace-code")
                 capture(native, "01-editor")
@@ -367,11 +375,41 @@ def main():
                 wait_for(plot_saved, "The real notebook kernel did not return a plot", timeout=45)
                 capture(native, "07-notebook")
                 native.command("Agent: Chat")
+                native.click("agent-settings")
+                native.click("agent-codex-executable")
+                native.fill("agent-codex-executable", str(agent))
+                native.click("agent-settings")
                 native.click("agent-provider-menu")
                 native.control("agent-provider-Claude")
+                choices = {
+                    button["name"]: button["rect"]
+                    for button in native.layout()["buttons"]
+                    if button["name"].startswith("agent-provider-")
+                }
+                providers = [
+                    choices[f"agent-provider-{name}"]
+                    for name in ("Codex", "Local", "Claude", "Acp")
+                ]
+                assert all(a[3] <= b[1] for a, b in zip(providers, providers[1:])), choices
                 capture(native, "08-agents")
                 ui.key("Escape")
                 native.absent("agent-provider-Claude")
+                native.click("agent-composer")
+                native.fill("agent-composer", "Set the default learning rate to 0.06.")
+                ui.key("Return")
+                native.control("agent-undo")
+                native.control("agent-idle")
+                assert (project / "analysis.py").read_text() == SOURCE.replace(
+                    "learning_rate=0.04", "learning_rate=0.06"
+                )
+                capture(native, "08-agent-edits")
+                native.click("agent-undo")
+                native.value("agent-undo-revision", "1", enabled=False)
+                native.control("agent-idle")
+                assert (project / "analysis.py").read_text() == SOURCE.replace(
+                    "learning_rate=0.04", "learning_rate=0.05"
+                )
+                capture(native, "08-agent-undo")
                 native.command("Terminal: Allocate Slurm resources")
                 native.control("menu-file", enabled=False)
                 capture(native, "09-slurm")
@@ -399,6 +437,8 @@ def main():
                     native.control("source-editor")
                     capture(native, f"11-theme-{theme_id}")
         finally:
+            if not ui.stop_fixture_agents(environment, project) and sys.exc_info()[0] is None:
+                raise RuntimeError("Could not stop the recording's private agent session")
             # Only this fixture's private service and its owned terminals.
             for session in sessions():
                 subprocess.run(
@@ -477,6 +517,9 @@ def main():
             "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
             "helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
             "recorder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "agent_fixture_sha256": hashlib.sha256(
+                (ROOT / "scripts/readme_agent.py").read_bytes()
+            ).hexdigest(),
             "scenes_sha256": hashlib.sha256(
                 (ROOT / "scripts/readme_tour.py").read_bytes()
             ).hexdigest(),

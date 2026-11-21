@@ -57,6 +57,7 @@ fn main() -> eframe::Result {
             "--landlock-launch"
                 | "--git-credential"
                 | "--agent-file-tool"
+                | "--agent-undo"
                 | "--mise-launch"
                 | "--slurm-step"
                 | "--compute-step"

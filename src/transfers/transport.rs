@@ -1,19 +1,16 @@
 //! Bulk-copy channels share authentication without occupying the document RPC
 //! writer. File management reuses Explorer RPC with the same captured policy.
 //! Pipe polling bounds stalled streams and observes per-job cancellation.
+use crate::pipe::Pipe;
 use anyhow::{Context, Result, ensure};
 use rode_host_protocol::{
     framing,
     transfer::{Reply, Request},
 };
 use std::{
-    io::{self, Read, Write},
-    os::fd::AsRawFd,
+    io::{Read, Write},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -147,11 +144,13 @@ impl Stream {
         let input = Pipe::new(
             child.stdin.take().context("Missing transfer input")?,
             cancel.clone(),
-        )?;
+        )?
+        .with_idle_timeout(Duration::from_secs(60));
         let output = Pipe::new(
             child.stdout.take().context("Missing transfer output")?,
             cancel,
-        )?;
+        )?
+        .with_idle_timeout(Duration::from_secs(60));
         Ok(Self {
             child,
             input,
@@ -241,153 +240,5 @@ impl Drop for Stream {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
-    }
-}
-struct Pipe<T> {
-    inner: T,
-    cancel: Arc<AtomicBool>,
-    touched: Instant,
-    timeout: Duration,
-    deadline: Option<Instant>,
-}
-impl<T: AsRawFd> Pipe<T> {
-    fn new(inner: T, cancel: Arc<AtomicBool>) -> io::Result<Self> {
-        let fd = inner.as_raw_fd();
-        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(Self {
-            inner,
-            cancel,
-            touched: Instant::now(),
-            timeout: Duration::from_secs(60),
-            deadline: None,
-        })
-    }
-
-    /// Cleanup gets an independent cancellation token and one shared deadline.
-    /// Successful I/O renews the normal idle timeout, never this cleanup budget.
-    fn cleanup_until(&mut self, deadline: Instant) {
-        self.cancel = Arc::default();
-        self.touched = Instant::now();
-        self.deadline = Some(deadline);
-    }
-
-    fn ready(&mut self, events: libc::c_short) -> io::Result<()> {
-        loop {
-            if self.cancel.load(Ordering::Acquire) {
-                return Err(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    "Transfer cancelled",
-                ));
-            }
-            if self
-                .deadline
-                .is_some_and(|deadline| Instant::now() >= deadline)
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Transfer cleanup deadline elapsed",
-                ));
-            }
-            if self.touched.elapsed() > self.timeout {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Transfer channel stalled",
-                ));
-            }
-            let mut descriptor = libc::pollfd {
-                fd: self.inner.as_raw_fd(),
-                events,
-                revents: 0,
-            };
-            match unsafe { libc::poll(&mut descriptor, 1, 100) } {
-                -1 => {
-                    let e = io::Error::last_os_error();
-                    if e.kind() != io::ErrorKind::Interrupted {
-                        return Err(e);
-                    }
-                }
-                0 => {}
-                _ => return Ok(()),
-            }
-        }
-    }
-}
-
-impl<T: Read + AsRawFd> Read for Pipe<T> {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        loop {
-            self.ready(libc::POLLIN)?;
-            match self.inner.read(bytes) {
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                    ) => {}
-                result => {
-                    if matches!(result,Ok(n) if n>0) {
-                        self.touched = Instant::now();
-                    }
-                    return result;
-                }
-            }
-        }
-    }
-}
-impl<T: Write + AsRawFd> Write for Pipe<T> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        loop {
-            self.ready(libc::POLLOUT)?;
-            match self.inner.write(bytes) {
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                    ) => {}
-                result => {
-                    if matches!(result,Ok(n) if n>0) {
-                        self.touched = Instant::now();
-                    }
-                    return result;
-                }
-            }
-        }
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::net::UnixStream;
-
-    #[test]
-    fn cleanup_deadline_is_not_renewed_by_successful_io() {
-        let (stream, mut peer) = UnixStream::pair().unwrap();
-        let mut pipe = Pipe::new(stream, Arc::default()).unwrap();
-        let (start, ready) = std::sync::mpsc::sync_channel(0);
-        let writer = std::thread::spawn(move || {
-            peer.write_all(b"x").unwrap();
-            ready.recv().unwrap();
-            for _ in 0..100 {
-                if peer.write_all(b"x").is_err() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        });
-        // Acknowledge the peer before starting the deadline, so scheduling its
-        // first write cannot be mistaken for a stalled connection on a busy CI host.
-        pipe.read_exact(&mut [0]).unwrap();
-        pipe.cleanup_until(Instant::now() + Duration::from_millis(150));
-        start.send(()).unwrap();
-        let error = pipe.read_exact(&mut [0; 200]).unwrap_err();
-        drop(pipe);
-        writer.join().unwrap();
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 }

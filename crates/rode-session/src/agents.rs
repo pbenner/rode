@@ -11,6 +11,7 @@ use rode_agent_core::{
 use serde_json::Value;
 use std::sync::{Condvar, atomic::AtomicUsize};
 mod transport;
+mod undo;
 
 #[derive(Default)]
 /// Host registry of complete agent controllers; discovery is read-only and exclusive
@@ -344,6 +345,7 @@ fn run(
     let mut queue = rode_agent_core::queue::Queue::default();
     let mut queued_config = spec.config.clone();
     let mut completed = chat.completed;
+    let mut undo = undo::Undo::default();
     let mut changed = true;
     let mut stopping = false;
     let mut last_view = Instant::now() - Duration::from_secs(1);
@@ -356,6 +358,7 @@ fn run(
         }
         if completed != chat.completed {
             completed = chat.completed;
+            undo.completed(&spec, &chat);
             changed = true;
             if !chat.last_turn_succeeded {
                 queue.pause();
@@ -365,6 +368,7 @@ fn run(
             history.poll();
             if let Some(restored) = history.take_restored() {
                 chat.restore(restored);
+                undo.clear();
                 browser = None;
                 job.shared.lock().unwrap().state.info.history_browser = false;
                 changed = true;
@@ -432,6 +436,8 @@ fn run(
             {
                 queue.pause();
                 error = format!("Queued prompt was not sent: {failure:#}");
+            } else {
+                undo.clear();
             }
             changed = true;
         }
@@ -444,6 +450,7 @@ fn run(
         shared.state.info.alive = !finished;
         if (changed && last_view.elapsed() >= Duration::from_millis(200)) || finished {
             shared.state.chat = chat.view();
+            shared.state.chat.undo = Some(undo.view.clone());
             shared.state.chat.stopping |=
                 chat.recoverable() && !chat.busy && active.load(Ordering::Acquire) != 0;
             shared.state.chat.config = queued_config.clone();
@@ -484,6 +491,29 @@ fn run(
                 changed = true;
                 error.clear();
                 let result = match *action {
+                    Action::Undo { turn } => {
+                        queue.pause();
+                        // Every request receives its own acknowledgement, even
+                        // if admission fails. An older error is not an Undo ack.
+                        undo.view.revision = undo.view.revision.wrapping_add(1);
+                        (|| -> Result<()> {
+                            ensure!(
+                                !stopping
+                                    && browser.is_none()
+                                    && !chat.busy
+                                    && !chat.stopping()
+                                    && !chat.file_work_pending(),
+                                "Wait for the agent to finish before undoing file edits"
+                            );
+                            ensure!(
+                                turn == chat.completed,
+                                "The last prompt changed; review the current turn"
+                            );
+                            undo.apply(&spec, turn)?;
+                            chat.notice("Undid the last prompt's recorded file edits. Conversation history was retained.");
+                            Ok(())
+                        })()
+                    }
                     Action::Queue { request, operation } => {
                         if request.is_empty() || request.len() > 128 {
                             Err(anyhow::anyhow!("Invalid queue request identity"))
@@ -534,6 +564,7 @@ fn run(
                                             dispatch(
                                                 &mut chat, &mut queue, &launch, &config, id, &wake,
                                             )?;
+                                            undo.clear();
                                             queued_config = *config;
                                             Ok(())
                                         })();
@@ -561,7 +592,10 @@ fn run(
                             launch.config = *config;
                             let config = launch.config.clone();
                             chat.submit_with_attachments(launch, text, attachments, wake.clone())
-                                .map(|()| queued_config = config)
+                                .map(|()| {
+                                    queued_config = config;
+                                    undo.clear();
+                                })
                         }
                     }
                     Action::Answer { id, result } => {

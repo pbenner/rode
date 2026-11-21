@@ -20,6 +20,7 @@ pub mod queue;
 pub mod service;
 #[cfg(test)]
 mod tests;
+pub mod undo;
 use anyhow::{Result, ensure};
 pub use personality::Personality;
 use serde::{Deserialize, Serialize};
@@ -115,7 +116,7 @@ impl Access {
 }
 impl Provider {
     /// Providers offered by the chat selector, in presentation order.
-    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Local, Self::Acp];
+    pub const ALL: [Self; 4] = [Self::Codex, Self::Local, Self::Claude, Self::Acp];
 
     /// Whether this provider speaks ACP, independently of its executable preset.
     pub fn is_acp(self) -> bool {

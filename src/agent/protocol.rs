@@ -17,6 +17,7 @@ pub struct Chat {
     managed: bool,
     desired: Persistence,
     persistence_error: Option<String>,
+    undo_pending: Option<(u64, u64)>,
 }
 
 impl std::ops::Deref for Chat {
@@ -31,6 +32,37 @@ impl std::ops::DerefMut for Chat {
     }
 }
 impl Chat {
+    /// Host-owned reversible changes; an absent view means no prepared undo record.
+    pub fn undo_view(&self) -> Option<&rode_agent_core::undo::View> {
+        self.native.as_ref()?.state.as_ref()?.chat.undo.as_ref()
+    }
+    /// Ask the original host to undo one exact completed prompt. Keep admission
+    /// busy until this request's file-refresh revision is received. Stale idle
+    /// snapshots and errors belonging to an earlier request cannot acknowledge it.
+    pub fn undo_last_prompt(&mut self, launch: &Launch) -> Result<()> {
+        ensure!(
+            !self.inner.busy && self.undo_pending.is_none(),
+            "Wait for the agent to finish"
+        );
+        let client = self
+            .native
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Undo requires a native agent session"))?;
+        ensure!(
+            client.matches(launch),
+            "Open this agent's original project and policy before undoing"
+        );
+        let view = self
+            .undo_view()
+            .filter(|view| !view.files.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("No reversible file edits are available"))?;
+        let token = (view.turn, view.revision);
+        client.send(Command::Undo { turn: token.0 })?;
+        self.undo_pending = Some(token);
+        self.inner.busy = true;
+        self.inner.status = "Undoing the last prompt's file edits…".into();
+        Ok(())
+    }
     /// Build a synthetic chat whose selected response style differs from the applied turn style,
     /// for view/admission tests.
     #[cfg(test)]
@@ -47,6 +79,7 @@ impl Chat {
             managed: true,
             desired: Persistence::On,
             persistence_error: None,
+            undo_pending: None,
         }
     }
     /// Select the native controller before the first message; this starts no process.
@@ -170,8 +203,22 @@ impl Chat {
         };
         let was_pending = client.work_pending();
         if let Some(state) = client.poll() {
+            if let Some((turn, revision)) = self.undo_pending
+                && (state.chat.completed != turn
+                    || state
+                        .chat
+                        .undo
+                        .as_ref()
+                        .is_some_and(|u| u.revision != revision))
+            {
+                self.undo_pending = None;
+            }
             self.desired = state.info.persistent;
             self.inner.apply_view(state.chat);
+            if self.undo_pending.is_some() {
+                self.inner.busy = true;
+                self.inner.status = "Undoing the last prompt's file edits…".into();
+            }
             if !state.error.is_empty() {
                 self.inner.notice(&state.error);
             }
@@ -187,6 +234,7 @@ impl Chat {
             self.inner.notice(&error);
         }
         if client.closed() {
+            self.undo_pending = None;
             self.inner.busy = false;
             self.inner.last_turn_succeeded = false;
             self.inner.status = if client.ending { "Stopped" } else { "Detached" }.into();
@@ -260,6 +308,7 @@ impl Chat {
     /// Leave the view under its acknowledged lifetime policy. This is used by
     /// project switches; explicit Stop and encrypted locking use disconnect.
     pub fn detach(&mut self) {
+        self.undo_pending = None;
         self.native = None;
         self.desired = Persistence::default();
         self.inner.disconnect();
@@ -290,7 +339,7 @@ impl Chat {
     }
     /// Whether clean exit must wait for setup or a lifetime acknowledgement.
     pub fn work_pending(&self) -> bool {
-        self.native.as_ref().is_some_and(Client::work_pending)
+        self.undo_pending.is_some() || self.native.as_ref().is_some_and(Client::work_pending)
     }
     /// Request cancellation of nonpersistent startup on clean exit.
     pub fn cancel_startup_for_exit(&self) {
@@ -355,6 +404,7 @@ impl Chat {
     }
     /// Adopt acknowledged saved history, stopping/detaching only the old view.
     pub fn restore(&mut self, restored: Restored) {
+        self.undo_pending = None;
         match restored {
             Restored::Direct(restored) => {
                 self.native = None;
@@ -377,6 +427,7 @@ impl Chat {
         info: rode_agent_core::service::Info,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) {
+        self.undo_pending = None;
         self.managed = true;
         self.desired = info.persistent;
         self.native = Some(Client::attach(launch, info, wake));
@@ -388,6 +439,28 @@ impl Chat {
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+
+    #[test]
+    fn replaced_views_release_their_old_undo_acknowledgement() {
+        let mut chat = Chat {
+            undo_pending: Some((7, 2)),
+            ..Default::default()
+        };
+        chat.inner.busy = true;
+        assert!(chat.work_pending());
+        chat.detach();
+        chat.poll();
+        assert!(!chat.work_pending());
+        assert!(!chat.busy);
+
+        chat.undo_pending = Some((7, 2));
+        chat.restore(Restored::Native(Box::new(Client::test_style_view(
+            super::super::Personality::Default,
+            super::super::Personality::Default,
+        ))));
+        assert!(chat.undo_pending.is_none());
+        assert!(!chat.work_pending());
+    }
 
     #[test]
     fn auto_is_the_inert_default_and_each_new_conversation_resets_to_it() {

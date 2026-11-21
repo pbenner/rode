@@ -245,9 +245,14 @@ pub struct Chat {
     fresh_recovery: bool,
     input_history: super::input_history::History,
     question_messages: VecDeque<String>,
+    undo: crate::undo::Journal,
 }
 
 impl Chat {
+    /// Recorded file edits from the current/last turn, independent of transcript eviction.
+    pub fn undo_patch(&self) -> anyhow::Result<String> {
+        self.undo.patch()
+    }
     /// Copy the bounded presentation state, never process handles or credentials.
     pub fn view(&self) -> crate::service::ChatView {
         crate::service::ChatView {
@@ -265,6 +270,7 @@ impl Chat {
             connected: self.connected(),
             stopping: self.stopping(),
             config: self.config.clone(),
+            undo: None,
         }
     }
     /// Update a remote view without creating a process. Preserve drafts only for
@@ -458,6 +464,7 @@ impl Chat {
             self.start_session(launch, wake)?;
         }
         self.serial += 1;
+        self.undo = Default::default();
         self.input_history
             .remember(&format!("user-{}", self.serial), &text);
         self.push(
@@ -483,7 +490,20 @@ impl Chat {
     /// Process a bounded batch of available transport events and deadlines without blocking the
     /// UI.
     pub fn poll(&mut self) {
-        for (target, result) in self.file_jobs.poll() {
+        for (target, mut result) in self.file_jobs.poll() {
+            if let Ok(value) = &mut result
+                && let Some(object) = value.as_object_mut()
+            {
+                if object.remove("_rode_undo_failed").is_some() {
+                    self.undo.invalidate();
+                }
+                if let Some(edit) = object.remove("_rode_undo")
+                    && let Some(path) = edit["path"].as_str()
+                {
+                    self.undo
+                        .file(path, edit["before"].as_str(), edit["after"].as_str());
+                }
+            }
             let result = match target {
                 super::file_only::Target::Verify(config) => result
                     .map_err(anyhow::Error::msg)
