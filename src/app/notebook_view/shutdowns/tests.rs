@@ -29,6 +29,8 @@ fn notebook_shutdown_ownership_survives_view_replacement_and_reports_failures() 
         "leave_workspace",
         "leave_disabled",
         "leave_vault",
+        "close_vault",
+        "close_vault_shutdown_failure",
     ] {
         let root = tempfile::tempdir().unwrap();
         let wrapper = root.path().join("helper.py");
@@ -212,9 +214,15 @@ fn notebook_shutdown_probe() {
         plan,
     };
     let info = host.create();
-    let ctx = egui::Context::default();
-    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-    let mut app = EditorApp::new(&cc, Startup::default());
+    let (mut app, ctx) = if case.starts_with("close_vault") {
+        let (mut app, ctx) = crate::app::vaults::tests::active_reply(true, "");
+        app.documents.clear();
+        (app, ctx)
+    } else {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        (EditorApp::new(&cc, Startup::default()), ctx)
+    };
     app.new_notebook();
     let (ready, prepared) = mpsc::channel();
     let mut kernel = Kernel::attach(
@@ -227,6 +235,55 @@ fn notebook_shutdown_probe() {
     )
     .unwrap();
     prepared.recv_timeout(Duration::from_secs(5)).unwrap();
+    if case.starts_with("close_vault") {
+        let until = Instant::now() + Duration::from_secs(10);
+        while kernel.pending() {
+            kernel.poll();
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.documents[0].notebook_mut().unwrap().kernel = Some(kernel);
+        app.documents[0].set_dirty_fixture(false);
+        let failure = case.ends_with("shutdown_failure");
+        let blocked = BlockedHelper::new(primary.parent().unwrap(), failure);
+        app.guarded(crate::app::Action::CloseProject, &ctx);
+        assert!(app.vaults.locking());
+        blocked.wait();
+        assert!(app.notebook_lifetime_pending());
+        app.poll_vaults(&ctx);
+        assert!(
+            !app.vaults.lock_sent_fixture(),
+            "Unmount was requested before the notebook host acknowledged shutdown"
+        );
+        assert!(!app.documents.is_empty());
+        blocked.release();
+        while app.notebook_lifetime_pending() {
+            app.poll_notebooks(&ctx);
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if failure {
+            app.poll_vaults(&ctx);
+            assert!(!app.vaults.locking());
+            assert!(!app.vaults.lock_sent_fixture());
+            assert!(app.vaults.has_active());
+            assert!(!app.documents.is_empty());
+            assert!(
+                host.infos()
+                    .iter()
+                    .any(|info| info.id == host.id && info.alive)
+            );
+        } else {
+            assert!(host.infos().is_empty());
+            while app.vaults.has_active() {
+                app.poll_vaults(&ctx);
+                assert!(Instant::now() < until);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(app.documents.is_empty());
+        }
+        return;
+    }
     if case.starts_with("leave_") {
         let until = Instant::now() + Duration::from_secs(10);
         while kernel.pending() {

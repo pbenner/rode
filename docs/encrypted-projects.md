@@ -4,14 +4,14 @@ RODE uses an installed **gocryptfs** on the project host to present an encrypted
 
 ## Open or create
 
-1. Choose **File → Open encrypted project…**, or **Project: Open encrypted project** in the command palette.
+1. Choose **File → Open project folder…** and enable **Encrypted storage (gocryptfs)**. **Open encrypted project…** in the menu or command palette opens the same dialog with encryption already selected.
 2. Choose **This computer** or **SSH host** for the storage location. Authenticate SSH first for remote storage; the existing connection carries passwords and file operations.
-3. Use **Browse…** to select the encrypted storage folder, enter its password, then **Unlock & open**. The browser supports parent navigation, filtering, hidden folders and keyboard navigation. You can still enter an absolute or `~/` path directly. Executable overrides are under **Advanced options**; the usual gocryptfs and automatic unmount defaults need no configuration.
+3. Select the encrypted storage folder in the shared browser, or enter an absolute or `~/` path and use **Browse**. Choose the sandbox backend, presets and access rules in the same form, enter the password, then **Unlock & open**. The selected sandbox is prepared around the decrypted root only after the mount is verified. Executable overrides are under **Encryption tools and recovery**; the usual gocryptfs and automatic unmount defaults need no configuration.
 4. To create storage, enable **Create new encrypted storage** and confirm the new password. The selected folder must be empty, or have an existing parent if RODE needs to create it. Existing plaintext files are never converted, deleted or replaced.
 
-You can also right-click a folder in the Explorer and choose **Open as encrypted project…**. This selects the folder on the Explorer's host and opens the form; it does not create storage or unlock anything automatically. Cancelling the folder browser, including with Escape, returns to the existing form without losing its draft. Closing the encrypted-project dialog clears its password.
+You can also right-click a folder in the Explorer and choose **Open as encrypted project…**. This selects the folder on the Explorer's host and opens the form; it does not create storage or unlock anything automatically. Browsing folders retains the credential and access drafts. Closing the project dialog, disabling encryption or changing hosts clears the password. The browser supports parent navigation, filtering, hidden folders and keyboard navigation.
 
-Cancelling an unlock lets the host operation finish and performs normal cleanup; normal exit waits for cleanup to finish. A refused cleanup must be resolved with **Advanced options → Lock existing mount**.
+Cancelling an unlock lets the host operation finish and performs normal cleanup; normal exit waits for cleanup to finish. A refused cleanup must be resolved with **Encryption tools and recovery → Lock existing mount**, or the existing-mount management controls.
 
 After opening, the explorer, Git, terminals, agents, language tools, notebooks and previews use the decrypted project root. **ENCRYPTED PROJECT · UNLOCKED** stays visible. The optional sandbox is prepared around this root; mount management itself runs on the host outside that sandbox. The backing store is not added as a project grant.
 
@@ -25,7 +25,7 @@ Another RODE window, a running terminal/job, or a sandbox still referencing the 
 
 A successful lock closes the project's tabs and releases its previews, returning to Welcome. SSH remains connected when closing only the project. **Disconnect** runs the same guarded close and releases SSH only after verified unmount; a refused lock keeps the project and connection available. The last RODE window must lock successfully before normal exit; it cannot silently background an encrypted project with persistent jobs. Closing a view while another RODE window still holds the project releases only that view, leaving the other window responsible for locking. Lock before switching to another project/host. Opening subfolders or changing the sandbox within the same encrypted mount retains the lease. Saved SSH profiles remain available.
 
-Crashes, forced termination and network loss cannot guarantee locking: the host helper attempts an ordinary unmount, and leaves a busy filesystem serving its jobs rather than disrupting them. Its status must be checked on that host. Reconnect SSH, then explicitly unlock again to restore access; remote unsaved buffers remain available. Use **Lock existing mount** in the encrypted-project dialog to retry locking storage that remained open after an interruption. Outside RODE, `fusermount3 -u MOUNTPOINT` (or `fusermount -u`) performs a normal unmount after users of it stop.
+Crashes, forced termination and network loss cannot guarantee locking: the host helper attempts an ordinary unmount, and leaves a busy filesystem serving its jobs rather than disrupting them. Its status must be checked on that host. Reconnect SSH, then explicitly unlock again to restore access; remote unsaved buffers remain available. Use **Lock existing mount** in the encryption controls to retry locking storage that remained open after an interruption. Outside RODE, `fusermount3 -u MOUNTPOINT` (or `fusermount -u`) performs a normal unmount after users of it stop.
 
 ## Requirements and storage
 

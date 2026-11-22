@@ -522,7 +522,10 @@ impl EditorApp {
     /// Switch exclusive dialog ownership, resetting the relevant picker/form state
     /// and recording which native viewport must receive modal input.
     fn set_dialog(&mut self, dialog: Dialog) {
-        if self.dialog == Dialog::Encrypted && dialog != Dialog::Encrypted && !self.vaults.locking()
+        // Reopening Folder replaces its draft even when the dialog kind is unchanged.
+        if matches!(self.dialog, Dialog::Encrypted | Dialog::Folder)
+            && (dialog != self.dialog || dialog == Dialog::Folder)
+            && !self.vaults.locking()
         {
             self.cancel_encrypted_dialog();
         }

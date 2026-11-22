@@ -26,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 /// Keep the underlying mountpoint inode inaccessible after unlock/failure, even while the
@@ -174,6 +174,9 @@ struct Mount {
     lease: Option<File>,
     directory: Option<File>,
     attempted: bool,
+    // Private observation source so unit tests can exercise unmounts without
+    // kernel mounts. Production always uses /proc; no environment override.
+    proc: PathBuf,
 }
 fn decode_mount(value: &str) -> String {
     let mut result = Vec::new();
@@ -277,6 +280,7 @@ impl Mount {
             lease: None,
             directory: None,
             attempted: false,
+            proc: "/proc".into(),
         })
     }
     fn lock_file(&self, name: &str) -> Result<File> {
@@ -304,7 +308,7 @@ impl Mount {
         Ok(lock)
     }
     fn mounted(&self) -> Result<Option<String>> {
-        let table = mount_table("/proc/self/mountinfo")
+        let table = mount_table(self.proc.join("self/mountinfo"))
             .context("Encrypted projects require Linux mount information")?;
         match mount_entry(&table, &self.info.mountpoint) {
             Some(entry) => {
@@ -318,16 +322,36 @@ impl Mount {
         }
     }
     fn acquire(&mut self) -> Result<()> {
-        let lease = self.lock_file("views.lock")?;
-        ensure!(
-            unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0,
-            "Encrypted project is being locked by another window."
-        );
+        let lease = self.views(
+            libc::LOCK_SH,
+            "Encrypted project is being locked by another window.",
+        )?;
         self.directory = Some(crate::locking::open_directory(Path::new(
             &self.info.mountpoint,
         ))?);
         self.lease = Some(lease);
         Ok(())
+    }
+    fn views(&self, mode: libc::c_int, busy: &str) -> Result<File> {
+        let lease = self.lock_file("views.lock")?;
+        // CLOEXEC does not close a descriptor between another thread's fork
+        // and exec. Allow those inherited references to drain before treating
+        // contention as a live view or refusing to restore our own lease.
+        let until = Instant::now() + Duration::from_secs(1);
+        loop {
+            if unsafe { libc::flock(lease.as_raw_fd(), mode | libc::LOCK_NB) } == 0 {
+                return Ok(lease);
+            }
+            let error = std::io::Error::last_os_error();
+            if !matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+            ) {
+                return Err(error).context("Cannot coordinate encrypted-project views");
+            }
+            ensure!(Instant::now() < until, "{busy}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
     fn open(&mut self, password: &str, create: bool) -> Result<()> {
         let _operation = self.operation()?;
@@ -424,13 +448,12 @@ impl Mount {
         result
     }
     fn unmount_locked(&self) -> Result<bool> {
-        let lease = self.lock_file("views.lock")?;
+        let _lease = self.views(
+            libc::LOCK_EX,
+            "Another RODE window still has this encrypted project open.",
+        )?;
         ensure!(
-            unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "Another RODE window still has this encrypted project open."
-        );
-        ensure!(
-            !foreign_mount(&self.name, &self.info.mountpoint)?,
+            !foreign_mount_in(&self.proc, &self.name, &self.info.mountpoint)?,
             "The decrypted filesystem is still mounted by another process or sandbox. Stop that work before locking."
         );
         if self.mounted()?.is_none() {
@@ -457,7 +480,7 @@ impl Mount {
             "Encrypted filesystem is still mounted."
         );
         ensure!(
-            !foreign_mount(&self.name, &self.info.mountpoint)?,
+            !foreign_mount_in(&self.proc, &self.name, &self.info.mountpoint)?,
             "A process still holds the decrypted filesystem. Stop that work before locking."
         );
         Ok(true)
@@ -477,10 +500,6 @@ fn named_mounts<'a>(table: &'a str, name: &'a str) -> impl Iterator<Item = (&'a 
 /// deny even when their mount tables are readable. Ignore only the live host
 /// mount's ID, never every mount at the same path or every unreadable process.
 /// Called before and after normal unmount; the latter ignores no mount.
-fn foreign_mount(name: &str, point: &str) -> Result<bool> {
-    foreign_mount_in(Path::new("/proc"), name, point)
-}
-
 fn foreign_mount_in(proc: &Path, name: &str, point: &str) -> Result<bool> {
     let own = mount_table(proc.join("self/mountinfo"))?;
     let ignored_id = named_mounts(&own, name).find_map(|(id, path)| (path == point).then_some(id));
@@ -669,6 +688,9 @@ pub fn scratch_parent(root: &Path) -> Result<PathBuf> {
     // A read-only encrypted project then fails visibly instead of spilling data.
     Ok(root.to_owned())
 }
+
+#[cfg(test)]
+mod lock_tests;
 
 #[cfg(test)]
 mod tests {
