@@ -31,6 +31,13 @@ pub(super) struct State {
     dragging: bool,
 }
 impl State {
+    pub fn stop_worker(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        self.submitted = None;
+        self.active = None;
+        self.reveal = None;
+        self.selection = None;
+        self.worker.take().and_then(worker::Worker::stop)
+    }
     pub fn open(&mut self) {
         self.open = true;
         self.focus = true;

@@ -2,6 +2,28 @@
 //! privileges. Only procfs observations and the unmount executable are fixtures.
 use super::*;
 
+#[test]
+fn an_existing_mount_can_be_managed_without_reading_its_disconnected_fuse_root() {
+    let root = tempfile::tempdir().unwrap();
+    let point = root.path().join("unavailable-fuse-root");
+    let table = format!(
+        "10 1 0:42 / {} rw - fuse.gocryptfs rode-gocryptfs-fixture rw\n",
+        point.to_string_lossy().replace(' ', "\\040")
+    );
+    prepare_mountpoint(&point, "rode-gocryptfs-fixture", &table).unwrap();
+    assert!(
+        !point.exists(),
+        "A verified mount must not be recreated or statted"
+    );
+    assert!(prepare_mountpoint(&point, "rode-gocryptfs-other", &table).is_err());
+    // Without a verified mount, normal creation and symlink protection still apply.
+    prepare_mountpoint(&point, "rode-gocryptfs-fixture", "").unwrap();
+    assert!(point.is_dir());
+    fs::remove_dir(&point).unwrap();
+    std::os::unix::fs::symlink(root.path(), &point).unwrap();
+    assert!(prepare_mountpoint(&point, "rode-gocryptfs-fixture", "").is_err());
+}
+
 struct Fixture {
     root: tempfile::TempDir,
     mount: Mount,
@@ -41,8 +63,10 @@ outcome = (root / 'outcome').read_text()
 if outcome == 'busy':
     print('Device or resource busy', file=sys.stderr)
     sys.exit(1)
-if outcome == 'unmount':
+if outcome in ('unmount', 'unmount-propagated'):
     (root / 'proc' / 'self' / 'mountinfo').write_text('')
+if outcome == 'unmount-propagated':
+    (root / 'proc' / '123' / 'mountinfo').write_text('')
 "#,
                 serde_json::to_string(&root.path()).unwrap(),
             ),
@@ -197,4 +221,98 @@ fn sandbox_mount_copies_block_unmount_until_released() {
     fixture.assert_retained();
     fs::write(process.join("mountinfo"), "").unwrap();
     assert!(fixture.mount.release(true, false).unwrap());
+}
+
+fn propagated_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    let point = fixture.mount.info.mountpoint.replace(' ', "\\040");
+    fs::write(fixture.mount.proc.join("self/mountinfo"), format!(
+        "1 0 8:2 / / rw shared:1 - ext4 /dev/root rw\n10 1 0:42 / {point} rw shared:1333 - fuse.gocryptfs rode-gocryptfs-fixture rw\n"
+    )).unwrap();
+    fs::create_dir(fixture.mount.proc.join("123")).unwrap();
+    fs::write(fixture.mount.proc.join("123/comm"), "desktop-service\n").unwrap();
+    fixture
+}
+
+#[test]
+fn propagated_desktop_mounts_are_not_independent_project_bind_mounts() {
+    let fixture = propagated_fixture();
+    let point = fixture.mount.info.mountpoint.replace(' ', "\\040");
+    let check = || {
+        foreign_mount_in(
+            &fixture.mount.proc,
+            &fixture.mount.name,
+            &fixture.mount.info.mountpoint,
+        )
+        .unwrap()
+    };
+    let table = |parent_root: &str,
+                 parent_point: &str,
+                 parent_tags: &str,
+                 child_point: &str,
+                 child_tags: &str| {
+        fs::write(fixture.mount.proc.join("123/mountinfo"), format!(
+            "21 0 8:2 {parent_root} {parent_point} rw {parent_tags} - ext4 /dev/root rw\n22 21 0:42 / {child_point} rw {child_tags} - fuse.gocryptfs rode-gocryptfs-fixture rw\n"
+        )).unwrap();
+    };
+    // Container root, snap hostfs alias, and a desktop sandbox's /tmp subtree.
+    table("/", "/", "master:1", &point, "master:1333");
+    assert!(!check());
+    table(
+        "/",
+        "/hostfs",
+        "master:1",
+        &format!("/hostfs{point}"),
+        "master:1333",
+    );
+    assert!(!check());
+    // Use the actual temp parent so this works with private TMPDIR roots too.
+    let parent = fixture
+        .root
+        .path()
+        .parent()
+        .unwrap()
+        .to_string_lossy()
+        .replace(' ', "\\040");
+    table(&parent, &parent, "master:1", &point, "master:1333");
+    assert!(!check());
+    table("/", "/", "shared:1", &point, "shared:1333");
+    assert!(!check());
+    // Neither child propagation alone nor a different alias location suffices.
+    table("/", "/", "", &point, "master:1333");
+    assert!(check());
+    table("/", "/", "master:1", &point, "");
+    assert!(check());
+    table("/", "/", "master:1", "/independent-bind", "master:1333");
+    assert!(check());
+    table("/", "/", "master:99", &point, "master:1333");
+    assert!(check());
+}
+
+#[test]
+fn normal_unmount_must_remove_propagated_mounts_too() {
+    for propagated in [false, true] {
+        let mut fixture = propagated_fixture();
+        let point = fixture.mount.info.mountpoint.replace(' ', "\\040");
+        fs::write(fixture.mount.proc.join("123/mountinfo"), format!(
+            "21 0 8:2 / / rw master:1 - ext4 /dev/root rw\n22 21 0:42 / {point} rw master:1333 - fuse.gocryptfs rode-gocryptfs-fixture rw\n"
+        )).unwrap();
+        if propagated {
+            fixture.outcome("unmount-propagated");
+        }
+        let result = fixture.mount.release(true, false);
+        assert!(
+            fixture.root.path().join("called").is_file(),
+            "Normal unmount was never attempted"
+        );
+        if propagated {
+            assert!(result.unwrap());
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(
+                error.contains("after normal unmount") && error.contains("PID 123"),
+                "{error}"
+            );
+        }
+    }
 }

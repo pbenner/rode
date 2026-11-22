@@ -87,8 +87,10 @@ impl Sessions {
     /// Retain approved runtime shutdowns while clearing project discovery and view state.
     pub(super) fn reset_context(&mut self) {
         let runtimes = self.runtimes.take_shutdowns();
+        let cleanups = std::mem::take(&mut self.cleanups);
         *self = Self {
             runtimes,
+            cleanups,
             ..Self::default()
         };
     }
@@ -109,10 +111,41 @@ impl Sessions {
                 .is_some_and(|meta| meta.policy == service::fingerprint(plan))
     }
 
-    /// Include hidden views when deciding whether terminal lifetime work remains.
-    pub(super) fn has_live_views(&self, terminal: Option<&Terminal>) -> bool {
-        terminal.is_some_and(Terminal::is_alive)
-            || self.other.iter().any(|slot| slot.terminal.is_alive())
+    /// Release this window's attachments according to their acknowledged host
+    /// lifetime policy. Retain process completion flags across project reset.
+    pub(in crate::app) fn release_views(&mut self, terminal: &mut Option<Terminal>) {
+        let views = terminal
+            .take()
+            .into_iter()
+            .chain(self.other.drain(..).map(|slot| slot.terminal));
+        for view in views {
+            if view.owns_shell() && view.is_alive() {
+                self.cleanups.push(view.alive.clone());
+            }
+            drop(view);
+        }
+        self.active = None;
+        self.queued.clear();
+    }
+
+    /// Locking waits for lifetime edits before releasing temporary attachments.
+    /// Persistent shells need explicit End; shared jobs keep their other views.
+    pub(in crate::app) fn close_for_lock(
+        &mut self,
+        terminal: &mut Option<Terminal>,
+    ) -> Result<bool, String> {
+        if self.starting || self.persistence_pending {
+            return Ok(false);
+        }
+        let persistent = terminal
+            .iter()
+            .chain(self.other.iter().map(|slot| &slot.terminal))
+            .any(|view| view.is_alive() && view.owns_shell() && view.persistent());
+        if persistent {
+            return Err("End persistent terminal sessions in Sessions before locking this encrypted project. Shared or detached jobs must release the project too.".into());
+        }
+        self.release_views(terminal);
+        Ok(true)
     }
 
     /// Return presentation snapshots in stable creation order without exposing attachment mutation.

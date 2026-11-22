@@ -102,7 +102,12 @@ impl EditorApp {
             ui.heading("Locking encrypted project");
             ui.spinner();
             ui.label("Waiting for operations or the project host…");
-            if !self.vaults.lock_sent && crate::keyboard::button(ui, "Keep unlocked").clicked() {
+            let cancel = if self.vaults.lost {
+                "Cancel verification"
+            } else {
+                "Keep unlocked"
+            };
+            if !self.vaults.lock_sent && crate::keyboard::button(ui, cancel).clicked() {
                 self.vaults.locking = false;
                 self.vaults.after_lock = AfterLock::Project;
                 self.dialog = Dialog::None;
@@ -131,10 +136,14 @@ impl EditorApp {
             .on_hover_text(&info.cipherdir);
             ui.add(egui::Label::new(format!("Project view: {}", info.mountpoint)).truncate())
                 .on_hover_text(&info.mountpoint);
-            ui.small("Stop terminal jobs before locking. Other RODE windows must release this project first. Locking closes tabs after unsaved-change checks.");
+            ui.small("Locking closes temporary terminals and document readers. End persistent or shared jobs first, and release other RODE views of this project. Unsaved changes are checked before tabs close.");
             if self.vaults.lost {
+                ui.label("The lock state is unknown. Verify and lock the existing mount without reopening the project. For SSH storage, reconnect to its host first.");
+                if crate::keyboard::button(ui, "Verify & lock").clicked() {
+                    self.guarded(Action::LockEncrypted, ctx);
+                }
                 if crate::keyboard::button(ui, "Unlock again…").clicked() {
-                    self.encrypted_dialog();
+                    self.encrypted_open_dialog();
                 }
             } else if crate::keyboard::button(ui, "Stop project tools & lock").clicked() {
                 self.guarded(Action::LockEncrypted, ctx);

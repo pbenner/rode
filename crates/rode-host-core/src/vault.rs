@@ -212,11 +212,15 @@ fn mount_table(path: impl AsRef<Path>) -> Result<String> {
 }
 /// One bounded procfs mount record. Paths remain escaped until a consumer
 /// needs them; unrelated mounts need no string allocations during lock scans.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MountEntry<'a> {
     id: &'a str,
+    parent: &'a str,
     device: &'a str,
+    root: &'a str,
     point: &'a str,
+    shared: Option<&'a str>,
+    master: Option<&'a str>,
     kind: &'a str,
     source: &'a str,
 }
@@ -226,14 +230,30 @@ fn mount_entries(text: &str) -> impl Iterator<Item = MountEntry<'_>> {
         let (left, right) = line.split_once(" - ")?;
         let mut fields = left.split_whitespace();
         let id = fields.next()?;
-        let device = fields.nth(1)?;
-        let point = fields.nth(1)?;
+        let parent = fields.next()?;
+        let device = fields.next()?;
+        let root = fields.next()?;
+        let point = fields.next()?;
         fields.next()?;
+        let mut shared = None;
+        let mut master = None;
+        for field in fields {
+            if let Some(group) = field.strip_prefix("shared:") {
+                shared = Some(group);
+            }
+            if let Some(group) = field.strip_prefix("master:") {
+                master = Some(group);
+            }
+        }
         let mut tail = right.split_whitespace();
         Some(MountEntry {
             id,
+            parent,
             device,
+            root,
             point,
+            shared,
+            master,
             kind: tail.next()?,
             source: tail.next()?,
         })
@@ -242,6 +262,25 @@ fn mount_entries(text: &str) -> impl Iterator<Item = MountEntry<'_>> {
 
 fn mount_entry<'a>(text: &'a str, point: &str) -> Option<MountEntry<'a>> {
     mount_entries(text).find(|entry| decode_mount(entry.point) == point)
+}
+/// A disconnected FUSE root may reject stat/open. Its verified mount-table
+/// identity must remain manageable without reading the decrypted filesystem.
+fn prepare_mountpoint(point: &Path, name: &str, table: &str) -> Result<()> {
+    if let Some(entry) = mount_entry(table, &point.to_string_lossy()) {
+        ensure!(
+            entry.kind == "fuse.gocryptfs" && decode_mount(entry.source) == name,
+            "Refusing to manage an unrelated filesystem at the encrypted-project mountpoint."
+        );
+        return Ok(());
+    }
+    if !point.exists() {
+        private_directory(point)?;
+    }
+    ensure!(
+        !fs::symlink_metadata(point)?.file_type().is_symlink(),
+        "The decrypted mountpoint cannot be a symlink."
+    );
+    Ok(())
 }
 impl Mount {
     fn new(settings: Settings, create: bool) -> Result<Self> {
@@ -262,20 +301,15 @@ impl Mount {
         let runtime = base.join(&digest);
         private_directory(&runtime)?;
         let mountpoint = runtime.join("plain");
-        if !mountpoint.exists() {
-            private_directory(&mountpoint)?;
-        }
-        ensure!(
-            !fs::symlink_metadata(&mountpoint)?.file_type().is_symlink(),
-            "The decrypted mountpoint cannot be a symlink."
-        );
+        let name = format!("rode-gocryptfs-{digest}");
+        prepare_mountpoint(&mountpoint, &name, &mount_table("/proc/self/mountinfo")?)?;
         Ok(Self {
             settings,
             info: Info {
                 cipherdir: cipher.to_string_lossy().into(),
                 mountpoint: mountpoint.to_string_lossy().into(),
             },
-            name: format!("rode-gocryptfs-{digest}"),
+            name,
             runtime,
             lease: None,
             directory: None,
@@ -452,9 +486,11 @@ impl Mount {
             libc::LOCK_EX,
             "Another RODE window still has this encrypted project open.",
         )?;
+        let foreign = foreign_reference_in(&self.proc, &self.name, &self.info.mountpoint)?;
         ensure!(
-            !foreign_mount_in(&self.proc, &self.name, &self.info.mountpoint)?,
-            "The decrypted filesystem is still mounted by another process or sandbox. Stop that work before locking."
+            foreign.is_none(),
+            "The decrypted filesystem is still mounted by another process or sandbox. {}",
+            foreign.unwrap_or_default()
         );
         if self.mounted()?.is_none() {
             return Ok(true);
@@ -479,33 +515,86 @@ impl Mount {
             self.mounted()?.is_none(),
             "Encrypted filesystem is still mounted."
         );
+        let foreign = foreign_reference_in(&self.proc, &self.name, &self.info.mountpoint)?;
         ensure!(
-            !foreign_mount_in(&self.proc, &self.name, &self.info.mountpoint)?,
-            "A process still holds the decrypted filesystem. Stop that work before locking."
+            foreign.is_none(),
+            "A process still holds the decrypted filesystem after normal unmount. {}",
+            foreign.unwrap_or_default()
         );
         Ok(true)
     }
 }
-/// Named FUSE mounts retain their kernel mount ID even when a process's chroot
-/// changes the displayed path. Bind mounts and namespace copies have distinct
-/// IDs, including copies at the original path. Do not compare paths alone.
-fn named_mounts<'a>(table: &'a str, name: &'a str) -> impl Iterator<Item = (&'a str, String)> {
-    mount_entries(table)
-        .filter(move |entry| entry.kind == "fuse.gocryptfs" && entry.source == name)
-        .map(|entry| (entry.id, decode_mount(entry.point)))
+/// Normal unmount propagates from the containing shared mount. A peer/slave
+/// copy at the corresponding location is not an independent bind. Require
+/// both parent and child propagation relationships and the same filesystem
+/// locations; a shared child alone does not prove its removal will propagate.
+fn propagated_copy(
+    host: &MountEntry<'_>,
+    parent: &MountEntry<'_>,
+    candidate: &MountEntry<'_>,
+    table: &[MountEntry<'_>],
+) -> bool {
+    let receives = |from: Option<&str>, to: &MountEntry<'_>| {
+        from.is_some_and(|group| to.shared == Some(group) || to.master == Some(group))
+    };
+    if host.device != candidate.device
+        || host.root != candidate.root
+        || !receives(host.shared, candidate)
+    {
+        return false;
+    }
+    let Some(other_parent) = table.iter().find(|entry| entry.id == candidate.parent) else {
+        return false;
+    };
+    if parent.device != other_parent.device || !receives(parent.shared, other_parent) {
+        return false;
+    }
+    let location = |entry: &MountEntry<'_>, parent: &MountEntry<'_>| {
+        let point = PathBuf::from(decode_mount(entry.point));
+        point
+            .strip_prefix(decode_mount(parent.point))
+            .ok()
+            .map(|relative| PathBuf::from(decode_mount(parent.root)).join(relative))
+    };
+    match (location(host, parent), location(candidate, other_parent)) {
+        (Some(own), Some(other)) => own == other,
+        _ => false,
+    }
 }
 
-/// Inspect mount tables directly: namespace symlinks require ptrace permission
-/// that same-account SSH sessions, non-dumpable processes and user services may
-/// deny even when their mount tables are readable. Ignore only the live host
-/// mount's ID, never every mount at the same path or every unreadable process.
-/// Called before and after normal unmount; the latter ignores no mount.
+#[cfg(test)]
 fn foreign_mount_in(proc: &Path, name: &str, point: &str) -> Result<bool> {
+    Ok(foreign_reference_in(proc, name, point)?.is_some())
+}
+
+/// Inspect mount tables without ptrace-protected namespace symlinks. Before
+/// unmount, allow only the host mount and verified propagation copies. After
+/// unmount there is no host to exempt, so every remaining copy blocks locking.
+fn foreign_reference_in(proc: &Path, name: &str, point: &str) -> Result<Option<String>> {
     let own = mount_table(proc.join("self/mountinfo"))?;
-    let ignored_id = named_mounts(&own, name).find_map(|(id, path)| (path == point).then_some(id));
-    let references = |table: &str| named_mounts(table, name).any(|(id, _)| Some(id) != ignored_id);
-    if references(&own) {
-        return Ok(true);
+    let entries: Vec<_> = mount_entries(&own).collect();
+    let host = entries.iter().find(|entry| {
+        entry.kind == "fuse.gocryptfs" && entry.source == name && decode_mount(entry.point) == point
+    });
+    let parent = host.and_then(|host| entries.iter().find(|entry| entry.id == host.parent));
+    let references = |table: &str| {
+        let table: Vec<_> = mount_entries(table).collect();
+        table
+            .iter()
+            .find(|entry| {
+                entry.kind == "fuse.gocryptfs"
+                    && entry.source == name
+                    && !host.is_some_and(|host| entry.id == host.id)
+                    && !host
+                        .zip(parent)
+                        .is_some_and(|(host, parent)| propagated_copy(host, parent, entry, &table))
+            })
+            .map(|entry| format!("Mount {} at {}", entry.id, decode_mount(entry.point)))
+    };
+    if let Some(reference) = references(&own) {
+        return Ok(Some(format!(
+            "{reference} is still present in the host namespace."
+        )));
     }
     for (index, entry) in fs::read_dir(proc)?.enumerate() {
         ensure!(
@@ -531,11 +620,16 @@ fn foreign_mount_in(proc: &Path, name: &str, point: &str) -> Result<bool> {
         else {
             continue;
         };
-        if references(&table) {
-            return Ok(true);
+        if let Some(reference) = references(&table) {
+            let comm = fs::read_to_string(path.join("comm")).unwrap_or_default();
+            return Ok(Some(format!(
+                "{reference} is held by PID {} ({}). Stop that project work and retry.",
+                entry.file_name().to_string_lossy(),
+                comm.trim()
+            )));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 fn process_mount_table(process: &Path) -> Result<Option<String>> {
@@ -791,6 +885,10 @@ mod tests {
             mount_entry(text, "/tmp/a b"),
             Some(MountEntry {
                 id: "10",
+                parent: "9",
+                root: "/",
+                shared: None,
+                master: None,
                 device: "0:42",
                 point: "/tmp/a\\040b",
                 kind: "fuse.gocryptfs",
@@ -921,4 +1019,17 @@ mod tests {
         fs::remove_dir(&mount.info.mountpoint).unwrap();
         fs::remove_dir(&mount.runtime).unwrap();
     }
+}
+
+#[test]
+#[ignore = "manual read-only inspection of an explicitly selected live mount"]
+fn live_mount_reference_probe() {
+    let point = std::env::var("RODE_TEST_VAULT_POINT").expect("Set RODE_TEST_VAULT_POINT");
+    let name = std::env::var("RODE_TEST_VAULT_NAME").expect("Set RODE_TEST_VAULT_NAME");
+    let table = mount_table("/proc/self/mountinfo").unwrap();
+    let mount = mount_entry(&table, &point).expect("The selected live mount must still exist");
+    assert_eq!(mount.kind, "fuse.gocryptfs");
+    assert_eq!(mount.source, name);
+    let reference = foreign_reference_in(Path::new("/proc"), &name, &point).unwrap();
+    assert!(reference.is_none(), "{reference:?}");
 }

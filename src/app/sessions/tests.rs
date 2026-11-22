@@ -2,6 +2,29 @@
 use super::*;
 
 #[test]
+fn closing_an_ordinary_project_releases_hidden_shells_and_keeps_cleanup_pending() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
+    let mut streams = Vec::new();
+    for name in ["Hidden shell", "Active shell"] {
+        let (terminal, stream) = Terminal::fixture_native(&ctx, name.into());
+        app.add_terminal_view(terminal, name.into(), name.into());
+        streams.push(stream);
+    }
+    app.guarded(Action::CloseProject, &ctx);
+    assert!(app.terminal.is_none());
+    assert!(app.sessions.tabs().is_empty());
+    assert!(app.sessions.lifetime_pending());
+    streams[0].end();
+    assert!(app.sessions.lifetime_pending());
+    streams[1].end();
+    assert!(!app.sessions.lifetime_pending());
+}
+
+#[test]
 fn reattachment_accepts_both_user_modes_but_not_other_roots_or_policies() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx);

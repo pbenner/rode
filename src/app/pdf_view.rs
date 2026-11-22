@@ -147,6 +147,9 @@ impl PageLayout {
     }
 }
 
+/// Captured reader shutdown joined off the UI thread before mount release.
+pub(in crate::app) type ReaderCleanup = (Arc<pdf::Source>, Option<std::thread::JoinHandle<()>>);
+
 /// Per-tab reader state, a bounded texture cache and a cancellable render
 /// admission. CPU page/font caches belong to the shared original source.
 pub(super) struct PdfView {
@@ -159,6 +162,7 @@ pub(super) struct PdfView {
     cancel: Arc<AtomicBool>,
     work: Option<Work>,
     reloading: bool,
+    suspended: bool,
     pub image: image_view::ImageView,
     textures: std::collections::VecDeque<(usize, image_view::ImageView)>,
     failed: std::collections::HashSet<usize>,
@@ -189,6 +193,7 @@ impl PdfView {
             cancel: Arc::new(AtomicBool::new(false)),
             work: None,
             reloading: false,
+            suspended: false,
             image: image_view::ImageView::new(loaded.pixels),
             textures: Default::default(),
             failed: Default::default(),
@@ -218,6 +223,15 @@ impl PdfView {
         self.requested = self.page;
         self.scroll.reset();
         self.entry = PageEntry::Start;
+    }
+    /// Stop interpreter work without discarding this view's cached pages.
+    pub(super) fn close_readers(&mut self) -> ReaderCleanup {
+        self.invalidate();
+        self.suspended = true;
+        (self.source.clone(), self.text.stop_worker())
+    }
+    pub(super) fn resume_readers(&mut self) {
+        self.suspended = false;
     }
     /// Install a fresh source only after a successful reload, preserving reading mode.
     pub fn replace(&mut self, loaded: pdf::Loaded) {
@@ -297,7 +311,7 @@ impl PdfView {
     }
     /// Select one foreground/visible page before bounded neighbour prefetch.
     fn next_page(&mut self, limit: usize) -> Option<(usize, PageEntry)> {
-        if self.reloading {
+        if self.reloading || self.suspended {
             return None;
         }
         // Scrolling may return to a ready page before obsolete work completes.
@@ -348,7 +362,7 @@ impl PdfView {
         let mut page = controls.page;
         let selectable =
             self.source.format == pdf::Format::Pdf && matches!(display, Display::Document { .. });
-        if selectable {
+        if selectable && !self.suspended {
             let mut visible = vec![self.page];
             visible.extend(
                 self.visible
@@ -659,7 +673,11 @@ impl PdfView {
         page: usize,
         entry: PageEntry,
     ) -> Option<(Arc<pdf::Source>, Arc<AtomicBool>, u64)> {
-        if self.work.is_some() || self.reloading || !(1..=self.source.pages).contains(&page) {
+        if self.work.is_some()
+            || self.reloading
+            || self.suspended
+            || !(1..=self.source.pages).contains(&page)
+        {
             return None;
         }
         self.token = self.token.wrapping_add(1);
@@ -731,6 +749,27 @@ impl EditorApp {
         self.pdf_cancel = Arc::new(AtomicBool::new(false));
     }
 
+    /// Drain PDF/slide text workers and retained interpreters before vault
+    /// unmount. Joining and process waits run off the UI thread.
+    pub(super) fn close_project_readers(&mut self, ctx: &egui::Context) {
+        self.reset_pdf_requests();
+        let jobs = self.documents.close_readers();
+        if jobs.is_empty() {
+            return;
+        }
+        let work = self.vaults.work();
+        let wake = ctx.clone();
+        std::thread::spawn(move || {
+            for (source, text) in jobs {
+                if let Some(text) = text {
+                    let _ = text.join();
+                }
+                source.close_renderer();
+            }
+            drop(work);
+            wake.request_repaint();
+        });
+    }
     /// Render the active PDF and dispatch requested page turns/reloads after releasing its borrow.
     pub(super) fn pdf_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         let Some(doc) = self.documents.active().filter(|doc| doc.pdf().is_some()) else {
@@ -774,6 +813,9 @@ impl EditorApp {
         entry: PageEntry,
         ctx: &egui::Context,
     ) {
+        if self.vaults.locking() {
+            return;
+        }
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else {
             return;
         };
@@ -1033,6 +1075,41 @@ mod tests {
         )
         .unwrap();
         (PdfView::new(loaded), budget)
+    }
+    #[test]
+    fn suspended_pdf_views_cannot_restart_text_or_raster_workers() {
+        let (mut view, _budget) = fixture();
+        let ctx = egui::Context::default();
+        let paint = |view: &mut PdfView| {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    view.ui(
+                        ui,
+                        1,
+                        theme::Palette::default(),
+                        false,
+                        false,
+                        Display::Document { fullscreen: false },
+                    );
+                });
+            });
+        };
+        paint(&mut view);
+        let (source, task) = view.close_readers();
+        task.expect("Text worker did not start").join().unwrap();
+        source.close_renderer();
+        paint(&mut view);
+        assert!(view.next_page(128).is_none());
+        assert!(
+            view.close_readers().1.is_none(),
+            "Closing restarted the PDF text worker"
+        );
+        view.resume_readers();
+        paint(&mut view);
+        let (_, task) = view.close_readers();
+        task.expect("A refused lock must allow the reader to resume")
+            .join()
+            .unwrap();
     }
     #[test]
     fn rapid_navigation_coalesces_and_cached_back_navigation_stays_immediate() {

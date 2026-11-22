@@ -29,6 +29,7 @@ pub(super) struct Worker {
     pub output: Arc<Mutex<Snapshot>>,
     wake: mpsc::SyncSender<()>,
     cancel: Arc<AtomicBool>,
+    task: Option<std::thread::JoinHandle<()>>,
 }
 impl Drop for Worker {
     fn drop(&mut self) {
@@ -45,21 +46,30 @@ impl Worker {
             output: Arc::new(Mutex::new(snapshot)),
             wake,
             cancel: Arc::new(AtomicBool::new(false)),
+            task: None,
         }
     }
     pub fn new(source: Arc<pdf::Source>, ctx: egui::Context) -> Self {
         let (wake, receiver) = mpsc::sync_channel(1);
-        let worker = Self {
+        let mut worker = Self {
             request: Default::default(),
             output: Default::default(),
             wake,
             cancel: Arc::new(AtomicBool::new(false)),
+            task: None,
         };
         let request = worker.request.clone();
         let output = worker.output.clone();
         let cancel = worker.cancel.clone();
-        std::thread::spawn(move || run(source, ctx, request, output, cancel, receiver));
+        worker.task = Some(std::thread::spawn(move || {
+            run(source, ctx, request, output, cancel, receiver)
+        }));
         worker
+    }
+    pub fn stop(mut self) -> Option<std::thread::JoinHandle<()>> {
+        self.cancel.store(true, Ordering::Release);
+        let _ = self.wake.try_send(());
+        self.task.take()
     }
     pub fn request(&self, value: Request) {
         let mut request = self.request.lock().unwrap();

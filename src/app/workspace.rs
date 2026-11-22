@@ -360,7 +360,7 @@ impl EditorApp {
         self.reset_editor_contexts(retention);
         self.extensions.reset_project();
         self.workbench.reset_project();
-        self.terminal = None;
+        self.sessions.release_views(&mut self.terminal);
         self.session_context_reset();
         self.vaults.release_project();
         self.explorer_state.reset();

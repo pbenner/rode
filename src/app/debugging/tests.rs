@@ -301,3 +301,28 @@ fn closed_terminal_views_release_retained_debug_streams() {
     assert!(app.debugger.streams.is_empty());
     assert!(!alive.load(Ordering::Acquire));
 }
+
+#[test]
+fn encrypted_lock_stops_debug_terminal_streams_and_waits_for_existing_cleanup() {
+    let (mut app, ctx) = crate::app::vaults::tests::active_reply(true, "");
+    let (terminal, stream) = Terminal::stream(&ctx, "Debuggee".into(), |_| {});
+    app.add_terminal_view(terminal, "debug-view".into(), "Debuggee".into());
+    app.debugger
+        .streams
+        .insert(1, ("debug-view".into(), stream));
+    let pending = Arc::new(AtomicBool::new(true));
+    app.debugger.cleanups.push(pending.clone());
+    app.guarded(Action::LockEncrypted, &ctx);
+    assert!(app.vaults.locking());
+    assert!(app.terminal.is_none());
+    app.poll_vaults(&ctx);
+    assert!(!app.vaults.lock_sent_fixture());
+    pending.store(false, Ordering::Release);
+    let until = Instant::now() + Duration::from_secs(5);
+    while app.vaults.has_active() {
+        app.poll_vaults(&ctx);
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.documents.is_empty());
+}

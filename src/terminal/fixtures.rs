@@ -72,7 +72,14 @@ pub(super) fn process(
 impl Terminal {
     /// Native-only controls in layout tests, without starting a host service.
     pub(crate) fn fixture_native(ctx: &egui::Context, title: String) -> (Self, Stream) {
-        let (terminal, stream, received, _) = process(ctx, title, Protocol::framed(false));
+        Self::fixture_native_with_persistence(ctx, title, false)
+    }
+    pub(crate) fn fixture_native_with_persistence(
+        ctx: &egui::Context,
+        title: String,
+        persistent: bool,
+    ) -> (Self, Stream) {
+        let (terminal, stream, received, _) = process(ctx, title, Protocol::framed(persistent));
         std::thread::spawn(move || while received.recv().is_ok() {});
         (terminal, stream)
     }
