@@ -33,6 +33,20 @@ separate subdirectories named by a digest of the project path. Over SSH and on
 Slurm compute nodes, these paths belong to the home directory on the execution
 host, not the desktop.
 
+Both sandbox modes grant the project's temporary directory read-write
+automatically, including for read-only projects. No additional path grant is
+needed. Tools should use `TMPDIR`, `TMP` or `TEMP` to find this writable scratch
+space.
+
+[Encrypted-project mounts](encrypted-projects.md#requirements-and-storage) also
+use this root, under `vaults-HOST_HASH/VAULT_HASH/plain`. Their stable host-specific
+coordination directory keeps mount leases separate on cluster nodes sharing a
+home; it is not a disposable per-process temporary directory.
+The active decrypted project receives the normal project access grant, while
+its scratch directory remains writable. Neither mode shares the entire private
+temporary root by default: other projects' mounts and vault coordination files
+remain outside these grants.
+
 Desktop and helper processes, tools, agents and native terminals start with
 `umask 077`: ordinary newly created files default to `0600` and directories to
 `0700`. Existing files retain their permissions. Terminal setup restores these

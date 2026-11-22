@@ -19,11 +19,11 @@ Existing gocryptfs forward-mode storage using its standard `gocryptfs.conf` is s
 
 ## Lock and exit
 
-Use **Encryption / Lock… → Stop project tools & lock**, or **Project: Lock encrypted project**. Save or explicitly discard edits first. Stop terminal jobs with **Sessions → End**, including detached/shared persistent jobs, and persistent agents with **Agent chat → Running → End**. Locking stops RODE's nonpersistent agent, notebook kernels, builds and adapters, waits for file operations, and requests a normal unmount. It never force-unmounts or lazily detaches a filesystem.
+Use **Close & lock** in the top header, **File → Close project**, **Project: Close project** in the command palette, or the existing **Encryption / Lock… → Stop project tools & lock** controls. Save or explicitly discard edits first. Stop terminal jobs with **Sessions → End**, including detached/shared persistent jobs, and persistent agents with **Agent chat → Running → End**. Locking stops RODE's nonpersistent agent, notebook kernels, builds and adapters, waits for file operations, and requests a normal unmount. It never force-unmounts or lazily detaches a filesystem.
 
-Another RODE window, a running terminal/job, or a sandbox still referencing the decrypted filesystem prevents locking. A refused lock remains clearly **UNLOCKED**, keeps buffers available, and reports what must be stopped. Same-account mount namespaces are checked because unmounting one host path alone need not remove a sandbox's bind mount. Host restrictions that prevent this check can also prevent locking.
+Another RODE window, a running terminal/job, or a sandbox still referencing the decrypted filesystem prevents locking. A refused lock remains clearly **UNLOCKED**, keeps buffers available, and reports what must be stopped. RODE checks same-account processes' mount tables because unmounting one host path alone need not remove a sandbox's bind mount. Kernel mount IDs distinguish the host mount from bind mounts and namespace copies, including copies at the same path. Access to the protected `/proc/PID/ns/mnt` symlinks is unnecessary. A host that also denies mount-table access can still prevent verification; the error identifies the process that could not be checked.
 
-A successful lock closes the project's tabs and releases its previews. The last RODE window must lock successfully before normal exit; it cannot silently background an encrypted project with persistent jobs. Closing a view while another RODE window still holds the project releases only that view, leaving the other window responsible for locking. Lock before switching to another project/host or explicitly disconnecting SSH. Opening subfolders or changing the sandbox within the same encrypted mount retains the lease. Saved SSH profiles remain available.
+A successful lock closes the project's tabs and releases its previews, returning to Welcome. SSH remains connected when closing only the project. **Disconnect** runs the same guarded close and releases SSH only after verified unmount; a refused lock keeps the project and connection available. The last RODE window must lock successfully before normal exit; it cannot silently background an encrypted project with persistent jobs. Closing a view while another RODE window still holds the project releases only that view, leaving the other window responsible for locking. Lock before switching to another project/host. Opening subfolders or changing the sandbox within the same encrypted mount retains the lease. Saved SSH profiles remain available.
 
 Crashes, forced termination and network loss cannot guarantee locking: the host helper attempts an ordinary unmount, and leaves a busy filesystem serving its jobs rather than disrupting them. Its status must be checked on that host. Reconnect SSH, then explicitly unlock again to restore access; remote unsaved buffers remain available. Use **Lock existing mount** in the encrypted-project dialog to retry locking storage that remained open after an interruption. Outside RODE, `fusermount3 -u MOUNTPOINT` (or `fusermount -u`) performs a normal unmount after users of it stop.
 
@@ -31,7 +31,34 @@ Crashes, forced termination and network loss cannot guarantee locking: the host 
 
 Linux, gocryptfs and working FUSE access (`/dev/fuse` plus the host's mount permissions) are required where the data lives. Locking needs `fusermount3` or `fusermount`. A remote host uses RODE's matching native helper; encrypted-mount management itself does not require Python. RODE does not install filesystem tools or elevate privileges. A host without FUSE cannot use this feature; it must expose a user-managed decrypted filesystem through an independently configured workflow instead.
 
-RODE-managed plaintext mounts normally live under `/tmp/rode-vaults-UID/HASH/plain`, in owner-only directories. An explicit host-side `RODE_VAULT_DIR` replaces the `/tmp/rode-vaults-UID` coordination root; it must be absolute, owned by this user, owner-only and not a symlink. Every window and helper on that host must use the same value while mounts are in use. Changing it selects another coordination namespace. Their contents come from FUSE, not a disk copy. RODE coordinates its managed mount on one host; independent mounts or copies on other hosts are not tracked. Stable owner-only lock files coordinate windows; do not remove these runtime directories or locks while mounts are in use. The underlying empty mountpoint is inaccessible when unmounted, preventing late saves from writing plaintext into it. Passwords are masked, sent only over stdin, cleared after submission/cancel, and never stored in preferences, environment variables, command arguments or password files. Tool launch failures and password errors do not replace the current workspace.
+RODE-managed mounts use the existing [private temporary root](sandbox.md#private-temporary-storage)
+on the storage host: `~/.cache/rode/tmp/vaults-HOST_HASH/VAULT_HASH/plain`.
+The host hash separates cluster nodes that share a home directory; the vault hash
+identifies the canonical encrypted-storage path. The temporary root and
+coordination directories are owner-only. Unsafe directories or an unavailable
+home/hostname cause an error; RODE does not fall back to public `/tmp`.
+Their contents come from FUSE, not a plaintext disk copy.
+
+An explicit host-side `RODE_VAULT_DIR` replaces the `vaults-HOST_HASH` coordination
+root. It must be absolute, owned by this user, owner-only and not a symlink.
+Every window and helper on that host must use the same value while mounts are in
+use. Lock open encrypted projects before changing this location or updating an
+installation that uses a different mount location. Existing mounts are never
+moved or silently adopted from another coordination root. SSH helpers must
+advertise `private_vault_tmp` and `vault_mount_table_scan`; update the native
+helper together with the editor. Replacing an executable does not update an
+already running editor or encrypted-mount coordinator. Restart with the rebuilt
+editor/helper after closing the old mount. A mount opened by the former version
+can remain at `/tmp/rode-vaults-UID/VAULT_HASH/plain` until normally unmounted;
+reopening it with the current version uses the private location.
+
+Stable lock files coordinate windows; do not remove runtime directories or locks
+while mounts are in use. Independent mounts or copies on other hosts are not
+tracked. The underlying empty mountpoint is inaccessible when unmounted,
+preventing late saves from writing plaintext into it. Passwords are masked,
+sent only over stdin, cleared after submission/cancel, and never stored in
+preferences, environment variables, command arguments or password files.
+Tool launch failures and password errors do not replace the current workspace.
 
 This protects files stored inside the encrypted root. Preferences, paths, explicitly exported files elsewhere, external tool caches/history, memory and OS swap have their own storage policies. RODE-controlled Marp preview artifacts use RAM-backed scratch when available, or the encrypted root; PDF/image processing stays in memory. Configure external tools and sandbox grants according to your storage needs. Keep backups of encrypted storage including `gocryptfs.conf`; password/key recovery is managed by gocryptfs.
 

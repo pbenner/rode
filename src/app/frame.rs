@@ -97,21 +97,47 @@ impl EditorApp {
                     ui.spacing_mut().item_spacing.x = 4.;
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let open = if compact {
-                        IconButton::toolbar(Icon::Folder, "Open project…")
+                    let closing = self.workspace.project_open() || self.vaults.has_active();
+                    let (icon, label, command, probe, hint) = if closing {
+                        (
+                            Icon::Close,
+                            if self.vaults.has_active() {
+                                "Close & lock"
+                            } else {
+                                "Close project"
+                            },
+                            Command::CloseProject,
+                            "close-project",
+                            if self.vaults.has_active() {
+                                "Close this encrypted project and unmount it after checking unsaved changes"
+                            } else {
+                                "Close this project after checking unsaved changes"
+                            }.to_owned(),
+                        )
                     } else {
-                        IconButton::new(Icon::Folder, "Open project…")
+                        (
+                            Icon::Folder,
+                            "Open project…",
+                            Command::Folder,
+                            "open-project",
+                            format!(
+                                "Open a project folder · {}",
+                                self.command_hint(Command::Folder)
+                            ),
+                        )
                     };
-                    let open = ui
-                        .add_enabled(!self.foreign_modal(ctx), open)
-                        .on_hover_text(format!(
-                            "Open a project folder · {}",
-                            self.command_hint(Command::Folder)
-                        ));
-                    ui_probe::button(ui, "open-project", &open);
-                    if open.clicked() {
-                        keyboard::consume_activation(&open);
-                        self.execute_command(Command::Folder, ctx);
+                    let button = if compact {
+                        IconButton::toolbar(icon, label)
+                    } else {
+                        IconButton::new(icon, label)
+                    };
+                    let project = ui
+                        .add_enabled(!self.foreign_modal(ctx), button)
+                        .on_hover_text(hint);
+                    ui_probe::button(ui, probe, &project);
+                    if project.clicked() {
+                        keyboard::consume_activation(&project);
+                        self.execute_command(command, ctx);
                     }
                     if self
                         .workspace

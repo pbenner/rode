@@ -18,6 +18,29 @@ fn local(root: &str) -> Bookmark {
 }
 
 #[test]
+fn reopening_the_implicit_cwd_bookmark_is_an_explicit_project_selection() {
+    let (mut app, ctx) = app();
+    app.workspace
+        .activate_local_fallback("/cwd".into(), Default::default());
+    let bookmark = local("/cwd");
+    assert!(!app.bookmark_is_current(&bookmark));
+    app.new_file();
+    app.documents
+        .active_mut()
+        .unwrap()
+        .set_source("Keep the CWD edit".into());
+    app.reopen_bookmark(bookmark, &ctx);
+    assert!(matches!(app.pending.as_ref(), Some(Action::Bookmark(_))));
+    assert!(!app.workspace.preparing());
+    let (decision, _) = app.pending.presentation().unwrap();
+    app.cancel_guarded_decision(decision);
+    assert_eq!(app.documents.active().unwrap().text, "Keep the CWD edit");
+    app.workspace
+        .activate("/cwd".into(), None, Default::default(), Default::default());
+    assert!(app.bookmark_is_current(&local("/cwd")));
+}
+
+#[test]
 fn location_identity_distinguishes_hosts_and_preserves_policy_independent_deduplication() {
     let first = local("/projects/example");
     let mut changed = first.clone();

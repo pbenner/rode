@@ -174,7 +174,8 @@ impl EditorApp {
     }
 
     pub(in crate::app) fn bookmark_is_current(&self, bookmark: &Bookmark) -> bool {
-        self.project_ready()
+        self.workspace.project_open()
+            && self.project_ready()
             && self
                 .bookmark_candidate()
                 .is_some_and(|current| current.project.id() == bookmark.project.id())

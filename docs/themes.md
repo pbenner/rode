@@ -1,7 +1,7 @@
 # Themes
 
 New installations start with **Atelier Dark**. Saved theme choices and explicit
-`--theme` selections take precedence, including existing Phosphor preferences.
+`--theme` selections take precedence.
 
 Click **Theme: …** at the bottom right, or choose **View → Color theme**. Built-in themes cover the interface and terminal in dark and light appearances, with matching syntax colors when **Follow UI theme** is selected:
 
@@ -15,7 +15,7 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Bu
 | Atelier Dark | `atelier-dark` | Neutral graphite surfaces, mint accents, crisp white text and distinct semantic syntax; the initial default |
 | Atelier Light | `atelier-light` | Soft-white surfaces, deep sage-green accents, deep ink text and a complete light terminal palette |
 | Phosphor | `phosphor` | Original charcoal and soft green |
-| Carbon | `carbon` | Near-black, neutral panels, amber accents, teal keywords; inspired by the reference screenshot |
+| Carbon | `carbon` | Near-black surfaces, neutral panels, amber accents and teal keywords |
 | Carbon Edge | `carbon-edge` | Carbon’s interface, syntax and terminal colours with amber cut-corner frames and static glow |
 | Code Dark | `code-dark` | Neutral charcoal, light gray text and blue accents; inspired by VS Code's classic dark theme |
 | Matrix | `matrix` | Deep green-black, bright green controls, mint functions and pale green types |
@@ -77,22 +77,22 @@ Empty input fields show examples and default behaviour in the theme's muted text
 The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber**, and the other built-in/custom choices. Changes apply immediately without restarting the session. An independently selected syntax theme keeps its code colors. UI selections are flushed to local preferences as soon as they change and restored on startup; closing the application is not required to save them. On Linux the preference file is `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron`.
 
 ```sh
-./target/release/rode . --theme sumie-light --syntax-theme ui
-./target/release/rode . --theme sumie-dark --syntax-theme ui
-./target/release/rode . --theme synthwave84 --syntax-theme ui
-./target/release/rode . --theme synthwave84-neon --syntax-theme ui
-./target/release/rode . --theme atelier-dark
-./target/release/rode . --theme atelier-light
-./target/release/rode . --theme carbon
-./target/release/rode . --theme carbon-edge
-./target/release/rode . --theme code-dark
-./target/release/rode . --theme afterglow
-./target/release/rode . --theme knight-rider
-./target/release/rode . --theme hologram
-./target/release/rode . --theme telemetry
-./target/release/rode . --theme studio
-./target/release/rode . --theme studio-neutral
-./target/release/rode . --theme studio-hacker
+rode . --theme sumie-light --syntax-theme ui
+rode . --theme sumie-dark --syntax-theme ui
+rode . --theme synthwave84 --syntax-theme ui
+rode . --theme synthwave84-neon --syntax-theme ui
+rode . --theme atelier-dark
+rode . --theme atelier-light
+rode . --theme carbon
+rode . --theme carbon-edge
+rode . --theme code-dark
+rode . --theme afterglow
+rode . --theme knight-rider
+rode . --theme hologram
+rode . --theme telemetry
+rode . --theme studio
+rode . --theme studio-neutral
+rode . --theme studio-hacker
 ```
 
 **SynthWave ’84** adapts [Robb Owen’s original theme](https://github.com/robb0wen/synthwave-vscode)
@@ -135,15 +135,12 @@ native brush icons and shared controls. Select **Theme: Samurai**, or launch
 `rode --theme samurai --syntax-theme ui` for matching code colors. Custom variants
 can set `"artwork": "none"` or `"icons": "outline"` independently.
 
-The original PNGs and exact generation prompts are stored together in
-`assets/themes/`: `samurai-warrior`, `samurai-kabuto`, `samurai-castle` and
-`samurai-tsuba`, each with a `.png` and `.prompt.txt` file. The unused sword guard
-is retained as an archived original and is no longer embedded or displayed. They
-were generated with the built-in imagegen tool, with no external reference images supplied.
+The original PNGs and generation prompts for `samurai-warrior`,
+`samurai-kabuto` and `samurai-castle` are stored together in `assets/themes/`,
+each with a `.png` and `.prompt.txt` file. They were generated with the built-in
+imagegen tool, with no external reference images supplied.
 
-| Samurai editor | Samurai welcome |
-| --- | --- |
-| ![Samurai editor with silver-gray warrior and helmet artwork](../assets/samurai-editor.png) | ![Samurai welcome with castle and armor artwork](../assets/samurai-welcome.png) |
+![Current Samurai editor with silver-gray warrior artwork](../assets/samurai-editor.png)
 
 **Sumi-e Light** and **Sumi-e Dark** are an original Japanese fine-art-inspired
 family. Light uses warm washi-paper surfaces, dark ink and vermilion emphasis.
@@ -176,11 +173,7 @@ Switching themes updates the icons in menus, toolbars and all editor windows.
 Custom variants can set `"artwork": "none"` and `"icons": "outline"` independently;
 see the [theme format](../themes/README.md).
 
-| Sumi-e Light | Sumi-e Dark |
-| --- | --- |
-| ![Sumi-e Light with bamboo and ink icons](../assets/sumie-expanded-light.png) | ![Sumi-e Dark with bamboo and ink icons](../assets/sumie-expanded-dark.png) |
-
-![Sumi-e welcome screen with plum blossom](../assets/sumie-expanded-welcome.png)
+![Current Sumi-e Light editor with pine-and-crane artwork and brush icons](../assets/sumie-expanded-light.png)
 
 **Atelier Dark** and **Atelier Light** form a coordinated everyday-work family.
 Both share 30-point controls, restrained corner radii, Inter UI labels, quiet
@@ -204,8 +197,6 @@ Native RODE captures of the shared component styling in a demo workspace:
 | --- | --- |
 | ![Atelier Dark native editor](../assets/atelier-dark.png) | ![Atelier Light native editor](../assets/atelier-light.png) |
 
-![Command palette with aligned labels and shortcuts](../assets/atelier-command-palette.png)
-
 Studio is designed for everyday work: graphite surface layers, quiet borders, proportional interface labels and a restrained blue-violet accent. Shared component settings coordinate control heights, corner radii, card padding and heading sizes. Control outlines use a dedicated color, separate from quiet panel dividers. Keyboard focus uses a stronger outline on inputs, chat composers and buttons, including filled primary actions. Secondary text stays readable on hover, pressed and open surfaces; disabled controls are subdued, and soft shadows distinguish menus and dialogs. Code and terminal fonts keep their separate size preference. Select **Follow UI theme** for its matching syntax palette. Atelier Dark is the initial default; Studio and Phosphor remain available.
 
 Studio Neutral inherits Studio’s rounded controls, spacing, typography and focus treatment. Neutral charcoal surfaces and silver accents replace the blue-violet palette, with sage strings, sand keywords and subdued terminal colors. Select **Follow UI theme** to use its matching code colors; independently selected syntax themes retain their own colors. All Studio variants remain available.
@@ -221,5 +212,3 @@ Custom themes are JSON files in `${XDG_CONFIG_HOME:-~/.config}/rode/themes/`, lo
 **View → Interface scale** offers percentage presets and 5% Smaller/Larger actions for the whole interface, separately from **Editor font size**. Try 75% or 50% if the GUI looks too large on another display; [interface sizing](editing.md) explains monitor scaling, reset and keyboard access.
 
 Multiple windows merge independent settings changes without reverting each other's preferences on exit. See [configuration and multiple windows](configuration.md) for paths, save behavior, and reload rules.
-
-![Carbon theme in the native editor](../assets/rode-tour.png)

@@ -22,6 +22,7 @@ pub(in crate::app) enum Action {
     Remote(Box<Profile>),
     Reconnect(Box<Profile>),
     Disconnect,
+    CloseProject,
     CloseTab(u64),
     Quit,
     LockEncrypted,
@@ -71,7 +72,11 @@ impl EditorApp {
             }
             Action::Disconnect => {
                 valid &= self.workspace.as_ref().is_some_and(|w| w.remote.is_some());
-                vaults::Transition::Connection
+                vaults::Transition::Close
+            }
+            Action::CloseProject => {
+                valid &= self.workspace.project_open() || self.vaults.has_active();
+                vaults::Transition::Close
             }
             Action::Project { path, remote, .. } => vaults::Transition::Project(
                 path,
@@ -105,7 +110,7 @@ impl EditorApp {
             valid &= self.documents.iter().any(|doc| doc.id == id);
             self.documents.notebook_pending(id)
         } else {
-            (replacing || matches!(action, Action::Disconnect))
+            (replacing || matches!(action, Action::Disconnect | Action::CloseProject))
                 && (self.runtime_work_pending() || self.agent_installation_pending())
         };
         (
@@ -141,6 +146,7 @@ impl EditorApp {
             action,
             Action::Quit
                 | Action::Disconnect
+                | Action::CloseProject
                 | Action::Remote(_)
                 | Action::Reconnect(_)
                 | Action::LockEncrypted
@@ -273,7 +279,8 @@ impl EditorApp {
                 self.connect(*profile, ctx, resume);
             }
             Action::Reconnect(profile) => self.connect(*profile, ctx, true),
-            Action::Disconnect => self.detach_ssh(documents::Retention::Discard, ctx),
+            Action::Disconnect => self.close_project(workspace::CloseTarget::Disconnect, ctx),
+            Action::CloseProject => self.close_project(workspace::CloseTarget::Welcome, ctx),
             Action::CloseTab(id) => {
                 let owner = self.documents.owner(id);
                 if self.documents.notebook_pending(id) {
@@ -290,12 +297,12 @@ impl EditorApp {
                     self.clear_project(documents::Retention::Discard, workspace::LeaveReason::ProjectChanged);
                     self.request_exit(ctx);
                 }
-                vaults::QuitPolicy::Lock => self.lock_encrypted(true, ctx),
+                vaults::QuitPolicy::Lock => self.lock_encrypted(vaults::AfterLock::Quit, ctx),
                 vaults::QuitPolicy::RecoveryRequired => self.notify(
                     "Finish encrypted-project unlocking or locking before exiting. Use Open encrypted project → Lock existing mount to resolve an unlocked mount.", true),
                 vaults::QuitPolicy::Close => self.request_exit(ctx),
             },
-            Action::LockEncrypted => self.lock_encrypted(false, ctx),
+            Action::LockEncrypted => self.lock_encrypted(vaults::AfterLock::Project, ctx),
             Action::Bookmark(bookmark) => self.open_bookmark(*bookmark, ctx),
             Action::DisableTransfers => self.set_extension(crate::extensions::Feature::Transfers.id(), false),
         }

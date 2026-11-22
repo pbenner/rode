@@ -94,7 +94,7 @@ Policy comparison ignores RODE's temporary native-helper location, so reopening 
 
 Permission requests wait while detached; persistence never approves them or widens the captured filesystem/network policy. **Stop** interrupts a turn. **Detach** leaves an idle agent running only with **On**. **New chat** releases the current view and returns persistence to **Auto**: an old **On** session remains in Running, while an old **Auto** session ends after its work finishes. Closing only the chat panel hides the view and continues work with every mode.
 
-Live sessions are held by `rode-sessiond`, alongside persistent terminals, without tmux/screen or a remote GUI. Cargo installation includes this helper; SSH uses the verified [remote helper](terminals.md#remote-helper-and-packaging). The service exits after its last agent/PTY process has stopped. It retains at most 16 agent controllers per service generation and the same bounded recent transcript as the UI, in memory only. These live sessions do not survive host shutdown; **History** separately browses conversations saved by the backend. User-managed model servers and authentication must remain available. Encrypted projects must have their jobs stopped before they can lock; use Running → End for persistent agents.
+Live sessions are held by `rode-sessiond`, alongside persistent terminals, without tmux/screen or a remote GUI. Cargo installation includes this helper; SSH uses the verified [remote helper](terminals.md#remote-helper-and-packaging). The service exits after no terminal, agent, notebook/debugger runtime or SSH tunnel remains. It retains at most 16 agent controllers and the same bounded recent transcript as the UI, in memory only. These live sessions do not survive host shutdown; **History** separately browses conversations saved by the backend. User-managed model servers and authentication must remain available. Encrypted projects must have their jobs stopped before they can lock; use Running → End for persistent agents.
 
 ## Model and access controls
 
@@ -135,27 +135,46 @@ Codex changes apply to the next turn while retaining the conversation. Returning
 
 ## Response personalities
 
-Use **Tone**, beside **New chat**, to choose **Default**, **Jackson Lamb** or **Panne**. Default uses the agent's own configured tone.
+Use **Tone**, beside **New chat**, to choose:
 
-**Jackson Lamb** is inspired by the [Slow Horses boss](https://www.apple.com/tv-pr/originals/slow-horses/) and [Mick Herron's description of him](https://www.gpb.org/news/2023/11/29/gary-oldman-had-free-rein-in-spy-thriller-slow-horses-now-back-for-season-3): a competent but abrasive, cantankerous veteran, speaking in clipped British English with dry understatement and dark humour. The selected style appears as **Lamb** in the header.
+| Tone | Requested response style |
+| --- | --- |
+| Default | The backend's own configured tone |
+| Jackson Lamb (**Lamb** in the header) | Clipped British English, dry humour and abrasive criticism of concrete problems |
+| Panne | Curt, openly dissatisfied criticism of decisions and deliverables, without praise or reassuring conclusions |
 
-The Lamb hint supplies original tone examples and concrete drafting checks: lead with the finding, change or uncertainty; remove routine process narration and polite padding; use short, concrete sentences; and keep humour tied to an actual defect. It asks the agent to review progress updates and final replies with any sarcastic opening and closing removed, then rewrite bland remaining prose. Routine success needs no joke. Barbs concern the problem, without personal abuse, impersonation or copied dialogue.
+The choice is saved per host/project and applies to the next message, including
+follow-ups in an existing or restored chat. Stop an active turn before changing
+it. Selecting a tone starts no process, sends no message and preserves the
+conversation. Returning to Default clears RODE's tone guidance without starting
+a new chat.
 
-**Panne** speaks with open dissatisfaction towards you: curt, impatient, scathing and almost insulting about your reasoning, decisions and standards. It avoids praise, appreciation, reassurance and encouraging conclusions, including on routine success. The hint includes cutting examples and drafting checks to keep that irritation throughout progress updates and final replies. It challenges whether the work is sufficiently thought through, fast enough and competitive. Its never-good-enough stance must stay honest: unsupported claims of inevitable failure become sceptical questions or explicitly subjective reservations. Verified successes and passed checks must still be reported accurately. Criticism concerns choices and deliverables, not personal worth or intelligence. Rhetorical challenges do not require answers, add review work or block delivery. Like the other tones, Panne changes response wording only; code, comments, documentation and the actual task retain their normal standards.
+The guidance covers progress updates, explanations and final replies. It requires
+accurate findings and normal-quality work; code, comments, documentation and
+explicit output formats keep their usual style. Tone does not change the model,
+executable, reasoning effort, tools, permissions, sandbox or project environment.
+It is model guidance, so the resulting voice varies by backend and model.
 
-The choice is saved per host/project and applies to the next message, including in an existing or restored chat. Codex and Codex local-model mode receive it as application instructions. Claude and other ACP agents currently receive a best-effort user-text reminder; RODE does not yet negotiate optional session-level system-prompt support. Choosing a style starts no process, sends no message and does not discard conversation context. Stop an active turn before changing it.
+Codex and Codex local-model mode receive the built-in style through
+`turn/start.additionalContext`, using the stable `rode_response_personality`
+application source. Claude and other ACP agents receive a separate user-text
+reminder; RODE does not negotiate ACP session-level system prompts. ACP delivery
+therefore remains subject to that agent's instruction priority. Only built-in
+RODE hints enter application context; tasks, files and attachments retain their
+ordinary input roles.
 
-For native agents, Rode compares the selected tone with the setting acknowledged by the host. New messages wait while a settings change is pending. If the host retains another tone, a **Tone not applied** message names both settings and holds Send/Queue; waiting host-owned prompts are paused without stopping an active turn. Your selection, draft and queued work remain intact. **Use … tone** explicitly accepts the host's reported setting; otherwise update or restart the host helper before starting a new agent session. Existing jobs are never restarted automatically. This check becomes available after a host reply and does not undo an already-submitted initial turn. It verifies the configured tone, not whether every model response follows the requested voice.
+New messages wait for host settings acknowledgement. If the host reports another
+tone, **Tone not applied** names both choices and holds Send/Queue. Your draft and
+queued work remain intact; waiting prompts pause without stopping an active turn.
+Choose **Use … tone** to accept the host's setting, or update/restart the matching
+helper and start a new agent session. Existing work is not restarted automatically.
+This checks the acknowledged setting, not the wording of every model response.
 
-RODE sends the selected response style with **every message**, including follow-ups and resumed chats, alongside the unchanged user task. For Codex, `turn/start.additionalContext` carries the built-in style under the stable `rode_response_personality` source with `kind: "application"`. The runtime delivers that context as developer instructions, rather than burying it in ordinary user text beneath the backend's own voice. The prompt applies until another tone is selected, including when the runtime deduplicates unchanged context. Switching styles or returning to Default updates that same source. RODE leaves the backend's configured personality and base instructions intact. ACP uses a separate user-text block and remains subject to that agent's instruction precedence.
-
-ACP's optional [client system-prompt capability](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/rfds/client-system-prompt.mdx) provides stronger delivery for supporting agents. The tested Claude adapter, `claude-agent-acp` 0.100.0, advertises this capability, but RODE currently ignores it. Its prompt fallback therefore does not provide the same instruction priority as native Codex. A future integration must negotiate append support and handle session creation, restoration, tone changes and Default reset together: some backends retain a session's system prompt until compaction, so supplying it only at startup would leave later tone changes incomplete.
-
-The style explicitly requests the selected voice throughout progress updates, explanations and the final answer, rather than only in the first reply or opening line. It does not change the executable, model, reasoning effort, tools, approval settings, sandbox or project environment. Only RODE's built-in prompts enter trusted application context; task text, project files and attachments keep their ordinary input roles. The hint asks for normal task-appropriate code, comments, documentation and other artifacts; only explanatory chat replies should adopt the voice unless explicitly requested otherwise. Explicit output formats and user instructions take precedence. There is no second model call or response-rewriting service.
-
-This is model guidance, so delivery varies by agent/model; backend instructions can constrain the voice, and prompting cannot guarantee identical model decisions apart from wording. Execution restrictions continue to be enforced independently. Returning to Default explicitly clears earlier RODE tone preferences, without creating a new chat. Recognized style hints are hidden in RODE's displayed history, although the backend may retain them in its own saved conversation. No transcript or custom system-prompt file is added to the project.
-
-The agent core keeps one built-in prompt per personality, edited directly during pre-release development without version numbers or historical snapshots. History cleanup recognizes the RODE style envelope independently of its wording, keeping generated hints out of titles, previews, restored messages and prompt recall. The native agent host generates the hint; rebuild/update the host service together with the editor when prompt wording changes. Transport tests verify that the current hint reaches each provider on consecutive turns and after restore; judging the resulting voice requires real model replies.
+Style hints are hidden from RODE's displayed history, titles and prompt recall,
+although the backend may retain them in its own saved conversation. No custom
+prompt file is written to the project and no second model call rewrites replies.
+The native host owns the built-in prompts; update it together with the editor
+when their wording changes.
 
 ## Chat history
 

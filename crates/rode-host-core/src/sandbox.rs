@@ -694,6 +694,50 @@ mod private_tmp_tests {
     }
 
     #[test]
+    fn nested_private_projects_keep_scratch_writable_without_sharing_other_vaults() {
+        let home = private_home();
+        let temporary = crate::private_tmp::root(home.path()).unwrap();
+        let vault = temporary.join("vaults-fixture/storage");
+        let project = vault.join("plain");
+        std::fs::create_dir_all(&project).unwrap();
+        let scratch = crate::private_tmp::project(home.path(), &project)
+            .unwrap()
+            .0;
+        for read_only in [false, true] {
+            let args = arguments(
+                Path::new("bwrap"),
+                &project,
+                home.path(),
+                &Options {
+                    enabled: true,
+                    project_read_only: read_only,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let binding = |flag: &str, path: &Path| {
+                args.windows(3).any(|args| {
+                    args[0] == flag && Path::new(&args[1]) == path && args[1] == args[2]
+                })
+            };
+            assert!(binding(
+                if read_only { "--ro-bind" } else { "--bind" },
+                &project
+            ));
+            assert!(binding("--bind", &scratch));
+            for private in [&temporary, &vault] {
+                assert!(!binding("--bind", private));
+                assert!(!binding("--ro-bind", private));
+            }
+            for name in crate::private_tmp::VARIABLES {
+                assert!(args.windows(3).any(|args| {
+                    args[0] == "--setenv" && args[1] == name && Path::new(&args[2]) == scratch
+                }));
+            }
+        }
+    }
+
+    #[test]
     fn normal_mode_and_unavailable_sandboxes_use_the_same_private_root() {
         let normal = Plan::default();
         let fallback = Plan {

@@ -42,16 +42,46 @@ if __name__ == "__main__":
 PLOT = """%matplotlib inline
 import matplotlib.pyplot as plt
 from analysis import training_curve
-
 baseline, improved = training_curve()
 plt.style.use("dark_background")
-fig, ax = plt.subplots(figsize=(7.2, 2.8), dpi=100)
+fig, ax = plt.subplots(figsize=(7.2, 2.4), dpi=100)
 ax.plot(baseline, color="#dcad42", label="Baseline")
 ax.plot(improved, color="#35c9aa", label="Improved schedule")
 ax.set(xlabel="Training step", ylabel="Loss", title="Compare experiment runs")
 ax.legend(frameon=False)
 fig.tight_layout()
 plt.show()
+"""
+
+MARKDOWN = r"""# Signal Lab
+
+Compare two learning schedules in one reproducible experiment.
+
+## A model for the experiment
+
+The predictions are $\hat{y}_i = f_\theta(x_i)$. Minimize the mean squared error:
+
+$$
+\mathcal{L}(\theta) = \frac{1}{N} \sum_{i=1}^{N} (y_i - \hat{y}_i)^2
+$$
+
+| Schedule | Learning rate | Expected behavior |
+| --- | --- | --- |
+| Baseline | 0.05 | Gradual convergence |
+| Improved | 0.08 | Faster convergence |
+
+## Keep the work together
+
+- Edit `analysis.py` with native syntax highlighting and Git change previews.
+- Run `results.ipynb` to compare curves and inspect the plot.
+- Keep longer jobs in an opt-in persistent terminal.
+
+> Synthetic experiment data. Equations render locally with the bundled math font.
+"""
+
+NOTEBOOK_INTRO = r"""## Compare experiment runs
+
+Two learning schedules with exponential decay: $L_t = e^{-\eta t}$.
 """
 
 
@@ -103,12 +133,12 @@ def main():
         # Publish from its actual directory rather than the requested path.
         captures = ui.ARTIFACTS
         (project / "analysis.py").write_text(SOURCE)
-        (project / "README.md").write_text(
-            "# Signal Lab\n\nA synthetic experiment for the RODE feature tour.\n\n"
-            "Edit analysis.py, compare results.ipynb, and keep jobs in a persistent terminal.\n"
-        )
+        (project / "README.md").write_text(MARKDOWN)
         (project / "data").mkdir()
         (project / "data/README.txt").write_text("Synthetic data only.\n")
+        vaults = project / "encrypted-projects"
+        for name in ("Archive", "Experiments", "Notes"):
+            (vaults / name).mkdir(parents=True)
         (project / "pyproject.toml").write_text(
             '[project]\nname = "signal-lab"\nversion = "0.1.0"\nrequires-python = ">=3.11"\n'
         )
@@ -132,13 +162,19 @@ def main():
                     },
                     "cells": [
                         {
+                            "id": "experiment-notes",
+                            "cell_type": "markdown",
+                            "metadata": {},
+                            "source": NOTEBOOK_INTRO.splitlines(True),
+                        },
+                        {
                             "id": "experiment",
                             "cell_type": "code",
                             "metadata": {},
                             "source": PLOT.splitlines(True),
                             "execution_count": None,
                             "outputs": [],
-                        }
+                        },
                     ],
                 },
                 indent=2,
@@ -263,6 +299,15 @@ def main():
             )
             return json.loads(reply).get("data", [])
 
+        def open_current_project(native):
+            """Explicitly open the prepared CWD through its native folder picker."""
+            native.click("open-project")
+            native.control("project-dialog-ready", focused=True)
+            native.copy("project-dialog-path", str(project))
+            native.click("project-dialog-open")
+            native.absent("project-dialog-path")
+            native.control("close-project")
+
         @contextmanager
         def editor(args, env, name):
             """Own one demo process/window, capturing failures and reaping only that process on every exit path."""
@@ -270,6 +315,7 @@ def main():
                 state_path = base / f"{name}-ui-state.json"
                 process = subprocess.Popen(
                     [str(binary), *args, "--theme", "atelier-dark", "--syntax-theme", "ui"],
+                    cwd=project,
                     env=dict(env, RODE_UI_TEST_STATE=str(state_path)),
                     stdout=log,
                     stderr=log,
@@ -300,7 +346,18 @@ def main():
                     ui.stop_process(process)
 
         try:
-            with editor([str(project)], environment, "local") as native:
+            with editor([], environment, "local") as native:
+                if not any(
+                    button["name"] == "welcome-screen" for button in native.layout()["buttons"]
+                ):
+                    native.click("activity:Projects")
+                native.control("welcome-screen")
+                native.absent("pane-Explorer")
+                native.control("open-project")
+                capture(native, "00-welcome")
+                # Explicitly opening the startup CWD changes the project intent,
+                # even though its canonical path stays the same.
+                open_current_project(native)
                 native.open_file("README.md")
                 native.open_file("analysis.py")
                 native.control("git-change-modified:4")
@@ -308,7 +365,7 @@ def main():
                 native.control("activity:Project tools")
                 native.control("workspace-explorer")
                 native.control("status-connection")
-                native.control("open-project")
+                native.control("close-project")
                 native.absent("workspace-tab:Chat")
                 native.absent("workspace-code")
                 capture(native, "01-editor")
@@ -322,6 +379,10 @@ def main():
                 native.click("activity:Connections")
                 native.control("saved-connection-0")
                 native.control("tunnel-saved-load:compute-return")
+                native.control("connections-manage-tunnels")
+                native.click("bookmark-project")
+                native.control("project-bookmarked")
+                native.dismiss_notice()
                 native.control("workspace-sidebar")
                 assert native.layout()["project"]["root"] == str(project)
                 capture(native, "03-connections")
@@ -354,7 +415,7 @@ def main():
                     lambda state: (
                         (current := state.get("notebook")) is not None
                         and not current["busy"]
-                        and current["cells"][0]["execution_count"] is not None
+                        and current["cells"][1]["execution_count"] is not None
                     ),
                     "Notebook execution did not finish",
                     timeout=45,
@@ -367,14 +428,42 @@ def main():
 
                 def plot_saved():
                     """Observe the acknowledged save; never resubmit Save while waiting for output."""
-                    outputs = json.loads(notebook.read_text())["cells"][0]["outputs"]
+                    outputs = json.loads(notebook.read_text())["cells"][1]["outputs"]
                     errors = [output for output in outputs if output["output_type"] == "error"]
                     if errors:
                         raise RuntimeError(f"Notebook execution failed: {errors}")
                     return any("image/png" in output.get("data", {}) for output in outputs)
 
                 wait_for(plot_saved, "The real notebook kernel did not return a plot", timeout=45)
+                native.control("markdown-math-inline")
                 capture(native, "07-notebook")
+                native.open_file("README.md")
+                native.command("Markdown: Toggle preview")
+                native.control("markdown-preview")
+                native.control("markdown-math-inline")
+                native.control("markdown-math-display")
+                capture(native, "07-markdown-math")
+                if not any(
+                    button["name"] == "pane-Explorer" for button in native.layout()["buttons"]
+                ):
+                    native.click("workspace-explorer")
+                native.click("explorer-row:" + str(vaults), mouse_button=3)
+                native.click("explorer-open-encrypted")
+                native.value("vault-folder-value", str(vaults))
+                native.click("vault-browse")
+                native.value("vault-picker-directory", str(vaults))
+                chosen = vaults / "Experiments"
+                native.click("file-picker-row:" + hashlib.sha256(str(chosen).encode()).hexdigest())
+                native.value("file-picker-selected", str(chosen))
+                capture(native, "08-encrypted-browser")
+                native.click("vault-picker-select")
+                native.value("vault-folder-value", str(chosen))
+                native.click("vault-create")
+                native.control("vault-confirmation")
+                capture(native, "08-encrypted")
+                native.click("vault-cancel")
+                assert not (chosen / "gocryptfs.conf").exists(), "Demo created encrypted storage"
+                native.click("workspace-explorer")
                 native.command("Agent: Chat")
                 native.click("agent-settings")
                 native.click("agent-codex-executable")
@@ -423,6 +512,31 @@ def main():
                 native.control("git-peek-diff")
                 capture(native, "10-git")
                 native.click("git-peek-close")
+                native.click("source-editor")
+                ui.key("End", ("Control_L",))
+                ui.text("\n# Unsaved demonstration note; safe to discard.\n")
+                native.control("source-editor-modified", focused=True)
+                native.click("close-project")
+                native.control("guard-discard")
+                capture(native, "10-close-project")
+                native.click("guard-discard")
+                native.control("welcome-screen")
+                native.control("open-project")
+                native.absent("close-project")
+                native.layout(
+                    lambda state: (
+                        not any(
+                            button["name"].startswith("editor-tab:") for button in state["buttons"]
+                        )
+                    ),
+                    "Project close did not remove every file tab",
+                )
+                assert (project / "analysis.py").read_text() == SOURCE.replace(
+                    "learning_rate=0.04", "learning_rate=0.05"
+                )
+                capture(native, "10-project-closed")
+                open_current_project(native)
+                native.open_file("analysis.py")
                 native.click("source-editor")
                 ui.key("Home", ("Control_L",))
                 native.control("source-editor-at-start", focused=True)

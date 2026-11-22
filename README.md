@@ -17,9 +17,9 @@ Also included:
 - [Multi-language highlighting and tools](docs/languages.md), [Git branches/worktrees, project environments and tasks](docs/project-tools.md), [Python/native debugging](docs/debugger.md), and [extensions](docs/extensions.md).
 - On-demand [CPU/GPU host monitoring](docs/project-tools.md#host-monitor).
 
-[![RODE feature tour: activity-bar navigation, native editing, SSH, notebooks, agent edit undo and selected light, dark and artistic themes](assets/rode-tour.gif)](assets/rode-tour.mp4)
+[![RODE feature tour: welcome screen, project navigation, SSH, Markdown and notebook maths, encrypted-folder browsing, agent edit undo, guarded project closing and selected themes](assets/rode-tour.gif)](assets/rode-tour.mp4)
 
-52-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Shows the current activity-bar navigation, **Project tools**, the **Connections** library and **Undo last edits**, plus **Atelier Light**, **Atelier Dark**, **Sumi-e Light**, **Samurai**, and **SynthWave ’84**. Native captures use synthetic profiles, a real notebook kernel and loopback SSH in normal mode; sandbox controls are shown without enforcement. A labelled offline agent fixture makes a real file edit and undoes it without model inference. The Slurm scene requests no allocation.
+71-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Shows the welcome screen, activity-bar navigation, **Project tools**, saved projects in **Connections**, native Markdown/notebook equations, encrypted-folder browsing, **Undo last edits** and guarded **Close project**, plus **Atelier Light**, **Atelier Dark**, **Sumi-e Light**, **Samurai**, and **SynthWave ’84**. Native captures use synthetic profiles, a real notebook kernel and loopback SSH in normal mode; sandbox controls are shown without enforcement. Encrypted-project scenes show storage selection and setup without creating or unlocking a vault. A labelled offline agent fixture makes a real file edit and undoes it without model inference. The Slurm scene requests no allocation.
 
 ```sh
 cargo xtask install
@@ -40,10 +40,9 @@ editor window returns its tabs and unsaved edits to the main window. These windo
 share one application process and project; chat, terminals and project tools keep
 their existing location.
 
-Bookmark the current local or SSH project with **Bookmark current project** under
-**Saved projects** in the **Connections** sidebar, or the Explorer header's
-**bookmark icon**. **Saved projects**
-reopens a project with one click; right-click an entry to rename or remove it.
+Bookmark the current local or SSH project with the small **bookmark icon** at the
+right of **Saved projects** in the **Connections** sidebar. Click a saved project
+to reopen it; right-click an entry to rename or remove it.
 This bundled **Project bookmarks** extension can be disabled in **View → Extensions**.
 
 For a coordinated light/dark interface, choose **Atelier Light** or **Atelier Dark**
@@ -53,9 +52,22 @@ see [themes](docs/themes.md).
 Manage saved SSH connections in the **Connections** sidebar. Right-click a profile
 row to rename, edit or remove it; drag rows to save your preferred order.
 
-Files normally use their containing folder as the workspace. With sandbox defaults enabled, a file directly in your home directory opens in **File mode · Normal mode** instead: no project or project tools are started, and your sandbox preferences stay unchanged. Explicit `--sandbox` requests and saved folder policies still apply. See [file startup](docs/getting-started.md#run).
+Launching `rode` without a path opens the current working directory in **Normal** mode and shows Welcome with Explorer hidden. Saved sandbox settings are retained; use `--sandbox` to request isolation explicitly. A file argument normally uses its containing folder as the workspace. If global sandbox defaults reject that inferred folder, RODE opens just the file in **File mode**. Explicit `--sandbox` requests and saved folder policies still apply. See [startup behavior](docs/getting-started.md#run).
 
-Linux is the validated platform. Build with Rust 1.93+ and the native build prerequisites; the source installer builds the editor and installs a static host/session helper beside it. RODE discovers that helper automatically, including on remote hosts with older glibc. Remote access requires an SSH server and a POSIX shell on the remote host; the desktop uses embedded `russh` by default. RODE uses a verified native Rust helper for SSH host operations; Python is not required for ordinary editing, terminals or sandbox enforcement. Python/Jupyter features retain their own dependencies. See [remote prerequisites](docs/remote.md#host-service-backends) and [static helper setup](docs/terminals.md#remote-helper-and-packaging); no tmux/screen is required. Python checks use `uvx ruff` by default. The bundled pure-Rust Hayro reader provides PDF rendering and text extraction without installing PDF tools. Native [Word previews](docs/word.md) and [PowerPoint previews](docs/powerpoint.md) also work without Office, LibreOffice or NPM.
+Linux is the validated platform. Source installation requires Rust 1.93+ and the
+[build prerequisites](docs/getting-started.md). The installer builds the editor
+and a static host/session helper, which RODE discovers automatically for SSH,
+including on remote hosts with older glibc.
+
+Remote projects require a Linux SSH server and a POSIX shell on the host. The
+desktop uses embedded `russh` by default. Ordinary editing, terminals and sandbox
+enforcement need no Python or tmux/screen. See [remote prerequisites](docs/remote.md#host-service-backends)
+and [helper setup](docs/terminals.md#remote-helper-and-packaging).
+
+Python/Jupyter features have their own dependencies; Python checks use `uvx ruff`
+by default. PDF rendering and text extraction are bundled through pure-Rust
+Hayro. Native [Word](docs/word.md) and [PowerPoint](docs/powerpoint.md) previews
+also work without Office, LibreOffice or npm.
 
 Debian/Ubuntu packages are built for release version tags or manually through **Actions → Package Debian → Run workflow**. Build locally with `scripts/build-deb.sh`; see [packaging and installation](docs/packaging.md).
 

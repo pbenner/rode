@@ -13,7 +13,7 @@ rode /path/to/project
 rode /path/to/project/main.py
 ```
 
-A directory opens as a project; launching `rode` without a path uses the current working directory. The window starts on Welcome with Explorer hidden. **Projects**, **Explorer** and **Project tools** remain available in the left activity bar. Select Projects to enter the workspace, or select Explorer or Project tools directly. Clicking Projects again returns to Welcome without closing files or stopping work.
+A directory opens as a project. Launching `rode` without a path opens the current working directory in **Normal** mode; saved sandbox settings are retained but are not applied to this implicit startup. Add `--sandbox` to request isolation explicitly. The window starts on Welcome with Explorer hidden. Select **Projects** to enter the workspace, or select **Explorer** or **Project tools** directly in the left activity bar. Clicking Projects again returns to Welcome without closing files or stopping work.
 
 A file argument opens immediately in its normal editor or preview, normally with its containing directory as the workspace. Relative paths work too, such as `rode main.py`; quote paths containing spaces. Saved sandbox settings for that directory still apply, and `--sandbox` requests isolation for it explicitly.
 
@@ -36,17 +36,24 @@ sudo apt install build-essential pkg-config musl-tools \
 
 `musl-tools` is required by `cargo xtask install` and `cargo xtask build-helper` to compile the bundled bubblewrap C sources for the static helper. Rustup installs Rust's musl libraries, but not the musl C compiler or headers. If the build reports a missing `musl-gcc` or `x86_64-linux-musl-gcc`, install this prerequisite and retry. A custom or cross toolchain can instead provide the target compiler and sysroot through `CC_<target>` and `CFLAGS_<target>`; an ordinary glibc compiler is insufficient.
 
-RODE uses egui/eframe with the OpenGL renderer. It repaints on input, terminal output, and cursor/UI changes, rather than continuously running an animation loop. Directory listings and file transfers run on background threads. The explorer loads folders on demand, caches the visible tree, and renders only visible rows. Syntax highlighting is cached and disabled above 512 KiB. Release binaries use thin LTO and stripped symbols. On Linux installations with incompatible OpenGL drivers, startup retries once with Mesa software rendering if Mesa is available.
-
-Earlier Linux release smoke measurements (before the persistent-terminal service): **13.7 MiB executable**, approximately **138.0 MiB RSS** after editing and opening a terminal under Xvfb/Mesa software rendering, and **0 CPU scheduler ticks during a one-second idle sample** with the project-tool panels hidden and no agent started. A separate session with small image previews and the terminal open measured **127.2 MiB RSS** and **0 idle ticks**. Larger previews use additional bounded pixel memory. Agents launch on demand and model servers use their own resources. These describe small test sessions, not a large-project benchmark or comparison with VS Code.
-
-On 2026-11-08, the Linux x86_64 release executable with embedded russh measured **33.13 MiB**. In an isolated loopback connection, the Rust connection process used **12.0 MiB RSS**; it and three idle channel processes used **14.9 MiB combined proportional set size (PSS)**, which accounts for shared pages. The equivalent installed OpenSSH processes used **7.3 MiB PSS**. Both recorded zero CPU scheduler ticks over a two-second idle sample. These transport-only measurements exclude the GUI, remote helper and server; SSH runtimes start only when a connection/channel is requested. They do not isolate the binary-size change from other features added since the earlier measurements.
+RODE uses egui/eframe with the OpenGL renderer. It repaints for input, output and active UI work. Directory listings and file transfers run on background threads. Explorer loads folders on demand and renders visible rows. Source highlighting runs incrementally on a background worker, without a file-size cutoff; edited lines use plain text until their highlighting is ready. Release binaries use thin LTO and stripped symbols. On Linux installations with incompatible OpenGL drivers, startup retries once with Mesa software rendering if Mesa is available.
 
 ## First project
 
 Launch `rode /path/to/project`, open a file directly with `rode /path/to/file`, or use **Open project…** in the top header (**File → Open project folder** / **Ctrl+Shift+O**). Use **Ctrl+P** to open another file by path and **Ctrl+S** to save. **Ctrl+Shift+P** opens the command palette.
 
-Open **Project tools** below **Projects** in the left activity bar to select Chat, Terminal, Git, Problems, Tasks or Settings. Close it with the same button, or open a file in Explorer, to return to the editor. Application-level Connections, System monitor and File transfers are in the left activity bar. Optional extensions hide their controls when disabled; see [workspace layout](editing.md#workspace-layout).
+The header action becomes **Close project** for an explicitly opened project,
+or **Close & lock** for an encrypted project. Closing checks unsaved edits in
+every editor window and returns to Welcome. Local projects return to the startup
+CWD in Normal mode; remote projects keep their SSH connection available for
+opening another folder. **Disconnect** closes the remote project first, including
+verified encrypted unmount, then releases SSH. Failed saves or locks keep the
+project available. Use **File → Open project folder…**, Connections, or
+**Ctrl+Shift+O** to open another folder while a project is already open.
+
+Open **Project tools** in the left activity bar. It opens Chat first, then remembers your selected tab. Available tabs are Chat, Terminal, Git, Problems, Tasks, Shared folders, Debugger and Settings, subject to enabled extensions. Close tools with the same button, or open a file in Explorer, to return to the editor.
+
+Use **Connections** for saved projects, SSH profiles and tunnel setups. **System monitor**, **File transfers**, **Stocks** and **App settings** are separate application views in the left rail. Disabled extensions hide their controls. See [workspace layout](editing.md#workspace-layout).
 
 Use **New terminal** in the terminal header for multiple native shells; **Sessions** reattaches them and shows [Slurm allocations](slurm.md). Enable **Persist** for shells that should survive exit; new shells default to ending when their last view closes.
 

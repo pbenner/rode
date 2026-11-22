@@ -121,7 +121,7 @@ class ProjectUI(NativeUI):
         if welcome:
             self.click("welcome-open-project")
         else:
-            self.click("open-project")
+            self.command("Open project folder")
         self.control("project-dialog-path", focused=True)
         self.control("project-dialog-host:" + ("ssh" if remote else "local"))
         # Let the initial listing finish before editing its path; its response
@@ -376,6 +376,16 @@ def run(remote=False, fallback=False):
                 ui.open_project(second, remote, label + "-folder-picker.png")
                 ui.edit_file(second / "beta.rs", label + "-second-saved")
                 screenshot(window, label + "-second-project.png")
+                if remote:
+                    # Closing a project retains authentication, returns to Welcome
+                    # and offers Open again; it must not act like Disconnect.
+                    ui.click("close-project")
+                    ui.control("welcome-screen")
+                    ui.control("open-project")
+                    ui.control("disconnect-ssh")
+                    ui.absent("close-project")
+                    ui.open_project(second, remote=True, welcome=True)
+                    ui.open_file(second / "beta.rs")
                 key("t", ("Control_L", "Shift_L"))
                 selected = ui.terminal(second)
                 text("pwd > cwd.txt\n")
@@ -487,6 +497,24 @@ def run(remote=False, fallback=False):
                     session_rpc(
                         environment, "end", id=persistent["id"], policy=persistent["policy"]
                     )
+                # A local close guards edits, then restores the unsandboxed CWD
+                # without recreating the project or consuming Explorer space.
+                source = local / "local.rs" if remote else second / "beta.rs"
+                contents = source.read_text()
+                ui.append(contents, "saved-before-project-close")
+                ui.click("close-project")
+                ui.control("guard-discard")
+                ui.click("guard-keep-editing")
+                ui.control("close-project")
+                ui.editor()
+                key("s", ("Control_L",))
+                ui.saved_edit(source, "saved-before-project-close")
+                ui.click("close-project")
+                ui.control("welcome-screen")
+                ui.disconnected(explorer=False, closed=True)
+                ui.control("open-project")
+                ui.absent("pane-Explorer")
+                ui.absent("close-project")
                 close_window(window, process)
                 print(
                     label

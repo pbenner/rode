@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from readme_tour import SCENES
+from readme_tour import POSTER_SCENE, SCENES
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -119,24 +119,36 @@ def main():
             "-an",
             str(options.output / "rode-tour.mp4"),
         )
-        run(
-            *ffmpeg,
-            *source,
-            "-filter_complex",
-            "scale=960:-2:flags=lanczos,split[a][b];"
-            "[a]palettegen=max_colors=96:stats_mode=full[p];"
-            "[b][p]paletteuse=dither=none:diff_mode=rectangle",
-            "-t",
-            duration,
-            "-fps_mode",
-            "vfr",
-            "-loop",
-            "0",
-            "-final_delay",
-            str(frames[-1][1] * 100),
-            str(options.output / "rode-tour.gif"),
+        # Keep the preview readable at README width and use the richest palette
+        # that meets its established size budget. MP4/still quality is independent.
+        gif = options.output / "rode-tour.gif"
+        for colors in (96, 80, 64, 56, 48):
+            run(
+                *ffmpeg,
+                *source,
+                "-filter_complex",
+                "scale=880:-2:flags=lanczos,split[a][b];"
+                f"[a]palettegen=max_colors={colors}:stats_mode=full[p];"
+                "[b][p]paletteuse=dither=none:diff_mode=rectangle",
+                "-t",
+                duration,
+                "-fps_mode",
+                "vfr",
+                "-loop",
+                "0",
+                "-final_delay",
+                str(frames[-1][1] * 100),
+                str(gif),
+            )
+            if gif.stat().st_size < 1024 * 1024:
+                print(f"GIF preview uses {colors} colors at 880px within its 1 MiB budget")
+                break
+        else:
+            parser.error("GIF preview exceeds 1 MiB; simplify the tour before publishing")
+        poster = next(
+            frame for scene, (frame, _) in zip(SCENES, frames) if scene[0] == POSTER_SCENE
         )
-        shutil.copyfile(frames[0][0], options.output / "rode-tour.png")
+        shutil.copyfile(poster, options.output / "rode-tour.png")
     for suffix in ("gif", "mp4", "png"):
         path = options.output / f"rode-tour.{suffix}"
         print(f"{path}: {path.stat().st_size / 1024:.0f} KiB")

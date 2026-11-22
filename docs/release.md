@@ -21,7 +21,7 @@ The suite definitions and fixture variables are in [Development](development.md#
 - Local projects and individual files; protected save/conflict behavior; large files; keyboard focus, themes, docking and multiple windows.
 - Direct and ProxyJump SSH, failed connections, helper discovery/deployment and a host fixture without Python. Verify static-helper behavior on the oldest remote environment being claimed as supported.
 - Agent controls, approvals, file-only/offline tool policies, history and persistent reattachment. Protocol fixtures do not establish compatibility with every external agent version or a live model service.
-- Real installed Jupyter, debugger, formatter, PDF and other specialist tools using the documented fixture variables. Tool absence can skip ordinary tests; inspect the runtime job rather than relying on a test count alone.
+- Real installed Jupyter, debugger, formatter and document-build tools using the documented fixture variables; bundled PDF, PowerPoint and Word rendering without external viewers. Tool absence can skip ordinary tests; inspect the runtime job rather than relying on a test count alone.
 - Actual bubblewrap and Landlock enforcement. Require enforcement through the documented test variables on capable hosts. Kernel ABI mask tests cover policy construction; they do not replace execution on each kernel family being supported.
 - Persistent terminal/agent/runtime ownership across disconnect, reattachment and helper upgrades. Use the target site's scheduler and FUSE setup for claims about real Slurm allocations, GPUs or encrypted mounts; scheduler fixtures cannot establish that site's behavior.
 

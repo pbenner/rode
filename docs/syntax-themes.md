@@ -6,7 +6,7 @@ Syntax themes control source-code colors and styles independently of the [interf
 
 | Syntax theme | ID | Appearance |
 | --- | --- | --- |
-| Follow UI theme | `ui` | Existing matching syntax colors; the default for older and new configurations |
+| Follow UI theme | `ui` | Matching syntax colors from the selected interface theme; the default |
 | SynthWave ’84 | `synthwave84` | Complete original scope rules, pink variables, cyan functions, yellow keywords and orange strings |
 | SynthWave ’84 — Neon Dreams | `synthwave84-neon` | The same rules with bright token cores and native editor halos |
 | Dracula | `dracula` | Pink keywords, purple constants, green functions, yellow strings |
@@ -22,8 +22,8 @@ These presets retain their full parser scope rules instead of reducing every lan
 Selections apply immediately to open text tabs and are saved without exiting. The independent `syntax_theme` key is stored alongside `color_theme` in `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron`. Multiple windows merge the two preferences independently. There is no theme watcher, download, indexing, or background service.
 
 ```sh
-./target/release/rode . --theme carbon --syntax-theme dracula
-./target/release/rode . --theme neon --syntax-theme catppuccin-mocha
+rode . --theme carbon --syntax-theme dracula
+rode . --theme neon --syntax-theme catppuccin-mocha
 ```
 
 `--syntax-theme` overrides the saved syntax choice for startup. Choose **Follow UI theme** to return to each interface palette's matching colors, including the existing custom UI theme's `syntax` overrides.

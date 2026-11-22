@@ -19,7 +19,7 @@ Slides use a persistent, private desktop renderer and the existing bounded page 
 
 ## Fidelity and editing
 
-This first version is a **viewer**. Save, Save As, formatting and run commands do not write or execute PPTX content. Other source buffers retain their text and undo history when switching between slides and code. Text/shape editing and saving edited presentations are not exposed yet.
+This is a **read-only viewer**. Save, Save As, formatting and run commands do not write or execute PPTX content. Other source buffers retain their text and undo history when switching between slides and code. Text/shape editing and saving presentations are not implemented.
 
 The renderer uses RODE's bundled Inter font as an offline fallback. It does not install or download Office fonts. Font substitution can change line wrapping, spacing and layout. A toolbar warning reports embedded images the renderer could not display. Some advanced PowerPoint content may be unsupported; animations, video playback, interactive controls and password-protected presentations are not supported by this viewer. The original file is preserved.
 

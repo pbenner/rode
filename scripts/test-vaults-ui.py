@@ -210,7 +210,7 @@ def run(remote=False):
                     process.terminate()
                     process.wait(timeout=5)
                 runtime = (
-                    Path(environment.get("RODE_VAULT_DIR", f"/tmp/rode-vaults-{os.geteuid()}"))
+                    Path(environment["RODE_VAULT_DIR"])
                     / hashlib.sha256(str(cipher).encode()).hexdigest()
                 )
                 point = runtime / "plain"

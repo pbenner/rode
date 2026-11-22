@@ -41,6 +41,84 @@ fn source(app: &mut EditorApp) -> u64 {
     doc.acknowledge_save("source.txt".into(), "".into(), "revision".into());
     doc.id
 }
+
+#[test]
+fn closing_a_project_guards_every_editor_then_returns_to_a_neutral_context() {
+    for remote in [false, true] {
+        let (mut app, ctx) = fixture();
+        let mut workspace = crate::app::tests::remote_workspace();
+        if !remote {
+            workspace.remote = None;
+        }
+        app.workspace.set_fixture(Some(workspace));
+        source(&mut app);
+        let child = app.allocate_editor_window();
+        app.in_editor(child, |app| {
+            app.new_file();
+            app.documents
+                .active_mut()
+                .unwrap()
+                .set_source("unsaved child source".into());
+        });
+        app.guarded(Action::CloseProject, &ctx);
+        let (decision, _) = app.pending.presentation().unwrap();
+        app.cancel_guarded_decision(decision);
+        assert!(app.workspace.project_open());
+        assert_eq!(app.documents.len(), 2);
+        app.guarded(Action::CloseProject, &ctx);
+        let (decision, _) = app.pending.presentation().unwrap();
+        app.discard_guarded_action(decision, &ctx);
+        assert!(app.documents.is_empty());
+        assert!(!app.workspace.project_open());
+        assert_eq!(app.presentation.area, areas::Area::Welcome);
+        assert!(!app.explorer_visible(egui::ViewportId::ROOT));
+        if remote {
+            assert!(app.workspace.as_ref().unwrap().connected);
+            assert!(app.workspace.as_ref().unwrap().remote.is_some());
+        } else {
+            assert!(app.workspace.is_none());
+            assert!(app.workspace.take_local_fallback());
+        }
+    }
+}
+
+#[test]
+fn failed_saves_and_in_flight_saves_keep_a_project_open_until_acknowledged() {
+    for success in [false, true] {
+        let (mut app, ctx) = fixture();
+        app.workspace
+            .set_fixture(Some(crate::app::tests::remote_workspace()));
+        let id = source(&mut app);
+        app.documents[0].set_source("saved before close".into());
+        app.documents[0].fixture_content().saving = true;
+        app.guarded(Action::CloseProject, &ctx);
+        assert!(app.pending.waiting_for_save());
+        assert!(app.workspace.project_open());
+        app.workers
+            .workspace(&ctx)
+            .send(WorkspaceEvent::Done {
+                job: Job::Save {
+                    id,
+                    text: "saved before close".into(),
+                },
+                result: Box::new(if success {
+                    Ok(Response {
+                        path: "source.txt".into(),
+                        revision: "new".into(),
+                        ..Default::default()
+                    })
+                } else {
+                    Err("Save refused".into())
+                }),
+            })
+            .unwrap();
+        app.poll(&ctx);
+        app.advance_guarded_action(&ctx);
+        assert_eq!(app.workspace.project_open(), !success);
+        assert_eq!(app.documents.is_empty(), success);
+        assert!(app.workspace.as_ref().unwrap().connected);
+    }
+}
 fn frame(
     app: &mut EditorApp,
     ctx: &egui::Context,

@@ -15,7 +15,7 @@ impl EditorApp {
             ui.label("Waiting for operations or the project host…");
             if !self.vaults.lock_sent && crate::keyboard::button(ui, "Keep unlocked").clicked() {
                 self.vaults.locking = false;
-                self.vaults.quit_after_lock = false;
+                self.vaults.after_lock = AfterLock::Project;
                 self.dialog = Dialog::None;
             }
             return;

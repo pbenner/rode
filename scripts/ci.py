@@ -39,6 +39,7 @@ TEST_BINARIES = {
     "languages",
     "sandbox",
     "landlock",
+    "private_tmp",
     "agents",
     "background_agents",
     "sessions",
@@ -300,6 +301,7 @@ SUITES = {
         ui("notebooks", RODE_NOTEBOOK_UI_REMOTE_ONLY="1"),
     ],
     "sandbox": [
+        rust("private_tmp", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("transfers", RODE_TEST_REQUIRE_SANDBOX="1"),
         ui("git-gutter", RODE_TEST_SANDBOX_BACKEND="bwrap", RODE_TEST_REQUIRE_SANDBOX="1"),
         ui("execution-modes", RODE_TEST_SANDBOX_BACKEND="bwrap", RODE_TEST_REQUIRE_SANDBOX="1"),
@@ -312,6 +314,7 @@ SUITES = {
     ],
     # Namespace denial must not suppress independent Landlock enforcement coverage.
     "landlock": [
+        rust("private_tmp", RODE_TEST_REQUIRE_LANDLOCK="1"),
         rust("transfers", RODE_TEST_REQUIRE_LANDLOCK="1"),
         rust("landlock"),
         rust("agents"),

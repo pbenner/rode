@@ -1,4 +1,7 @@
 //! Exercise the real desktop/helper startup boundary without opening a GUI.
+#[path = "support/capabilities.rs"]
+mod capabilities;
+
 use std::{
     fs,
     io::Write,
@@ -12,6 +15,171 @@ fn private_home() -> tempfile::TempDir {
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()
         .unwrap()
+}
+
+fn sandbox_temporary_storage(backend: rode::sandbox::Backend) {
+    use rode::{files, sandbox};
+    use std::time::Duration;
+
+    let (capability, required) = match backend {
+        sandbox::Backend::Bwrap => ("bwrap", "RODE_TEST_REQUIRE_SANDBOX"),
+        sandbox::Backend::Landlock => ("landlock", "RODE_TEST_REQUIRE_LANDLOCK"),
+    };
+    for executable in [
+        env!("CARGO_BIN_EXE_rode"),
+        env!("CARGO_BIN_EXE_rode-sessiond"),
+    ] {
+        for read_only in [false, true] {
+            let home = private_home();
+            let temporary = rode_host_core::private_tmp::root(home.path()).unwrap();
+            // Exercise the encrypted mount's directory layout without requiring
+            // FUSE; this fixture contains only ordinary synthetic files.
+            let vault = temporary.join("vaults-fixture/first");
+            let project = vault.join("plain");
+            let other = temporary.join("vaults-fixture/second/plain");
+            for path in [&project, &other] {
+                fs::create_dir_all(path).unwrap();
+            }
+            let source = project.join("source.txt");
+            fs::write(&source, "project source").unwrap();
+            let lock = vault.join("views.lock");
+            let secret = other.join("secret.txt");
+            for path in [&lock, &secret] {
+                fs::write(path, "host only").unwrap();
+            }
+            let mut prepare = Command::new(executable);
+            prepare.arg("--file-helper").env("HOME", home.path());
+            let response = rode_host_core::command::run_bounded_limited(
+                prepare,
+                serde_json::to_vec(&files::Request::Prepare {
+                    path: project.to_string_lossy().into_owned(),
+                    sandbox: sandbox::Options {
+                        enabled: true,
+                        backend,
+                        project_read_only: read_only,
+                        ..Default::default()
+                    },
+                })
+                .unwrap(),
+                Duration::from_secs(20),
+                64 * 1024,
+            )
+            .unwrap();
+            let plan = serde_json::from_slice::<files::Response>(&response)
+                .unwrap()
+                .project
+                .unwrap();
+            if !plan.active {
+                assert_ne!(
+                    std::env::var(required).as_deref(),
+                    Ok("1"),
+                    "{}",
+                    plan.reason
+                );
+                capabilities::skip(capability, &plan.reason);
+                continue;
+            }
+            let scratch = rode_host_core::private_tmp::project(home.path(), &project)
+                .unwrap()
+                .0;
+            let mut command = Command::new(&plan.prefix[0]);
+            command
+                .args(&plan.prefix[1..])
+                .env("HOME", home.path())
+                .args([
+                    "/usr/bin/python3",
+                    "-I",
+                    "-c",
+                    r#"
+import errno, os, pathlib, subprocess, sys, tempfile
+source, scratch, lock, secret = map(pathlib.Path, sys.argv[1:5])
+assert pathlib.Path.cwd() == source.parent
+assert source.read_text() == 'project source'
+for name in ('TMPDIR', 'TMP', 'TEMP'):
+    assert pathlib.Path(os.environ[name]) == scratch, (name, os.environ[name], scratch)
+assert scratch.stat().st_mode & 0o777 == 0o700
+with tempfile.TemporaryDirectory() as folder:
+    assert pathlib.Path(folder).parent == scratch
+    file = pathlib.Path(folder) / 'temporary.txt'
+    file.write_text('scratch is writable')
+    assert file.stat().st_mode & 0o777 == 0o600
+subprocess.run([sys.executable, '-I', '-c',
+    "import tempfile; f = tempfile.TemporaryFile(); f.write(b'child scratch')"], check=True)
+for path in (lock, secret):
+    try:
+        path.read_text()
+    except OSError as error:
+        assert error.errno in (errno.EACCES, errno.EPERM, errno.ENOENT), error
+    else:
+        raise AssertionError('Unrelated private storage is exposed: ' + str(path))
+try:
+    source.write_text('edited')
+except OSError as error:
+    assert sys.argv[5] == 'read-only'
+    assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
+else:
+    assert sys.argv[5] == 'writable'
+print('private scratch available with project access preserved')
+"#,
+                ]);
+            command.args([
+                source.as_path(),
+                scratch.as_path(),
+                lock.as_path(),
+                secret.as_path(),
+            ]);
+            command.arg(if read_only { "read-only" } else { "writable" });
+            let output = rode_host_core::command::run_bounded_limited(
+                command,
+                vec![],
+                Duration::from_secs(15),
+                64 * 1024,
+            )
+            .unwrap();
+            assert!(
+                String::from_utf8(output)
+                    .unwrap()
+                    .contains("private scratch available")
+            );
+            // Native helper startup must retain the sandbox's TMPDIR too.
+            let mut helper = Command::new(&plan.prefix[0]);
+            helper
+                .args(&plan.prefix[1..])
+                .env("HOME", home.path())
+                .args([executable, "--file-helper"]);
+            let response = rode_host_core::command::run_bounded_limited(
+                helper,
+                serde_json::to_vec(&files::Request::Read {
+                    path: source.to_string_lossy().into_owned(),
+                })
+                .unwrap(),
+                Duration::from_secs(15),
+                64 * 1024,
+            )
+            .unwrap();
+            let response = serde_json::from_slice::<files::Response>(&response).unwrap();
+            assert_eq!(
+                response.text,
+                if read_only {
+                    "project source"
+                } else {
+                    "edited"
+                }
+            );
+            assert_eq!(fs::read_to_string(&lock).unwrap(), "host only");
+            assert_eq!(fs::read_to_string(&secret).unwrap(), "host only");
+        }
+    }
+}
+
+#[test]
+fn bubblewrap_provides_private_temporary_storage_for_nested_and_read_only_projects() {
+    sandbox_temporary_storage(rode::sandbox::Backend::Bwrap);
+}
+
+#[test]
+fn landlock_provides_private_temporary_storage_for_nested_and_read_only_projects() {
+    sandbox_temporary_storage(rode::sandbox::Backend::Landlock);
 }
 
 #[test]

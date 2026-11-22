@@ -124,14 +124,24 @@ pub enum Reply {
 
 /// Resolve the shared host coordination root, honoring an explicit
 /// `RODE_VAULT_DIR` override. Every window on one host must use the same root.
-/// The default is `/tmp/rode-vaults-UID`; ownership, permissions and absolute
-/// path validation occur before use, without repairing unsafe existing paths.
-pub fn runtime_directory() -> PathBuf {
-    std::env::var_os("RODE_VAULT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(format!("/tmp/rode-vaults-{}", unsafe { libc::geteuid() }))
-        })
+/// The default is `~/.cache/rode/tmp/vaults-<host-hash>`, beneath the existing
+/// validated private temporary root. Host identity separates cluster nodes with
+/// shared homes. A missing home/hostname or unsafe directory fails closed.
+/// Explicit overrides are validated when used, without repairing unsafe paths.
+pub fn runtime_directory() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("RODE_VAULT_DIR") {
+        return Ok(path.into());
+    }
+    let hostname = crate::host_identity::hostname()
+        .context("Cannot determine the host for encrypted-project storage")?;
+    default_runtime_directory(&crate::private_tmp::home()?, &hostname)
+}
+
+fn default_runtime_directory(home: &Path, hostname: &str) -> Result<PathBuf> {
+    Ok(crate::private_tmp::root(home)?.join(format!(
+        "vaults-{}",
+        crate::files::digest(hostname.as_bytes())
+    )))
 }
 
 fn private_directory(path: &Path) -> Result<()> {
@@ -197,14 +207,38 @@ fn mount_table(path: impl AsRef<Path>) -> Result<String> {
     );
     Ok(String::from_utf8(bytes)?)
 }
-fn mount_entry(text: &str, point: &str) -> Option<(String, String, String)> {
-    text.lines().find_map(|line| {
+/// One bounded procfs mount record. Paths remain escaped until a consumer
+/// needs them; unrelated mounts need no string allocations during lock scans.
+#[derive(Debug, PartialEq, Eq)]
+struct MountEntry<'a> {
+    id: &'a str,
+    device: &'a str,
+    point: &'a str,
+    kind: &'a str,
+    source: &'a str,
+}
+
+fn mount_entries(text: &str) -> impl Iterator<Item = MountEntry<'_>> {
+    text.lines().filter_map(|line| {
         let (left, right) = line.split_once(" - ")?;
-        let fields: Vec<_> = left.split_whitespace().collect();
-        let tail: Vec<_> = right.split_whitespace().collect();
-        (fields.len() >= 6 && tail.len() >= 2 && decode_mount(fields[4]) == point)
-            .then(|| (fields[2].into(), tail[0].into(), decode_mount(tail[1])))
+        let mut fields = left.split_whitespace();
+        let id = fields.next()?;
+        let device = fields.nth(1)?;
+        let point = fields.nth(1)?;
+        fields.next()?;
+        let mut tail = right.split_whitespace();
+        Some(MountEntry {
+            id,
+            device,
+            point,
+            kind: tail.next()?,
+            source: tail.next()?,
+        })
     })
+}
+
+fn mount_entry<'a>(text: &'a str, point: &str) -> Option<MountEntry<'a>> {
+    mount_entries(text).find(|entry| decode_mount(entry.point) == point)
 }
 impl Mount {
     fn new(settings: Settings, create: bool) -> Result<Self> {
@@ -219,7 +253,7 @@ impl Mount {
             .context("Cannot open the encrypted folder")?;
         ensure!(cipher.is_dir(), "Encrypted storage must be a directory.");
         let digest = crate::files::digest(cipher.to_string_lossy().as_bytes());
-        let base = runtime_directory();
+        let base = runtime_directory()?;
         private_directory(&base)?;
         let base = base.canonicalize()?;
         let runtime = base.join(&digest);
@@ -273,12 +307,12 @@ impl Mount {
         let table = mount_table("/proc/self/mountinfo")
             .context("Encrypted projects require Linux mount information")?;
         match mount_entry(&table, &self.info.mountpoint) {
-            Some((device, kind, name)) => {
+            Some(entry) => {
                 ensure!(
-                    kind == "fuse.gocryptfs" && name == self.name,
+                    entry.kind == "fuse.gocryptfs" && decode_mount(entry.source) == self.name,
                     "Refusing to manage an unrelated filesystem at the encrypted-project mountpoint."
                 );
-                Ok(Some(device))
+                Ok(Some(entry.device.to_owned()))
             }
             None => Ok(None),
         }
@@ -429,27 +463,32 @@ impl Mount {
         Ok(true)
     }
 }
+/// Named FUSE mounts retain their kernel mount ID even when a process's chroot
+/// changes the displayed path. Bind mounts and namespace copies have distinct
+/// IDs, including copies at the original path. Do not compare paths alone.
+fn named_mounts<'a>(table: &'a str, name: &'a str) -> impl Iterator<Item = (&'a str, String)> {
+    mount_entries(table)
+        .filter(move |entry| entry.kind == "fuse.gocryptfs" && entry.source == name)
+        .map(|entry| (entry.id, decode_mount(entry.point)))
+}
+
+/// Inspect mount tables directly: namespace symlinks require ptrace permission
+/// that same-account SSH sessions, non-dumpable processes and user services may
+/// deny even when their mount tables are readable. Ignore only the live host
+/// mount's ID, never every mount at the same path or every unreadable process.
+/// Called before and after normal unmount; the latter ignores no mount.
 fn foreign_mount(name: &str, point: &str) -> Result<bool> {
-    fn references(table: &str, name: &str, ignored_point: Option<&str>) -> bool {
-        table.lines().any(|line| {
-            let Some((left, right)) = line.split_once(" - ") else {
-                return false;
-            };
-            let mut tail = right.split_whitespace();
-            tail.next() == Some("fuse.gocryptfs")
-                && tail.next() == Some(name)
-                && left
-                    .split_whitespace()
-                    .nth(4)
-                    .is_some_and(|p| ignored_point != Some(decode_mount(p).as_str()))
-        })
-    }
-    if references(&mount_table("/proc/self/mountinfo")?, name, Some(point)) {
+    foreign_mount_in(Path::new("/proc"), name, point)
+}
+
+fn foreign_mount_in(proc: &Path, name: &str, point: &str) -> Result<bool> {
+    let own = mount_table(proc.join("self/mountinfo"))?;
+    let ignored_id = named_mounts(&own, name).find_map(|(id, path)| (path == point).then_some(id));
+    let references = |table: &str| named_mounts(table, name).any(|(id, _)| Some(id) != ignored_id);
+    if references(&own) {
         return Ok(true);
     }
-    let own = fs::read_link("/proc/self/ns/mnt")?;
-    let mut seen = std::collections::HashSet::from([own]);
-    for (index, entry) in fs::read_dir("/proc")?.enumerate() {
+    for (index, entry) in fs::read_dir(proc)?.enumerate() {
         ensure!(
             index < 65536,
             "Too many processes to verify encrypted-project lock state safely."
@@ -464,42 +503,52 @@ fn foreign_mount(name: &str, point: &str) -> Result<bool> {
             continue;
         }
         let path = entry.path();
-        if !path
-            .metadata()
-            .is_ok_and(|m| m.uid() == unsafe { libc::geteuid() })
-        {
+        let Some(table) = process_mount_table(&path).with_context(|| {
+            format!(
+                "Cannot verify other mount namespaces; project remains unlocked: {}",
+                path.display()
+            )
+        })?
+        else {
             continue;
-        }
-        let namespace = match fs::read_link(path.join("ns/mnt")) {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error)
-                    .context("Cannot verify other mount namespaces; project remains unlocked");
-            }
         };
-        if !seen.insert(namespace) {
-            continue;
-        }
-        let table = match mount_table(path.join("mountinfo")) {
-            Ok(value) => value,
-            Err(error)
-                if error
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                continue;
-            }
-            Err(error) => {
-                return Err(error)
-                    .context("Cannot verify other mount namespaces; project remains unlocked");
-            }
-        };
-        if references(&table, name, None) {
+        if references(&table) {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+fn process_mount_table(process: &Path) -> Result<Option<String>> {
+    // An unknown owner cannot be treated as another user's process. Only a
+    // vanished task may be skipped before its ownership has been established.
+    let metadata = match process.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ESRCH)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Ok(None);
+    }
+    match mount_table(process.join("mountinfo")) {
+        Ok(table) => Ok(Some(table)),
+        // proc's mounts_open_common returns EINVAL when the task has exited or
+        // no longer has a mount namespace, before its PID directory disappears.
+        // Permission failures and malformed/oversized tables must still block.
+        Err(error)
+            if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                matches!(
+                    e.raw_os_error(),
+                    Some(libc::ENOENT | libc::ESRCH | libc::EINVAL)
+                )
+            }) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 fn emit(reply: &Reply) -> Result<()> {
     let mut out = std::io::stdout().lock();
@@ -599,16 +648,8 @@ pub fn coordinator() -> Result<()> {
 pub fn scratch_parent(root: &Path) -> Result<PathBuf> {
     let temporary = std::env::temp_dir();
     let table = mount_table("/proc/self/mountinfo")?;
-    let encrypted = table.lines().any(|line| {
-        let Some((left, right)) = line.split_once(" - ") else {
-            return false;
-        };
-        right.split_whitespace().next() == Some("fuse.gocryptfs")
-            && left
-                .split_whitespace()
-                .nth(4)
-                .is_some_and(|point| root.starts_with(decode_mount(point)))
-    });
+    let encrypted = mount_entries(&table)
+        .any(|entry| entry.kind == "fuse.gocryptfs" && root.starts_with(decode_mount(entry.point)));
     if !encrypted {
         return Ok(temporary);
     }
@@ -632,6 +673,45 @@ pub fn scratch_parent(root: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_coordination_reuses_private_temporary_storage_and_separates_hosts() {
+        let home = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let first = default_runtime_directory(home.path(), "login.cluster").unwrap();
+        let second = default_runtime_directory(home.path(), "compute.cluster").unwrap();
+        let temporary = crate::private_tmp::root(home.path()).unwrap();
+        assert_eq!(first.parent(), Some(temporary.as_path()));
+        assert_ne!(first, second);
+        assert_eq!(
+            default_runtime_directory(home.path(), "login.cluster").unwrap(),
+            first
+        );
+        private_directory(&first).unwrap();
+        for path in [&temporary, &first] {
+            assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, 0o700);
+        }
+    }
+
+    #[test]
+    fn default_coordination_rejects_unsafe_temporary_storage_without_fallback() {
+        let home = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let temporary = crate::private_tmp::root(home.path()).unwrap();
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(default_runtime_directory(home.path(), "host").is_err());
+        assert_eq!(fs::metadata(&temporary).unwrap().mode() & 0o777, 0o755);
+        fs::remove_dir(&temporary).unwrap();
+        let other = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(other.path(), &temporary).unwrap();
+        assert!(default_runtime_directory(home.path(), "host").is_err());
+        assert!(fs::read_dir(other.path()).unwrap().next().is_none());
+    }
+
     #[test]
     fn coordination_roots_reject_relative_symlinked_and_shared_directories() {
         let root = tempfile::Builder::new()
@@ -687,14 +767,110 @@ mod tests {
         let text = "10 9 0:42 / /tmp/a\\040b rw - fuse.gocryptfs rode-gocryptfs-test rw\n";
         assert_eq!(
             mount_entry(text, "/tmp/a b"),
-            Some((
-                "0:42".into(),
-                "fuse.gocryptfs".into(),
-                "rode-gocryptfs-test".into()
-            ))
+            Some(MountEntry {
+                id: "10",
+                device: "0:42",
+                point: "/tmp/a\\040b",
+                kind: "fuse.gocryptfs",
+                source: "rode-gocryptfs-test"
+            })
         );
         assert!(mount_entry(text, "/tmp/a").is_none());
     }
+
+    #[test]
+    fn mount_verification_uses_ids_without_requiring_namespace_symlinks() {
+        let proc = tempfile::tempdir().unwrap();
+        for pid in ["self", "10", "20"] {
+            fs::create_dir(proc.path().join(pid)).unwrap();
+        }
+        let table = |id, point: &str| {
+            format!("{id} 9 0:42 / {point} rw - fuse.gocryptfs rode-gocryptfs-test rw\n")
+        };
+        let own = table(10, "/private/a\\040b");
+        fs::write(proc.path().join("self/mountinfo"), &own).unwrap();
+        fs::write(proc.path().join("10/mountinfo"), &own).unwrap();
+        // Same mount, but a chroot changes its displayed path.
+        fs::write(proc.path().join("20/mountinfo"), table(10, "/")).unwrap();
+        let check = || foreign_mount_in(proc.path(), "rode-gocryptfs-test", "/private/a b");
+        assert!(!check().unwrap());
+
+        // A namespace copy at the very same path must prevent locking.
+        fs::write(
+            proc.path().join("20/mountinfo"),
+            table(11, "/private/a\\040b"),
+        )
+        .unwrap();
+        assert!(check().unwrap());
+        fs::write(
+            proc.path().join("20/mountinfo"),
+            table(11, "/sandbox/project"),
+        )
+        .unwrap();
+        assert!(check().unwrap());
+
+        // Check same-namespace bind mounts too, before and after host unmount.
+        fs::write(
+            proc.path().join("self/mountinfo"),
+            format!("{own}{}", table(12, "/alias")),
+        )
+        .unwrap();
+        assert!(check().unwrap());
+        fs::write(proc.path().join("self/mountinfo"), "").unwrap();
+        assert!(check().unwrap());
+        fs::write(proc.path().join("10/mountinfo"), "").unwrap();
+        fs::write(proc.path().join("20/mountinfo"), "").unwrap();
+        assert!(!check().unwrap());
+
+        // Disappearing PIDs are harmless; an unreadable table still blocks.
+        fs::remove_file(proc.path().join("20/mountinfo")).unwrap();
+        assert!(!check().unwrap());
+        fs::create_dir(proc.path().join("20/mountinfo")).unwrap();
+        assert!(
+            check()
+                .unwrap_err()
+                .to_string()
+                .starts_with("Cannot verify other mount namespaces")
+        );
+        fs::remove_dir(proc.path().join("20/mountinfo")).unwrap();
+        std::os::unix::fs::symlink("30", proc.path().join("30")).unwrap();
+        assert!(
+            check().is_err(),
+            "An unverified process owner must block locking"
+        );
+    }
+
+    #[test]
+    fn non_dumpable_processes_can_be_checked_without_ptrace_access() {
+        struct Child(std::process::Child);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child = Child(Command::new("/usr/bin/python3")
+            .args(["-I", "-c", "import ctypes,sys; assert ctypes.CDLL(None).prctl(4,0,0,0,0)==0; print('ready',flush=True); sys.stdin.read()"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn().unwrap());
+        let mut ready = String::new();
+        std::io::BufReader::new(child.0.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let process = PathBuf::from(format!("/proc/{}", child.0.id()));
+        assert!(process_mount_table(&process).unwrap().is_some());
+
+        // Limit the scan to this real process, so unrelated host restrictions
+        // cannot substitute for the specific ptrace-denial regression.
+        let proc = tempfile::tempdir().unwrap();
+        fs::create_dir(proc.path().join("self")).unwrap();
+        fs::write(proc.path().join("self/mountinfo"), "").unwrap();
+        std::os::unix::fs::symlink(&process, proc.path().join(child.0.id().to_string())).unwrap();
+        assert!(!foreign_mount_in(proc.path(), "rode-gocryptfs-absent", "/absent").unwrap());
+    }
+
     #[test]
     fn shared_views_prevent_exclusive_lock_and_release_after_exit() {
         let root = tempfile::tempdir().unwrap();

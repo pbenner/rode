@@ -105,6 +105,7 @@ After SSH teardown, the workspace controller queues one Normal-mode local CWD pr
 | `src/mise.rs`, `crates/rode-host-core/src/mise/native.rs`, `crates/rode-host-core/src/environment.rs` | Optional mise feature, bounded tool/task discovery, host-side environment resolution before exec and shared literal environment/command helpers |
 | `src/process.rs`, `crates/rode-host-core/src/supervisor.rs` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
 | `crates/rode-host-core/src/locking.rs` | Open-time directory/regular/private-file guards and bounded advisory locking; directory-only operations reject substituted special files |
+| `crates/rode-host-core/src/host_identity.rs`, `crates/rode-host-core/src/private_tmp.rs` | Shared hostname resolution and validated private temporary storage; encrypted-mount coordination uses a stable host-scoped child of that root |
 | `crates/rode-host-core/src/command/capture.rs` | Shared binary helper/project capture, independent pipe budgets, stdin leases and scoped process-group cleanup before reaping |
 | `crates/rode-host-core/src/coordinator.rs` | Shared bounded request parsing, stdin cancellation and reply serialization for LaTeX, Marp and extension helpers |
 | `crates/rode-session/src/protocol.rs` | Tagged control schema and required service protocol, re-exported from the crate root for clients |
@@ -150,9 +151,9 @@ File Undo belongs to the host-owned conversation controller. The agent core reta
 
 The native gateway in `src/host/native.rs` selects, verifies and deploys one helper per SSH connection. Terminal, agent and runtime requests reuse that connection; they do not rediscover binaries, track upload-ready flags or send replacement executables. Session requests carry only the operation and optional runtime directory.
 
-RODE requires the current session protocol. Each control connection authenticates and checks that version before executing an operation or attaching a view. One stable private runtime directory per hostname owns discovery, creation and mutations, keeping cluster nodes separate even when home directories are shared. Protocol mismatches are rejected; version-specific discovery, migration and unauthenticated control fallbacks are not supported. Update the editor and native helper together. ACP selectors use `configOptions` and `session/set_config_option`; there is no legacy mode-selector fallback. Agent access uses the `access` preference directly.
+RODE requires the current session protocol. Each control connection authenticates and checks that version before executing an operation or attaching a view. One stable private runtime directory per hostname owns discovery, creation and mutations, keeping cluster nodes separate even when home directories are shared. Protocol mismatches are rejected; version-specific discovery, migration and unauthenticated control fallbacks are not supported. Update the editor and native helper together. ACP selectors use `configOptions` and `session/set_config_option`. Agent access uses the `access` preference directly.
 
-`environment_probe.py` and `notebook_kernel.py` remain active language-specific adapters. They inspect Python installations and integrate with Jupyter respectively. They are not remnants of the removed general Python host backend. Direct agent/notebook/DAP library clients also remain supported alongside GUI-managed controllers and are exercised by integration tests.
+`environment_probe.py` and `notebook_kernel.py` remain active language-specific adapters. They inspect Python installations and integrate with Jupyter respectively. Direct agent/notebook/DAP library clients also remain supported alongside GUI-managed controllers and are exercised by integration tests.
 
 Runtime command validation belongs to `rode_runtime_core::service::Spec::validate_command` and runs before host executable resolution as well as controller creation. The per-execution notebook source limit lives in `rode_runtime_core::notebook::MAX_CODE`, re-exported by the desktop model, so moving execution into the service cannot leave a stale desktop-only limit.
 
@@ -453,9 +454,9 @@ Desktop-installed, initially disabled manifests keep repository opening separate
 
 ### Optional native Codex runtime
 
-Codex is a separately versioned native executable in the optional `rode-codex` package, keeping the core editor independent of that payload, VS Code, Node.js and npm. Core packaging never prepares or downloads Codex. SHA-256/size pins and upstream notices are explicit runtime-package build inputs. Source builds optionally prepare the same runtime with a standard-library Python script. The explicit **Install Codex** action downloads the editor-pinned official archives on the desktop, validates their sizes and SHA-256 checksums, and installs locally or deploys to the selected SSH host. Ordinary startup, Send and History do not download missing executables. RODE does not start inference servers. The optional package's protected manifest selects its version independently of the editor; package installation is the trust boundary, while bounded manifests and checksum validation detect damaged assets. Runtime updates require protocol compatibility checks.
+Codex is a separately versioned native executable in the optional `rode-codex` package, keeping the core editor independent of that payload, VS Code, Node.js and npm. Core packaging never prepares or downloads Codex. SHA-256/size pins and upstream notices are explicit runtime-package build inputs. Source builds optionally prepare the same runtime with a standard-library Python script. The explicit **Install Codex** action downloads the editor-pinned official archives on the desktop, validates their sizes and SHA-256 checksums, and installs in desktop user data. The chat launcher deploys the verified runtime to an SSH project host when needed. Ordinary startup, Send and History do not download missing executables. RODE does not start inference servers. The optional package's protected manifest selects its version independently of the editor; package installation is the trust boundary, while bounded manifests and checksum validation detect damaged assets. Runtime updates require protocol compatibility checks.
 
-An `auto` executable is resolved only in the process worker after a message. A custom executable bypasses bundle preparation. SSH deployment streams the matching binary over authenticated multiplexed channels, verifies and atomically publishes a private immutable cache, and shares a lock across windows. Credentials remain on their host. An active project sandbox adds only this verified tool directory as a read-only mount; it does not acquire new user-folder or network grants. Versioned directories avoid replacing another process's running runtime. See [agent setup](agents.md) and [packaging](packaging.md).
+An `auto` executable is resolved on a worker for explicit chat, history or model-metadata requests. A custom executable bypasses bundle preparation. SSH deployment streams the matching binary over authenticated multiplexed channels, verifies and atomically publishes a private immutable cache, and shares a lock across windows. Credentials remain on their host. An active project sandbox adds only this verified tool directory as a read-only mount; it does not acquire new user-folder or network grants. Versioned directories avoid replacing another process's running runtime. See [agent setup](agents.md) and [packaging](packaging.md).
 
 Runtime completeness is part of Codex verification: main and helper executables have independent archive/file pins, a bounded streaming order, and one read-only sandbox tool-directory mount. The SSH cache key covers all executable pins so a previously verified main-only cache cannot satisfy the complete runtime. Explicit setup can add missing helpers to a verified old local installation without replacing a running main executable; publication updates its manifest/selector only after verification, and rejects unrelated or altered files. No extra payload is downloaded during ordinary startup.
 
@@ -561,6 +562,15 @@ project candidate. Views receive an immutable workspace reference. Authenticatio
 preparation, activation, environment replacement, suspension and transport release
 use explicit operations; production callers cannot mutate readiness or candidate
 identities directly. Preparing a replacement leaves the active project usable.
+
+The controller distinguishes its implicit local CWD from an explicitly opened
+project, including an explicit selection of that same path. The header projects
+this state as Open, Close, or Close & lock. Project close and SSH disconnect use
+the same document/runtime/shared-folder guards. The vault owner captures a typed
+`AfterLock` continuation (project close, disconnect or quit), and executes it only
+after the host acknowledges verified unmount. Failed locks retain the lease,
+documents and transport. Ordinary close retains SSH; local close prepares a
+neutral CWD in Normal mode and returns to Welcome.
 
 The workspace controller also retains the previous SSH profile and owns reconnect
 eligibility. Documents receive an opaque connection identity instead of rebuilding
@@ -1034,6 +1044,14 @@ Private comments should explain ordering and ownership that the code alone canno
 
 For a design choice, record the motivating constraint, the selected approach and its costs or limits. If a change revisits that choice, update both the owning module's rationale and the relevant guide section, including compatibility/lifetime effects and the checks that substantiate the new behavior. An API-description update alone does not explain a changed design tradeoff.
 
+User guides describe the current interface and defaults. Verify action names
+against their owning menus/tool definitions and check startup, permissions and
+host scope against the implementation. Replace screenshots when their navigation
+no longer matches. Keep setup steps separate from internal protocol details;
+link to the owning reference instead of repeating it. Remove superseded workflow
+instructions and test transcripts. Dated security findings remain evidence for
+their recorded revision, with current validation steps listed separately.
+
 ## Native host architecture
 
 The selected SSH client owns authentication, host verification and multiplexed channels. `rode-sessiond` owns native host commands independently of the persistent session service. There is one Rust host implementation and no alternative interpreter transport.
@@ -1057,7 +1075,7 @@ Separate multiplexed channels -> bounded process/build/debugger streams
 | `rode-host-core` | Shared safe files, locks, Git, installed tools, environment/mise, sandbox, supervisor, runtime cache, vault and Slurm services; no desktop/session dependency |
 | `rode-session::host` | Gateway, request composition, opaque project contexts and fresh scoped worker processes |
 | `rode-session::workspace` | Session administration DTOs and launch conversion, shared with the desktop |
-| Existing session controllers | Persistent PTYs, agents, notebook/debugger state, leases, protected IPC and service generations |
+| Session controllers | Persistent PTYs, agents, notebook/debugger state, leases and protected IPC |
 | Desktop `src/host/native.rs` | Installed-helper discovery and compatibility, remote-architecture selection, verified bootstrap, bounded requests and connection failure reporting |
 | Desktop facades | `files`, `project`, `sandbox`, `sessions` compose host services with UI attachments and local helper discovery |
 

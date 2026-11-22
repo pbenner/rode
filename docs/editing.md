@@ -57,6 +57,7 @@ No Git hooks, external diff drivers or temporary index files are used.
 Right-click a file, folder, or the project name in the explorer to open its menu. Press Escape to close the menu. Mutations run on supported Linux project hosts.
 
 - **Open as project** opens the normal project dialog with the selected folder prefilled on the current local or SSH host. It loads any saved sandbox settings for that folder, otherwise starting with the current project's policy. Choose the sandbox and access rules before confirming Open. Cancelling leaves the current project intact; confirming uses the normal unsaved-edit and encrypted-project guards.
+- **Open as encrypted project…** opens the [encrypted-project form](encrypted-projects.md) with the selected folder and host prefilled. Browse or edit the storage path before unlocking; opening the form alone does not mount or create storage.
 - **New file…** and **New folder…** create a named entry inside the selected folder, or beside a selected file.
 - **Rename…** updates open editor paths, including files inside a renamed folder, while preserving unsaved edits.
 - **Duplicate…** copies saved file or folder contents to a new name. Existing destinations are never replaced. Executable permissions are retained and symbolic links are copied as links.
@@ -146,16 +147,23 @@ Source text defaults to **15 pt**. Saved text sizes are retained; use the existi
 
 ## Workspace layout
 
-**Open project…** is in the top header and browses the currently selected local or
-SSH host. The bottom status bar shows the open project's folder path and actual
-access mode. Long paths truncate to fit; hover or open the path control for the
-full path, host and connection details. SSH Disconnect and
-Reconnect are in the connection menu. Connection and sandbox status share this
-footer, leaving the space below the header for the workspace.
+The top-right header action is **Open project…** in the implicit CWD context,
+**Close project** for an explicitly opened folder, or **Close & lock** for an
+encrypted project. Open another folder through **File → Open project folder…**,
+**Ctrl+Shift+O**, or Connections. Closing checks edits across all editor windows
+and returns to Welcome, restoring the local CWD in Normal mode or retaining SSH
+without the closed project's grants. Encrypted close requires verified unmount.
+The bottom status bar has separate **LOCAL** or **SSH · user@host**,
+project-path and access-mode controls. Open the connection control to disconnect
+or reconnect; open the path control for the full folder path, **Copy path** and
+**Open project…**. Long paths truncate in the footer and scroll inside the popup.
+A **Disconnect** button also appears beside the project action while SSH is
+connected. It closes the project first and releases SSH after any required lock
+succeeds; a failed lock keeps the connection available.
 
 The left rail contains **Projects**, **Connections**, **System monitor**, **File transfers**, and **Stocks**. **App settings**, **Extensions**, and keyboard help sit at the bottom. Disabled extensions hide their entries. Connections opens a resizable sidebar beside the current content; the other application views use the main content space without duplicating project tools. Returning to **Projects** restores its selected view, unsaved files, chat draft and running shell.
 
-The left activity bar groups **Explorer** and **Project tools** directly below **Projects**, followed by a separator before application views. Their highlights show whether Explorer and tools are open. Open **Project tools** to show **Chat**, **Terminal**, **Git**, **Problems**, **Tasks**, **Settings**, and **Debugger** when its extension is enabled. Every enabled project tool has a direct tab in that view; the tool bar wraps on narrow windows. The tool bar disappears when tools are closed or detached, giving the space back to the editor. **Settings → Environment** contains runtime paths, project variables and Python environments. Right-click a tool tab to open it in a separate window.
+The left activity bar groups **Explorer** and **Project tools** directly below **Projects**, followed by a separator before application views. Their highlights show whether Explorer and tools are open. Project tools provides **Chat**, **Terminal**, **Git**, **Problems**, **Tasks**, **Shared folders**, **Debugger** and **Settings**, in that order; disabled extensions hide their tabs. The tab bar wraps on narrow windows and disappears from the main window when tools are closed or detached. **Settings → Environment** contains runtime paths, project variables and Python environments. Right-click a tool tab to open it in a separate window.
 
 Welcome is the initial view, with Explorer hidden. With no local or SSH target, the current working directory opens as the project in **Normal** mode, including when it is your home directory. Saved sandbox settings are preserved but do not apply to this implicit startup; use `--sandbox` to request isolation explicitly. **Projects**, **Explorer** and **Project tools** are always available in the left rail, including while viewing application tools. Clicking the selected **Projects** icon deselects it and returns to Welcome; clicking it again restores the project view. An empty project shows **Start editing**, while Welcome remains a separate screen. Welcome leaves open files, unsaved edits, chats, terminals and detached windows intact. Opening a file or selecting Explorer or Project tools enters the project directly.
 
@@ -163,12 +171,13 @@ Welcome is the initial view, with Explorer hidden. With no local or SSH target, 
 keeps **Open project…**, **Connect SSH…** and **New tunnel…** above the saved
 projects, SSH profiles and tunnel setups. All three saved-list sections can be
 collapsed and use full-width rows without vertical guide lines. Switching between
-the two retains the current editor/tool view and each sidebar’s layout. The top-right header keeps
-**Open project…**; SSH and tunnel entry buttons live in Connections.
+the two retains the current editor/tool view and each sidebar’s layout. The
+compact bookmark icon sits at the right of **Saved projects**. SSH and tunnel
+setup buttons live in Connections; **Active Tunnels** opens the running-tunnel list.
 
 The explorer remains beside the project content and can be hidden independently. Opening a project tool replaces the code view instead of shrinking it. **Project tools** initially opens **Chat**, then remembers the tab you select. Automatic project-shell startup and SSH login do not change that choice. Close **Project tools** with the same button, or open a file in the explorer, to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
 
-Choose **Detach** at the far right of the project tab bar to move the selected project tools or terminal into a separate native window while the editor stays visible in the main window. **Dock back**, or closing the tools window, returns it without stopping its work. **Ctrl+~** hides or restores that window. Detached tool windows contain only tool tabs and window controls, with no Code, Explorer or editor switch. The window controls are separated from the selectable tabs by a vertical rule; on very narrow windows they move to their own right-aligned row.
+Choose **Detach** at the far right of the project tab bar to move the project tools into a separate native window while the editor stays visible in the main window. **Dock back**, or closing the tools window, returns it without stopping its work. **Ctrl+~** hides or restores that window. Detached tool windows contain tool tabs and window controls. The window controls are separated from the selectable tabs by a vertical rule; on very narrow windows they move to their own right-aligned row.
 
 Choose **Detach tab** beside **Detach**, or right-click a tool and choose **Open in separate window**, to detach just that tool. Several tools can detach independently; each keeps its existing controller. Use **Reattach** in its window, or close it, to return it. Tool commands raise its existing window. Conversations, drafts, running shells and tool state stay intact when moving between windows.
 
@@ -286,6 +295,6 @@ The settings table lists the remaining pane/file commands. By default, `Ctrl+W` 
 
 Saves check the original SHA-256 revision, write a temporary file beside the destination, preserve existing permissions, and rename it into place. Symlinks are followed so the link itself is preserved. A detected external change produces a conflict and keeps your edits open. Save As refuses to silently overwrite an unrelated existing file. To resolve a conflict, save a separate copy or close/reopen the tab to load the disk version. RODE writers serialize revision checks and replacement with advisory locks, including local/SSH writers sharing a file; only one save based on the same old revision can succeed. For other programs, revision checks remain best effort. See [configuration and multiple windows](configuration.md). Unsaved buffers remain in memory and do not survive a crash.
 
-Ordinary text, hex, image/PDF source and notebook files have no fixed byte-size ceiling. They are loaded into memory, so available RAM/address space is the practical bound. Decoded raster pixels, tool payloads, directory listings (10,000 entries), and one workspace per window retain their separate limits. It does not yet include an LSP client, recursive project search, remote filesystem watching, or a complete terminal emulator feature set. The editor buffer uses egui's text editor; it is not a streaming editor for huge files. No VS Code performance comparison is claimed.
+Ordinary text, hex, image/PDF source and notebook files have no fixed byte-size ceiling. They are loaded into memory, so available RAM/address space is the practical bound. Decoded raster pixels, tool payloads and directory listings (10,000 entries) retain their separate limits. Each RODE process owns one workspace; its additional editor and tool windows share that workspace. LSP, recursive project search and remote filesystem watching are not implemented. The editor buffer uses egui's text editor and loads the source into memory.
 
 For binary files and explicit byte editing, see [Hex and binary analysis](binary.md). Optional modules and tool adapters are managed through [Extensions](extensions.md).

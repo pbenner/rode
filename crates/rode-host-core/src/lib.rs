@@ -12,6 +12,7 @@ pub mod debugger;
 pub mod environment;
 pub mod extensions;
 pub mod files;
+pub mod host_identity;
 pub mod landlock;
 pub mod languages;
 pub mod latex;

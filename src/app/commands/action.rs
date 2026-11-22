@@ -20,6 +20,7 @@ pub(in crate::app) enum Command {
     NotebookSource,
     Open,
     Folder,
+    CloseProject,
     Connect,
     Tunnels,
     Reconnect,
@@ -115,6 +116,7 @@ impl Command {
         Self::BookmarkProject,
         Self::Open,
         Self::Folder,
+        Self::CloseProject,
         Self::LocalFolder,
         Self::Connect,
         Self::Tunnels,
@@ -231,6 +233,9 @@ impl Command {
             Self::Open => Definition::new("Open file…", Icon::Search).palette("Open file by path"),
             Self::Folder => {
                 Definition::new("Open project folder…", Icon::Folder).palette("Open project folder")
+            }
+            Self::CloseProject => {
+                Definition::new("Close project", Icon::Close).palette("Project: Close project")
             }
             Self::Connect => {
                 Definition::new("Connect via SSH…", Icon::Remote).palette("Remote: Connect via SSH")
@@ -529,6 +534,7 @@ impl EditorApp {
             Command::NotebookSource => self.toggle_notebook_source(ctx),
             Command::Open => self.set_dialog(Dialog::Open),
             Command::Folder => self.set_dialog(Dialog::Folder),
+            Command::CloseProject => self.guarded(Action::CloseProject, ctx),
             Command::Connect => self.set_dialog(Dialog::Connect),
             Command::Tunnels => self.set_dialog(Dialog::Tunnels),
             Command::Disconnect => self.disconnect_ssh(ctx),

@@ -96,6 +96,7 @@ impl EditorApp {
             | Command::NewEditorWindow
             | Command::Open
             | Command::Folder
+            | Command::CloseProject
             | Command::Connect
             | Command::Tunnels
             | Command::Reconnect

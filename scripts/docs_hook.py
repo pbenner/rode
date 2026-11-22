@@ -16,6 +16,7 @@ def on_page_markdown(markdown, **_kwargs):
         "syntax/README.md": "synthwave84-source.md",
         "../../packaging/licenses/synthwave84-LICENSE-MIT": "licenses/synthwave84-LICENSE-MIT.txt",
         "../docs/syntax-themes.md": "syntax-themes.md",
+        "../docs/themes.md": "themes.md",
         "../docs/development.md": "development.md",
         "../src/theme/interface.rs": "https://github.com/pbenner/rode/blob/main/src/theme/interface.rs",
         "../src/theme/definition.rs": "https://github.com/pbenner/rode/blob/main/src/theme/definition.rs",

@@ -7,6 +7,14 @@ pub(super) use connection::ConnectionId;
 mod control;
 pub(super) use control::{Controller, PreparationId, PreparationPolicy, Prepared};
 
+/// Destination after the shared project-close guard succeeds. SSH is released
+/// only after encrypted unmount has been acknowledged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CloseTarget {
+    Welcome,
+    Disconnect,
+}
+
 /// The operation determines lifetime policy; display text never selects cleanup behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LeaveReason {
@@ -117,7 +125,12 @@ impl EditorApp {
             || self.exit.closing()
             || matches!(
                 self.pending.as_ref(),
-                Some(Action::Quit | Action::Disconnect | Action::LockEncrypted)
+                Some(
+                    Action::Quit
+                        | Action::Disconnect
+                        | Action::CloseProject
+                        | Action::LockEncrypted
+                )
             )
         {
             return;
@@ -233,12 +246,17 @@ impl EditorApp {
             self.connection_profiles.adopt(r.profile.clone());
             r
         });
-        self.workspace.activate(
-            response.path.clone(),
-            connection,
-            plan.clone(),
-            options.clone(),
-        );
+        if policy.implicit_local() {
+            self.workspace
+                .activate_local_fallback(response.path.clone(), plan.clone());
+        } else {
+            self.workspace.activate(
+                response.path.clone(),
+                connection,
+                plan.clone(),
+                options.clone(),
+            );
+        }
         self.vaults.activate_project(encrypted);
         if remote {
             self.restore_ssh_buffers();
@@ -349,6 +367,53 @@ impl EditorApp {
         self.file_browser.reset();
         self.navigation.cancel_input();
         self.workers.invalidate_workspace();
+    }
+
+    /// Complete an admitted close through the vault owner when necessary. An
+    /// unmount refusal keeps the project and transport available for recovery.
+    pub(super) fn close_project(&mut self, target: CloseTarget, ctx: &egui::Context) {
+        if self.vaults.has_active() {
+            self.lock_encrypted(
+                match target {
+                    CloseTarget::Welcome => vaults::AfterLock::Project,
+                    CloseTarget::Disconnect => vaults::AfterLock::Disconnect,
+                },
+                ctx,
+            );
+        } else {
+            self.finish_project_close(target, LeaveReason::ProjectChanged, ctx);
+        }
+    }
+
+    /// Release a closed project's authority while retaining its authenticated
+    /// host. The local CWD is prepared separately in Normal mode.
+    pub(super) fn finish_project_close(
+        &mut self,
+        target: CloseTarget,
+        reason: LeaveReason,
+        ctx: &egui::Context,
+    ) {
+        if target == CloseTarget::Disconnect {
+            self.detach_ssh(documents::Retention::Discard, ctx);
+        } else {
+            self.clear_project(documents::Retention::Discard, reason);
+            self.workspace.clear_project_context();
+            self.invalidate_project_candidate(PickerReset::Close);
+            if self.workspace.is_none() {
+                self.workspace.request_local_fallback();
+            }
+            self.status = "Project closed".into();
+        }
+        self.project_closed_presentation(ctx);
+    }
+
+    /// Closing a project returns to the same neutral presentation as startup;
+    /// other application tools retain their independent controllers.
+    fn project_closed_presentation(&mut self, ctx: &egui::Context) {
+        self.show_terminal = false;
+        self.presentation.select_editor();
+        self.set_explorer_visible(egui::ViewportId::ROOT, false);
+        self.open_area(areas::Area::Welcome, ctx);
     }
 
     /// Cancel connection work, clear project ownership and release only this window's private SSH master.

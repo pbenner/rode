@@ -20,6 +20,7 @@ pub(super) enum Transition<'a> {
     Project(&'a str, Option<&'a Remote>),
     Connection,
     RecoveryConnection,
+    Close,
 }
 /// Lease-owner admission result for a proposed project/host transition. A nonempty barrier prevents
 /// the adapter from changing file-I/O authority.
@@ -37,6 +38,15 @@ pub(super) enum QuitPolicy {
     ClearLostProject,
     Lock,
     RecoveryRequired,
+}
+/// A lock acknowledgement owns its continuation. No project or SSH teardown is
+/// allowed to run merely because unmount was requested.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) enum AfterLock {
+    #[default]
+    Project,
+    Disconnect,
+    Quit,
 }
 /// A lease held across project-view teardown stays opaque to other components.
 #[must_use = "Return retained encrypted leases to the vault owner after teardown"]
@@ -72,7 +82,7 @@ pub(super) struct State {
     needs_lock: bool,
     locking: bool,
     lock_sent: bool,
-    quit_after_lock: bool,
+    after_lock: AfterLock,
     lost: bool,
     released: bool,
     work: Arc<AtomicUsize>,
@@ -194,6 +204,11 @@ impl State {
         if self.cleanup_pending() {
             return Barrier::Cleanup;
         }
+        if matches!(transition, Transition::Close)
+            && (self.pending.is_some() || self.staged.is_some())
+        {
+            return Barrier::Cleanup;
+        }
         if matches!(transition, Transition::Project(..))
             && self.lost
             && self.active.is_some()
@@ -202,7 +217,7 @@ impl State {
             return Barrier::Recovery;
         }
         let leaves = match transition {
-            Transition::Stay => false,
+            Transition::Stay | Transition::Close => false,
             Transition::Connection => {
                 self.active.is_some() || self.pending.is_some() || self.staged.is_some()
             }
@@ -394,9 +409,9 @@ impl EditorApp {
             Err(error) => self.notify(format!("{error:#}"), true),
         }
     }
-    /// Begin guarded locking only after owned jobs/views can stop; `quitting` requests
-    /// exit after verified cleanup, while unknown or busy state keeps the window recoverable.
-    pub(super) fn lock_encrypted(&mut self, quitting: bool, ctx: &egui::Context) {
+    /// Begin guarded locking only after owned jobs/views can stop. The captured
+    /// continuation runs after verified cleanup; refusal keeps the window recoverable.
+    pub(super) fn lock_encrypted(&mut self, after: AfterLock, ctx: &egui::Context) {
         if self.vaults.active.is_none() {
             return;
         }
@@ -424,7 +439,7 @@ impl EditorApp {
         self.documents.invalidate_previews();
         self.vaults.locking = true;
         self.vaults.lock_sent = false;
-        self.vaults.quit_after_lock = quitting;
+        self.vaults.after_lock = after;
         self.vaults.message = "Waiting for project operations to finish before locking…".into();
         self.set_dialog(Dialog::Encrypted);
         ctx.request_repaint();
@@ -446,7 +461,7 @@ impl EditorApp {
             && self.vaults.work.load(Ordering::Acquire) == 0
             && let Some(client) = &self.vaults.active
         {
-            match client.session.send(&serde_json::json!({"action": if self.vaults.quit_after_lock { "close" } else { "lock" }})) {
+            match client.session.send(&serde_json::json!({"action": if self.vaults.after_lock == AfterLock::Quit { "close" } else { "lock" }})) {
                 Ok(()) => {
                     self.vaults.lock_sent = true;
                     self.vaults.message = "Locking encrypted filesystem…".into();
@@ -606,7 +621,7 @@ impl EditorApp {
         }
         if let Some((info, locked, message, active)) = closed {
             let shared_exit = active
-                && self.vaults.quit_after_lock
+                && self.vaults.after_lock == AfterLock::Quit
                 && !locked
                 && message
                     .starts_with("Another RODE window still has this encrypted project open.");
@@ -620,24 +635,42 @@ impl EditorApp {
                 )
             };
             if active && (locked || shared_exit) {
-                let quitting = self.vaults.quit_after_lock;
+                let after = std::mem::take(&mut self.vaults.after_lock);
                 self.vaults.active = None;
                 self.vaults.needs_lock = false;
                 if active_project {
-                    self.clear_project(
-                        documents::Retention::Discard,
-                        workspace::LeaveReason::VaultLock,
-                    );
-                    self.workspace.clear_project_context();
+                    match after {
+                        AfterLock::Disconnect => {
+                            self.finish_project_close(
+                                workspace::CloseTarget::Disconnect,
+                                workspace::LeaveReason::VaultLock,
+                                ctx,
+                            );
+                        }
+                        AfterLock::Project => self.finish_project_close(
+                            workspace::CloseTarget::Welcome,
+                            workspace::LeaveReason::VaultLock,
+                            ctx,
+                        ),
+                        AfterLock::Quit => {
+                            self.clear_project(
+                                documents::Retention::Discard,
+                                workspace::LeaveReason::VaultLock,
+                            );
+                            self.workspace.clear_project_context();
+                        }
+                    }
                 }
                 self.status = if shared_exit {
                     "Encrypted project remains open in another RODE window"
+                } else if after == AfterLock::Disconnect {
+                    "SSH disconnected · encrypted project locked"
                 } else {
                     "Encrypted project locked"
                 }
                 .into();
                 self.dialog = Dialog::None;
-                if quitting {
+                if after == AfterLock::Quit {
                     self.request_exit(ctx);
                 }
             } else if !active {
@@ -755,6 +788,53 @@ mod tests {
             info: None,
             remote: None,
             finished: false,
+        }
+    }
+
+    #[test]
+    fn close_and_disconnect_wait_for_verified_encrypted_unmount() {
+        for disconnect in [false, true] {
+            for locked in [false, true] {
+                let (mut app, ctx) = active(locked);
+                let mut workspace = crate::app::tests::remote_workspace();
+                workspace.root = "/plain".into();
+                workspace.plan.root = "/plain".into();
+                workspace.remote.as_mut().unwrap().profile.root = "/plain".into();
+                app.vaults.active.as_mut().unwrap().remote = workspace.remote.clone();
+                app.workspace.set_fixture(Some(workspace));
+                let work = app.vaults.work();
+                app.guarded(
+                    if disconnect {
+                        Action::Disconnect
+                    } else {
+                        Action::CloseProject
+                    },
+                    &ctx,
+                );
+                assert!(app.vaults.locking && !app.vaults.lock_sent);
+                assert!(app.workspace.as_ref().unwrap().connected);
+                assert_eq!(app.documents.len(), 1);
+                drop(work);
+                let until = Instant::now() + Duration::from_secs(5);
+                while app.vaults.locking {
+                    assert!(Instant::now() < until, "Lock response was not processed");
+                    app.poll_vaults(&ctx);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert_eq!(app.documents.is_empty(), locked);
+                assert_eq!(app.vaults.has_active(), !locked);
+                if locked && disconnect {
+                    assert!(app.workspace.is_none());
+                } else {
+                    assert!(app.workspace.as_ref().unwrap().connected);
+                    assert_eq!(app.workspace.project_open(), !locked);
+                }
+                if locked {
+                    assert_eq!(app.presentation.area, areas::Area::Welcome);
+                } else {
+                    assert!(app.vaults.message.contains("Still UNLOCKED"));
+                }
+            }
         }
     }
     #[test]
@@ -1041,7 +1121,7 @@ mod tests {
         let (mut app, ctx) = active(false);
         app.documents[0].fixture_content().text = "keep text".into();
         let work = app.vaults.work();
-        app.lock_encrypted(true, &ctx);
+        app.lock_encrypted(AfterLock::Quit, &ctx);
         app.poll_vaults(&ctx);
         assert!(app.vaults.locking && !app.vaults.lock_sent);
         assert!(!app.exit.closing());
@@ -1063,7 +1143,7 @@ mod tests {
             false,
             "Another RODE window still has this encrypted project open.",
         );
-        app.lock_encrypted(true, &ctx);
+        app.lock_encrypted(AfterLock::Quit, &ctx);
         let until = Instant::now() + Duration::from_secs(5);
         while !app.exit.closing() {
             assert!(Instant::now() < until);
@@ -1074,7 +1154,7 @@ mod tests {
         assert!(app.status.contains("another RODE window"));
         let (mut app, ctx) = active(true);
         app.vaults.lost = true;
-        app.lock_encrypted(true, &ctx);
+        app.lock_encrypted(AfterLock::Quit, &ctx);
         assert!(!app.exit.closing() && !app.vaults.locking);
         assert!(!app.documents.is_empty());
     }
@@ -1126,7 +1206,7 @@ mod tests {
         assert_eq!(app.documents[0].text, "unsaved encrypted source");
         app.encrypted_dialog();
         assert!(app.vaults.remote);
-        app.lock_encrypted(true, &ctx);
+        app.lock_encrypted(AfterLock::Quit, &ctx);
         assert!(!app.exit.closing() && !app.vaults.locking);
         app.restore_local_workspace(&ctx);
         let until = Instant::now() + Duration::from_secs(5);
@@ -1209,7 +1289,7 @@ mod tests {
         app.vaults.confirmation = "secret".into();
         app.cancel_encrypted_dialog();
         assert!(app.vaults.password.is_empty() && app.vaults.confirmation.is_empty());
-        app.lock_encrypted(false, &ctx);
+        app.lock_encrypted(AfterLock::Project, &ctx);
         let until = Instant::now() + Duration::from_secs(5);
         while app.vaults.active.is_some() {
             assert!(Instant::now() < until);

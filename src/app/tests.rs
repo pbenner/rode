@@ -128,7 +128,7 @@ fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
                         assert!(!buttons.iter().any(|b| b["name"] == "disconnect-ssh"));
                     } else {
                         let disconnect = rect("disconnect-ssh");
-                        let open = rect("open-project");
+                        let open = rect("close-project");
                         assert!(
                             disconnect.right() <= open.left() && !disconnect.intersects(open),
                             "{state}"
@@ -136,7 +136,13 @@ fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
                         assert!(ctx.content_rect().contains_rect(disconnect), "{state}");
                     }
                     assert!(
-                        rect("open-project").bottom() < footer.top(),
+                        rect(if file_mode {
+                            "open-project"
+                        } else {
+                            "close-project"
+                        })
+                        .bottom()
+                            < footer.top(),
                         "Open project is not in the top header: {state}"
                     );
                 }

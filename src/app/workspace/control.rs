@@ -117,6 +117,15 @@ impl Controller {
         self.active.is_some()
     }
 
+    /// Explicit project ownership differs from the neutral desktop CWD, even
+    /// when both resolve to the same path. Presentation cannot infer this intent.
+    pub fn project_open(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|workspace| workspace.ready)
+            && !matches!(self.local_fallback, LocalFallback::Active)
+    }
+
     /// Resume only the remembered host/project after every document has been unbound. A neutral
     /// local return is allowed; an explicitly opened local project still requires replacement guards.
     pub fn can_resume(&self, profile: &Profile, all_unbound: bool) -> bool {
@@ -185,7 +194,8 @@ impl Controller {
         });
     }
 
-    /// The neutral desktop context keeps the disconnected SSH identity eligible for recovery.
+    /// The implicit desktop CWD is neutral and keeps a disconnected SSH identity
+    /// eligible for recovery. It is not an explicitly opened project.
     pub fn activate_local_fallback(&mut self, root: String, plan: sandbox::Plan) {
         self.activate(root, None, plan, Default::default());
         self.local_fallback = LocalFallback::Active;
@@ -252,7 +262,9 @@ impl Controller {
                 workspace.root = "~".into();
                 workspace.ready = false;
                 workspace.plan = Default::default();
+                workspace.sandbox_options = Default::default();
                 remote.profile.root = "~".into();
+                remote.profile.sandbox = Default::default();
             } else {
                 self.active = None;
             }
@@ -409,6 +421,32 @@ impl Drop for Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_project_identity_is_independent_of_its_path() {
+        let mut state = Controller::default();
+        state.activate_local_fallback("/cwd".into(), Default::default());
+        assert!(!state.project_open());
+        state.activate("/cwd".into(), None, Default::default(), Default::default());
+        assert!(state.project_open());
+        state.clear_project_context();
+        assert!(!state.project_open());
+        state.set_fixture(Some(crate::app::tests::remote_workspace()));
+        let socket = state
+            .as_ref()
+            .unwrap()
+            .remote
+            .as_ref()
+            .unwrap()
+            .socket
+            .clone();
+        state.clear_project_context();
+        assert!(!state.project_open());
+        let workspace = state.as_ref().unwrap();
+        assert!(workspace.connected && !workspace.ready);
+        assert_eq!(workspace.remote.as_ref().unwrap().socket, socket);
+        assert!(!workspace.sandbox_options.enabled);
+    }
 
     #[test]
     fn local_return_is_once_only_and_only_the_fallback_preserves_ssh_recovery() {

@@ -499,9 +499,9 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                                 || matches!(
                                     name,
                                     "workspace-search"
-                                        | "open-tunnels"
                                         | "open-project"
-                                        | "connect-ssh"
+                                        | "close-project"
+                                        | "disconnect-ssh"
                                 )
                         })
                     })

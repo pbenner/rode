@@ -6,7 +6,7 @@ RODE combines a native editor with persistent terminals, configurable light and 
 
 ![RODE editor with Atelier Dark](../assets/rode-tour.png)
 
-The **Projects** view keeps the editor canvas clear. Open **Project tools** below **Projects** in the left activity bar for Chat, Terminal, Git, Problems, Tasks and Settings; close it to return to editing. Application-level **Connections**, **System monitor**, **File transfers**, **Stocks** and **App settings** live in the left activity bar. Tools and application views can open in separate native windows without duplicating their controllers or sessions. See [workspace layout](editing.md#workspace-layout).
+Launch without a path to prepare the current working directory in Normal mode and show Welcome. Select **Projects** to enter the editor. **Explorer** and **Project tools** sit below it in the left activity bar. Project tools opens Chat first and also provides Terminal, Git, Problems, Tasks, Shared folders, Debugger and Settings, depending on enabled extensions. Close tools to return to editing. **Connections**, **System monitor**, **File transfers**, **Stocks** and **App settings** are separate application views. Tools and application views can open in native windows while keeping their existing controllers and sessions. See [workspace layout](editing.md#workspace-layout).
 
 - Edit locally or through OpenSSH aliases, direct hosts, and jump hosts.
 - Open project folders, navigate tabs, [preview Markdown](markdown.md), search within files, and use [persistent terminals](terminals.md), with multiple shells and shared reattachment.
@@ -18,6 +18,7 @@ The **Projects** view keeps the editor canvas clear. Open **Project tools** belo
 - Work with Git branches/worktrees, Python environments, and Ruff formatting and diagnostics.
 - Inspect CPU, memory, processes, and available GPU telemetry on demand.
 - Copy files between local and SSH hosts with the [file-transfer browsers](remote.md#file-transfers), drag and drop, and a background queue.
+- [Share folders live](remote.md#shared-folders) between this computer and an SSH project, and retain their settings in project bookmarks.
 - Bookmark local or remote projects in the Connections sidebar’s [Saved projects](extensions.md#project-bookmarks) list.
 - Optionally isolate project access with configurable [bubblewrap or Landlock policies](sandbox.md).
 - Use [agent chat](agents.md) with Codex, Claude Code / Anthropic, local models through Ollama, and compatible ACP agents inside the project sandbox.

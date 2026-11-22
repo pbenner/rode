@@ -1,8 +1,8 @@
 # Security review
 
-Latest review: **2026-11-10**. This review covers local/SSH file services, executable-cache publication, sandbox construction, preference transactions, subprocess/terminal ownership, encrypted-mount coordination, document loading and extension/agent boundaries. It includes targeted source review, reproductions and dependency advisory checks; it is not a guarantee that every vulnerability has been found.
+This guide records security findings and the implementation boundaries that address them. Dated reproductions and dependency audits describe the source and lockfile reviewed at that time; they are not validation of every later revision. Use the [current validation procedure](#validation-scope) and [release checklist](release.md) for the commit being shipped.
 
-The general Python host backend described in the historical findings below has been removed. Current local/headless regressions exercise the shared Rust services. Findings from the earlier **2026-10-29** review remain recorded below with current implementation references.
+Local and SSH operations share native Rust host services. Python is used only by language-specific interpreter and Jupyter adapters. The optional project sandbox, host-service authentication, protected file writes and resource limits are independent boundaries; none guarantees isolation from every hostile program.
 
 ## Findings fixed
 
@@ -26,13 +26,12 @@ disable signalling and propagate. In particular, a cached `Child::wait` status
 cannot establish ownership after an earlier reap. This follows Linux's
 [`waitid` semantics](https://man7.org/linux/man-pages/man2/wait.2.html).
 
-The PDF renderer now uses the existing guarded binary-capture implementation
-through `command::capture_bounded`, retaining its 20-second deadline, cancellation,
-binary/stdout and stderr budgets, address-space limit and tool-specific error
-handling. Final group cleanup also precedes pipe collection: previously a
-descendant retaining stdout could turn successful rendering into a pipe timeout.
-PDF tools now start in a separate session, so they cannot acquire the desktop's
-controlling terminal. The supervisor uses the shared 1.5-second Stop grace.
+Transient binary helpers use the guarded capture implementation in
+`rode_host_core::command::capture`; cleanup stops the owned group before collecting
+pipes. The current PDF/PowerPoint/Word reader instead uses a persistent private
+renderer in `src/pdf/renderer.rs`, with bounded requests, cancellation and a
+20-second operation deadline. It starts in a separate session and stops before
+reaping its child. The supervisor retains its 1.5-second Stop grace.
 
 The lost-ownership regression failed with the old wait-then-signal ordering and
 passes with the fix. A kernel-level check verifies that the leader is still
@@ -40,18 +39,16 @@ waitable after final signalling has ended. Other regressions cover cancellation
 during startup, concurrent publication, independent groups, rejection of an
 unpublished child, and natural-exit status/output when descendants retain a pipe.
 The fixture waiters also retain the PID instead of reaping it during polling.
-The PDF pipe regression failed against the old renderer with a two-second output
-timeout; the guarded runner returns the same final bytes after stopping the
-descendant.
-
 Implementation: `crates/rode-runtime-core/src/process/group.rs`, the transport
-adapters, `crates/rode-host-core/src/supervisor.rs`, `command.rs` and `src/pdf.rs`.
+adapters, `crates/rode-host-core/src/supervisor.rs`,
+`crates/rode-host-core/src/command/capture.rs` and `src/pdf/renderer.rs`.
 Tests: `process::group::tests` and `pdf::tests`.
-New work requires **service generation 24**, selecting updated supervision code
-instead of reusing an older daemon. Rebuild and install the editor and native
-helper, then end and restart affected chats and runtimes to replace their running
-code. Older daemons keep existing jobs; those jobs are not migrated. A custom
-`RODE_SESSION_DIR` still requires a separate directory for the new generation.
+
+Update the editor and native helper together. Session control requires the
+current `rode_session::PROTOCOL` in one stable host-specific runtime directory;
+version-specific directories and automatic migration are not supported. End
+retained work before replacing its service. Updating the executable does not
+replace code already loaded by a running job.
 Each worker must remain the sole reaper of its child; arbitrary external SIGCHLD reapers are not
 supported. Process-group cleanup also cannot contain descendants that deliberately
 create another session, so the existing sandbox policy remains necessary.
@@ -204,13 +201,10 @@ PKCS#8 payloads. Regression coverage checks plain/encrypted key round trips,
 signatures, changed-message rejection and wrong passwords; native SSH tests also
 exercise RSA host verification and modern RSA SHA-2 negotiation.
 
-That pass selected **service generation 23**, now superseded by generation 24.
-Rebuild and install both editor and native helper. Earlier daemons keep their
-existing jobs and code; end and restart
-affected work to acquire the fixes. Updated clients do not migrate those jobs.
+Rebuild and install both editor and native helper, then end and restart affected
+work to load the updated libraries. Already running jobs retain their code.
 
-Implementation: `vendor/russh`, `vendor/ssh-key`, `Cargo.lock` and the service
-generation constant. Regression:
+Implementation: `vendor/russh`, `vendor/ssh-key` and `Cargo.lock`. Regression:
 `tests/ssh_client.rs::rsa_private_key_formats_preserve_signatures_after_the_crypto_upgrade`.
 
 ### Custom Codex state directories could be read through file-only tools
@@ -257,33 +251,31 @@ Implementation: `crates/rode-host-core/src/paths.rs`, `crates/rode-host-core/src
 
 The fresh audit found [RUSTSEC-2026-0433](https://rustsec.org/advisories/RUSTSEC-2026-0433.html) in `pulldown-cmark 0.13.5`: nested image wikilinks can cause quadratic parsing when `ENABLE_WIKILINKS` is enabled. RODE and its current Markdown renderer do not enable that option, so this review did not identify an exposed application denial of service through that feature. The dependency minimum and lockfile were nevertheless updated to the patched **0.13.6**. A regression test keeps untrusted wikilinks literal and verifies that they do not request images or create links.
 
-### Earlier findings (2026-10-29)
+### Named pipes could block file workers
 
-#### Named pipes could block file workers
-
-**Availability issue.** Native and Python file readers opened a path before checking that its descriptor represented a regular file. Opening a FIFO for reading can wait indefinitely for a writer, so the later type check never runs. Save revision checks and preference loading/transactions had the same opening pattern. A special file could therefore retain a worker or prevent the corresponding operation from finishing.
+**Availability issue.** File readers opened a path before checking that its descriptor represented a regular file. Opening a FIFO for reading can wait indefinitely for a writer, so the later type check never runs. Save revision checks and preference loading/transactions had the same opening pattern. A special file could therefore retain a worker or prevent the corresponding operation from finishing.
 
 The shared native regular-file opener opens with `O_NONBLOCK` and checks the opened descriptor before reading or locking. Regular files and ordinary file symlinks retain their behavior. Checking only the pathname before opening would leave a replacement race, so descriptor validation remains necessary. This addresses special-file opening; it does not promise a timeout for every filesystem or failing network mount.
 
-Regression tests invoke both backends in deadline-bounded subprocesses. They cover text/automatic/hex/image/PDF reads, text/binary saves, symlinks to FIFOs, and preference reads/transactions without a FIFO writer. Existing file lifecycle, symlink/permission and concurrent-save tests check ordinary behavior.
+Regression tests invoke desktop and headless native file entry points in deadline-bounded subprocesses. They cover text/automatic/hex/image/PDF reads, text/binary saves, symlinks to FIFOs, and preference reads/transactions without a FIFO writer. Existing file lifecycle, symlink/permission and concurrent-save tests check ordinary behavior.
 
 Implementation: `src/persistence.rs`, `crates/rode-host-core/src/persistence.rs`, `crates/rode-host-core/src/files.rs`, `crates/rode-host-core/src/locking.rs`. Regression coverage: `tests/security.rs`.
 
-#### A symlinked home could bypass broad-grant rejection
+### A symlinked home could bypass broad-grant rejection
 
 **Sandbox policy issue.** Project and additional grant paths were canonicalized, but the whole-home guard compared them only against the spelling of `HOME`. When `HOME` was a symlink, a path naming its real target or an ancestor could pass that comparison and expose the home tree under a sandbox grant that the guard was intended to reject.
 
 Both backends now check the original home path and its resolved location before accepting project or additional mounts. Failure to resolve the home location is an error during sandbox-policy validation. Normal subprojects remain permitted, and the user-facing home spelling is retained in the launch environment.
 
-Regression tests cover whole-home and parent roots, read-only/read-write additional grants, native/Python agreement, and an allowed subproject through the same home alias. The tests build mount arguments without needing to mount or expose an actual user's home.
+Regression tests cover whole-home and parent roots, read-only/read-write additional grants, desktop/headless agreement, and an allowed subproject through the same home alias. The tests build mount arguments without needing to mount or expose an actual user's home.
 
 Implementation: `crates/rode-host-core/src/sandbox.rs`, `crates/rode-host-core/src/landlock.rs`. Regression coverage: `tests/security.rs`.
 
-#### Background tools retained the launcher's controlling terminal
+### Background tools retained the launcher's controlling terminal
 
 **Terminal isolation issue.** Native background tools, agents and kernels started in a separate process group but retained the controlling terminal used to launch RODE. A child could still open `/dev/tty`, including inside an active project sandbox. That provided unintended access to the launching terminal; terminal-input injection additionally depends on the host's kernel policy.
 
-Native background workers now create a new session before execution. This removes the inherited controlling terminal and retains the owned process group used for cancellation. The Python project peer already starts its background tools in new sessions. Interactive terminals continue to create their own PTYs with working job control.
+Native background workers now create a new session before execution. This removes the inherited controlling terminal and retains the owned process group used for cancellation. Interactive terminals continue to create their own PTYs with working job control.
 
 A regression test starts the test child under a real controlling PTY, verifies that the fixture can open `/dev/tty`, then checks that both bounded project tools and the agent/kernel transport cannot open it. It covers normal execution and bubblewrap when available. Existing lifecycle tests check cancellation, agent/debugger cleanup and independent interactive terminals.
 
@@ -291,22 +283,10 @@ Implementation: `src/process.rs`, `crates/rode-host-core/src/command.rs`, `crate
 
 ## Dependency audit
 
-The **2026-11-10 transport pass** refreshed the database to RustSec commit
-`28d73fc95e5972af3403225a217def57dcaba3c4`, updated **2026-11-10** with **1,446
-advisories**. `cargo-audit 0.22.2` checked the same **510 locked packages** and
-reported **zero known vulnerabilities**, with the three maintenance warnings
-below still unsuppressed. This does not replace review of the local patches or
-external tools.
-
-On **2026-11-10**, `cargo-audit` **0.22.2** checked **510 locked packages** against
-RustSec commit `58a64e69d7a08a2b83a80efa6e4b018a9acb51fc`, last updated
-**2026-11-10** (1,430 advisories). The previous RSA prerelease produced one known
-vulnerability finding; after the migration the audit reports **zero known
-vulnerabilities**. The three unmaintained-crate warnings below remain visible
-and unsuppressed. Path dependencies, including locally patched SSH source, still
-require source review; a lockfile scan does not certify them.
-
-On **2026-11-06**, `cargo-audit` **0.22.2** checked **384 locked packages** against the RustSec database at commit `fbba727d074c77fe5f7aced91930ad33eede654c`, last updated **2026-11-06** (1,413 advisories). After the parser update it reported **zero known vulnerabilities** and these informational maintenance warnings:
+The last recorded advisory audit was **2026-11-10**, using `cargo-audit 0.22.2`
+and RustSec commit `28d73fc95e5972af3403225a217def57dcaba3c4`. That lockfile had
+no reported known vulnerabilities and the following unsuppressed maintenance
+warnings. These results do not describe the current lockfile without a fresh scan.
 
 | Dependency | Dependency path | Advisory |
 | --- | --- | --- |
@@ -320,109 +300,30 @@ With an installed [cargo-audit](https://github.com/RustSec/rustsec/tree/main/car
 
 The vendored sandbox manifest pins bubblewrap **0.13.1** and libcap **2.78**. These are beyond the fixes listed in the upstream [bubblewrap setup advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx) (0.12.0), [bubblewrap setuid advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-xq78-7hw4-5jvp) (0.11.2) and [libcap file-capability advisory](https://github.com/AndrewGMorgan/libcap_mirror/security/advisories/GHSA-f78v-p5hx-m7hh) (2.78). Packaging tests verify the vendored file hashes. This check does not establish that every C dependency or installed system executable is free of vulnerabilities; system binaries still need distribution security updates.
 
-## Validation snapshot
+## Validation scope
 
-The **2026-11-10 transport pass** passed **945 ordinary Rust tests** across
-49 executables, with 40 declared harness/opt-in cases ignored, zero failures and
-none filtered out. The run used rebuilt editor/helper binaries, an explicit
-`RODE_HOST_HELPER`, the installed real-tool fixtures and
-`RODE_TEST_REQUIRE_LANDLOCK=1`. It includes real-PTY file-security checks, PDF
-rendering, agent/runtime shutdown and retained-service integration tests. The
-focused shared-core run also passed all 65 tests. The lost-ownership and PDF-pipe
-regressions failed under the old behavior before passing with their fixes.
-Workspace Clippy with warnings denied, warning-free private-item Rustdoc,
-formatting, strict MkDocs and standalone-helper compilation passed.
+Validate the exact editor/helper revision being shipped. [Development](development.md)
+describes the required tools, fixture variables, suite selection and retained
+logs. `mise run check` covers lint and ordinary Rust tests;
+`python3 scripts/validate.py` additionally builds and runs the CI integration/UI
+suites. Use `--preflight` to identify missing prerequisites without installing them.
 
-The opt-in real-SSH, required-Bubblewrap and real-FUSE suites were not rerun in
-this pass. Their previously observed host restrictions remain documented below;
-the ordinary pass does not validate those unavailable platform capabilities or
-establish exhaustive vulnerability coverage.
+Security-sensitive coverage includes:
 
-The **2026-11-10 full-suite remediation run** passed **938 ordinary Rust tests**
-across 49 executables, with 40 declared harness/opt-in cases ignored and none
-filtered out. The run supplied a current native helper and installed real-tool
-fixtures, including Jupyter, debugpy, LLDB, formatters and the isolated Codex
-loopback peer. The final desktop check passed all 418 tests (4 declared ignores).
-The focused agent-network, agent and session suites also passed all 59 tests
-with `RODE_TEST_REQUIRE_LANDLOCK=1`. Private per-executable homes and fixture
-session/vault directories resolved the earlier real-home and global-directory
-failures without relaxing permissions. Workspace-local Poppler and an owned,
-authenticated X display supplied the preview and native UI prerequisites that
-earlier invocations had missed.
-Native UI cases for workspace, agents, terminals, tools, local/remote documents,
-SSH smoke workflows and local/remote runtimes passed after fixture corrections.
-Clippy, formatting, warning-free Rustdoc, strict MkDocs, doctests, standalone
-helper compilation and the CI/packaging/private-home runner regressions passed.
+- `tests/security.rs`, `tests/files.rs` and `tests/concurrency.rs` for special-file rejection, protected saves, permissions and concurrent writers.
+- Shared `ProcessGroup` and command-capture tests for cancellation, retained child identity and cleanup of owned descendants.
+- `tests/sessions.rs`, `tests/background_agents.rs` and `tests/runtimes.rs` for authenticated IPC, retained work and attachment ownership.
+- `tests/native_host.rs` and `scripts/test-ssh.sh` for matching-helper deployment and direct/ProxyJump execution. Supply the current helper as documented in Development.
+- The dedicated sandbox suites for actual bubblewrap and Landlock enforcement; require the relevant backend on a capable host instead of counting an unavailable fixture as coverage.
+- The encrypted-project and shared-folder fixtures for real FUSE mounts, busy-unmount refusal and cleanup. These need usable FUSE, not just installed tools or a device-node path.
+- Native PDF/Office rendering and image tests for malformed documents, cancellation, resource budgets and read-only source protection.
 
-This remains an incomplete platform-enforcement result. Four required
-Bubblewrap suite entries fail because the host denies namespace/network setup.
-The real SSH transport run passed 23 cases and failed agent forwarding; a
-separate plain OpenSSH probe reproduced sshd's `mkdtemp(): Permission denied`.
-Four Kerberos cases passed, while delegation reached sshd and failed its
-hardcoded `/tmp/krb5cc_*` cache creation with `Permission denied`. These failures
-remain visible. Real gocryptfs initialization and wrong-password checks passed,
-but opening `/dev/fuse` is denied, so mounting was not exercised. A device node's
-existence alone is not evidence that the fixture can use it. The ordinary pass
-does not establish these unavailable enforcement capabilities.
-
-The **2026-11-10 additional process-capture pass** passed 10 shared command
-checks, 3 focused project-runner checks, 17 native-host tests with
-`RODE_HOST_HELPER` explicitly set to the built helper, 6 file-security tests
-(2 subprocess entry points ignored by the outer harness), 5 concurrency tests,
-5 extension tests, 3 Git-credential tests, 6 stash tests, 5 LaTeX tests and all
-58 terminal/agent/runtime lifetime tests. These include the new real-process
-regressions and the extended real-controlling-PTY check. Native-host tests run
-without an explicit helper can return early; the initial invocation without
-that fixture was not counted as gateway validation.
-
-The Marp suite passed four cases and failed its PDF-preview case because this
-environment lacks Poppler's `pdfinfo`; the cancellation case passed. The ordinary
-agent-network invocation reported four passes but can skip unavailable
-enforcement. Requiring Landlock explicitly then failed two cases because scratch
-creation beneath the real home was denied by this execution environment. These
-failures do not establish actual offline-tool enforcement for this pass. Cases
-requiring missing external tools or optional runtime fixtures can also return
-early. This is not a fully green broad/platform test run. Workspace Clippy,
-warning-free private-item Rustdoc, formatting, strict MkDocs and standalone-helper
-compilation passed. The refreshed 510-package audit used RustSec commit
-`58a64e69d7a08a2b83a80efa6e4b018a9acb51fc` (updated 2026-11-10) and reported
-zero known vulnerabilities and the three unsuppressed maintenance warnings.
-
-The **2026-11-10 follow-up** directory-open checks passed all 5 shared file-guard
-tests (including the reproduced FIFO substitution), 7 native installer tests
-(1 explicit-download case ignored), 12 bundle tests, 5 LaTeX tests, 17 native-host
-tests, 26 persistence tests (1 subprocess harness ignored) and 6 file-security
-tests (2 subprocess harnesses ignored). Tests for unavailable external tools or
-sandbox backends can return without exercising them; their availability remains
-a separate validation requirement. Two encrypted-project integration tests
-failed because this execution environment denies creating their required
-`/tmp/rode-vaults-<uid>` directory. A direct directory-creation probe reproduced
-`PermissionDenied`, and both helper entry points failed before returning a vault
-reply. The optional real-FUSE case returned without an available fixture; it is
-not evidence that FUSE enforcement passed. This is not a fully green integration
-or native-GUI run. Workspace Clippy, warning-free private-item Rustdoc, formatting,
-strict MkDocs and standalone-helper compilation passed. At that earlier point, a freshly fetched RustSec audit used commit
-`d9cb059f3217db87aeccd190b81eaffe8cc29cb9` and reported zero known vulnerabilities
-with the same three unsuppressed maintenance warnings documented above.
-
-The **2026-11-10** targeted checks passed 28 terminal-service integration tests,
-14 native SSH/crypto tests, 6 file-security tests (2 harness cases ignored),
-17 native-host tests, 5 runtime integration tests, 26 preference-persistence
-tests (1 subprocess harness ignored), 3 shared private-file tests and 35
-headless-service unit tests. The unauthenticated-overload and redirected-log
-regressions failed before their fixes and passed afterward. A parallel
-background-agent run passed 24 tests and failed one history-initialization case;
-that case passed an isolated recheck. This is an observed intermittency, not a
-fully clean broad test result. These checks do not establish exhaustive exploit
-coverage or a fully passing workspace/native-GUI run.
-
-The fourth 2026-11-06 pass attempted the full workspace suite with installed real adapters. The optional `real_lldb_native_breakpoints_and_steps` test timed out, and an isolated recheck timed out too. That was **not a fully green workspace run**. A subsequent run excluding only that test passed **695 Rust tests**, with 27 harness/opt-in tests ignored and the single LLDB test filtered out. The preceding third-pass full run had passed all 693 tests then present.
-
-The later release-readiness review traced that LLDB timeout to loading unrelated shared-library debug information, including the adapter's terminal launcher before it executed the fixture. The deterministic fixture now disables eager symbol preloading and external system-symbol lookup; its local program symbols, all C/C++/Rust breakpoint/step/evaluation assertions and 25-second operation deadline remain. The focused eight-test debugger suite passed with real LLDB/debugpy. Ordinary debugger defaults and sandbox enforcement were not changed. See [CI diagnostics and fixture scope](development.md#ci-tiers-and-timings).
-
-The follow-up full workspace run passed **699 Rust tests**, with 27 harness/opt-in tests ignored and **none filtered out**. The real LLDB check passed in that run. All **20 CI-runner regressions**, native Environment/agent UI checks, the explicit sandbox-fallback UI check and the active Landlock project UI check also passed, along with Clippy, Ruff, Rustdoc and strict MkDocs checks. Recovery and legacy-service upgrade regressions passed without requiring changes to their behaviour. The local kernel/enforcement limits below still apply.
-
-The fourth pass also passed all **six agent UI checks**, **10 packaging tests**, **19 CI-runner regressions**, Clippy with warnings denied, Ruff checks/formatting, Rustdoc with warnings denied and the strict MkDocs build. The static musl helper was rebuilt and verified. Across the four passes, native installer, Markdown, syntax-theme, LaTeX, Marp and agent UI checks plus SSH tests exercised ordinary installation, cancellation, protected paths, remote project/file operations and direct/ProxyJump connections. The fourth-pass SSH fixture explicitly ran 16 opt-in transport tests that the ordinary workspace invocation ignores. These checks establish the tested behavior, not exhaustive exploit coverage.
+Scheduler fixtures test protocol and lifecycle behavior without real allocations.
+Validate Slurm/GPU behavior on the target cluster before claiming support for its
+site policy. Hardware, authentication, kernel and desktop combinations require
+their own checks. Record skips and failures with the release results; an isolated
+rerun does not erase an intermittent failure. Old test counts and local-machine
+timings are not release criteria.
 
 ## Boundaries and limits
 
@@ -434,4 +335,4 @@ The reviewed SSH channels use the authenticated master and quoted remote command
 
 Normal mode retains the user's host permissions. Project tools and their configuration can execute project code. The optional development sandbox has explicit shared resources, including configurable caches and networking; it is not a complete isolation boundary for arbitrary hostile code. See [sandbox access](sandbox.md), [agents](agents.md), [terminal lifetime](terminals.md) and [encrypted projects](encrypted-projects.md) for the specific contracts. Dependency scanning and bounded inputs complement these boundaries without proving that external parsers/tools are vulnerability-free.
 
-Local enforcement checks exercised Landlock **ABI 4**. This host cannot create the namespaces required by bubblewrap, so real bubblewrap enforcement still requires the dedicated CI host; ABI 5/6 execution was not validated on this kernel. Tests that report an unavailable fixture are not evidence that its enforcement passed. Opening uncapped documents can exhaust available memory; removal of fixed document-size caps does not provide process-level resource isolation.
+Supported Landlock ABIs and their isolation differences are documented in [Sandbox access](sandbox.md#landlock-without-user-namespaces). Tests that report an unavailable backend are not evidence that its enforcement passed. Opening uncapped documents can exhaust available memory; removal of fixed document-size caps does not provide process-level resource isolation.

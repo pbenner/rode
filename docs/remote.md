@@ -6,7 +6,14 @@ operations or project terminals. The remote machine still needs a running SSH
 server and a POSIX shell. External programs such as Git-over-SSH retain their own
 client requirements.
 
-Open **Connections** in the left rail, then choose **Connect SSH…**. Every connection can configure:
+## Connect and open a project
+
+1. Open **Connections** in the left rail, then choose **Connect SSH…**.
+2. Enter a host or SSH alias, review the connection settings and connect. Complete authentication in the login terminal.
+3. When Welcome appears, choose **Open project folder** to browse the SSH host. Select a folder and confirm **Open project**.
+4. Use **Explorer** for files and **Project tools** for Chat, Terminal and other project tools. The bottom **SSH · user@host** badge identifies the connected host separately from the folder path.
+
+Every connection can configure:
 
 - Client backend: **Rust (default)** or **OpenSSH**
 - SSH config alias, hostname, or `user@hostname`
@@ -53,13 +60,13 @@ To use your desktop's SSH agent for Git operations on a remote host, enable `For
 An existing alias works directly:
 
 ```sh
-./target/release/rode --ssh workstation --remote-path '~/projects/simulation'
+rode --ssh workstation --remote-path '~/projects/simulation'
 ```
 
 Or configure a direct connection with a jump host:
 
 ```sh
-./target/release/rode --ssh compute.internal \
+rode --ssh compute.internal \
   --user researcher --port 22 \
   --identity ~/.ssh/id_ed25519 \
   --jump researcher@login.example.org \
@@ -334,7 +341,7 @@ RODE desktop → relay SSH → relay 127.0.0.1:22022
 4. For a tunnel started through an SSH workspace, once connected, choose
    **Configure return route**. If the desktop reaches the
    relay through a different SSH alias or jump chain, expand **Return connection
-   settings** on the **Tunnels** tab and enter **Desktop relay alias / jump chain**
+   settings** in **Active Tunnels** and enter **Desktop relay alias / jump chain**
    first. The default is the relay username, hostname and port.
 5. In **Connect SSH**, save the generated profile before leaving the direct
    connection. Reconnect with it to reach the same compute host and project
@@ -356,14 +363,13 @@ key independently of the relay. Save the profile there. These manually entered
 profiles use the loopback host/port for known-host lookup; automatic return
 profiles from an existing SSH workspace retain its original host-key identity.
 
-The **Tunnels** tab shows each tunnel’s status in a separate card. **Tunnel**
+The **Active Tunnels** dialog shows each tunnel’s status in a separate card. **Tunnel**
 shows the relay hostname and tunnel listener port; **Destination** shows the
 compute hostname and SSH port it forwards to. The relay's SSH login port belongs
 in setup and connection details, not the card summary. A short note distinguishes
 access through the relay's SSH connection from access requested for other devices.
 **Listen on** shows the requested listener scope; the relay's policy can restrict it.
-The compute name comes from the owning service. Older remote services use the
-selected SSH host/alias as a display fallback; local tunnels use this computer's
+The compute name comes from the owning service; local tunnels use this computer's
 hostname. These labels do not change the fixed loopback destination on the compute host.
 **New tunnel** groups relay, forwarding and compute-host credentials;
 its draft survives closing and reopening the form or viewing active tunnels.
@@ -445,7 +451,7 @@ loss, the service retries after 1, 2, 4, 8, 16 and then 30 seconds, with SSH
 keepalives detecting stalled peers. Existing connections through a failed tunnel
 close; reconnect RODE once the tunnel returns. Authentication rejection or a
 changed host key requires attention rather than repeated login attempts. Open
-**Tunnels** through any working connection to the compute host to inspect, retry
+**Active Tunnels** through any working connection to the compute host to inspect, retry
 or stop it. If all routes are lost, administrative access to the compute host is
 needed to repair credentials or trust.
 
@@ -581,23 +587,23 @@ One authenticated stdio channel owns the native gateway and up to four concurren
 
 Saved profiles live in `${XDG_CONFIG_HOME:-~/.config}/rode/connections.json`. **Save profile** persists connection settings, not passwords. Clicking a saved connection in Connections connects immediately using that profile; unsaved edits still require a decision before switching. Use **Connect SSH** to open the form for new connections or editing profiles. **Remote: Reconnect SSH** in the command palette restores the last connection. A dedicated SSH client process owns the authenticated connection; project terminals use separate channels. Hiding or detaching a project terminal leaves the connection available. **New** creates an independent shell with persistence off; **Sessions** discovers/reattaches existing ones. Enable **Persist: on** in the terminal header to leave work running when RODE closes without an exit prompt; tmux/screen is not required. See [terminal lifetime and remote helper setup](terminals.md).
 
-The Rust SSH master receives its launch profile through an owner-only file in its private connection directory, which it removes after opening. Its process arguments contain only the internal mode, socket path and a SHA-256 digest that detects substituted profile data before authentication. Helper discovery and bootstrap scripts travel over the existing SSH input stream, followed by any executable upload; `ps` shows a short launcher instead of the full script. Host verification, interactive login and helper digest checks still apply. Restart the editor and reconnect to use these launch changes; existing processes keep their original arguments.
+The Rust SSH master receives its launch profile through an owner-only file in its private connection directory, which it removes after opening. Its process arguments contain only the internal mode, socket path and a SHA-256 digest that detects substituted profile data before authentication. Helper discovery and bootstrap scripts travel over the existing SSH input stream, followed by any executable upload; `ps` shows a short launcher instead of the full script. Host verification, interactive login and helper digest checks still apply.
 
-Choose **Disconnect** beside **Open project…** in the top header, open the SSH badge in the bottom status bar and choose **Disconnect SSH**, or use **Remote: Disconnect SSH** in the command palette. The header button appears only while SSH is connected. Disconnecting, losing the connection, or a failed login clears the selected SSH host and restores the desktop CWD as a local project in Normal mode, just like implicit startup. The Explorer lists local files, and saved sandbox grants are not applied to this fallback. **Open project folder…** and **Open file…** work locally. Explicit **Disconnect** closes all files across editor windows. If any file has unsaved edits, choose **Keep editing** to cancel and save your work, or **Discard changes** to close the files and disconnect. Submitted saves must finish successfully before disconnect proceeds. Unexpected connection loss or a failed login instead retains open tabs and unsaved edits as disconnected buffers. Use **Save As** for a local copy, or **Remote: Reconnect SSH** to reconnect to their original project and restore their file bindings. Their original paths are never used for local file access. Opening a local project follows the usual unsaved-change protection. Disconnect stops project kernels/builds and detaches agent/terminal views: **Persist: on** sessions continue, while **Persist: off** sessions end after their last view closes. Reattach agents through **Agent chat → Running** under their original project policy. Disconnect is briefly unavailable while terminal/agent startup or a persistence change is pending.
+Choose **Disconnect** beside the project action in the top header, open the SSH badge in the bottom status bar and choose **Disconnect SSH**, or use **Remote: Disconnect SSH** in the command palette. The header button appears only while SSH is connected. Disconnecting, losing the connection, or a failed login clears the selected SSH host and restores the desktop CWD as a local project in Normal mode, just like implicit startup. The Explorer lists local files, and saved sandbox grants are not applied to this fallback. **Open project folder…** and **Open file…** work locally. Explicit **Disconnect** closes all files across editor windows. If any file has unsaved edits, choose **Keep editing** to cancel and save your work, or **Discard changes** to close the files and disconnect. Submitted saves must finish successfully before disconnect proceeds. Unexpected connection loss or a failed login instead retains open tabs and unsaved edits as disconnected buffers. Use **Save As** for a local copy, or **Remote: Reconnect SSH** to reconnect to their original project and restore their file bindings. Their original paths are never used for local file access. Opening a local project follows the usual unsaved-change protection. Disconnect stops project kernels/builds and detaches agent/terminal views: **Persist: on** sessions continue, while **Persist: off** sessions end after their last view closes. Reattach agents through **Agent chat → Running** under their original project policy. Disconnect is briefly unavailable while terminal/agent startup or a persistence change is pending.
 
 If login fails or the connection ends unexpectedly, the terminal shows **SSH ERROR / host** and retains the login's output, including client errors such as `Permission denied` or `Connection refused`. It is read-only: the SSH process is stopped, and this is not a local shell. Scroll to earlier output, use **Copy**, and choose **New terminal → Outside sandbox** when you want a local shell. Folder/file opening already uses the local computer; **Remote: Reconnect SSH** starts a fresh attempt. The bounded terminal output stays only in this window's memory and is cleared when replaced by a new terminal/project or the window closes. RODE does not save the login output to preferences or a log file.
 
 ## Project folders and sandbox mode
 
-[Encrypted projects](encrypted-projects.md) can be unlocked on the connected host through **File → Open encrypted project…**. gocryptfs and FUSE run there; the desktop uses the existing SSH channels. Lock the encrypted project before explicitly disconnecting.
+[Encrypted projects](encrypted-projects.md) can be unlocked on the connected host through **File → Open encrypted project…**. gocryptfs and FUSE run there; the desktop uses the existing SSH channels. Closing the project locks its encrypted filesystem while retaining SSH; **Disconnect** locks and closes it before disconnecting. A refused lock keeps the connection available.
 
-The bottom status bar separates a **LOCAL** or **SSH · user@host** badge from the project path and access mode. The SSH badge also identifies connecting/offline states; its menu offers **Disconnect SSH** and **Reconnect SSH**. Clicking the project path opens a bounded folder popup with **Copy path** and **Open project…**; long paths scroll independently of those actions. The native window title also identifies the SSH host. **Open project…** in the top header (**File → Open project folder…** / **Ctrl+Shift+O**) browses the currently selected host: remote folders when connected over SSH, local folders otherwise. Navigate with the path field, **Browse**, the parent-folder arrow, and the folder list, then choose **Open project** (or **Ctrl+Enter**). The explorer, relative file paths, saves, and project terminal then use that folder. Switching remote projects reuses the authenticated connection and protects unsaved buffers. **File → Open local folder…** explicitly switches back to this machine.
+The bottom status bar separates a **LOCAL** or **SSH · user@host** badge from the project path and access mode. The SSH badge also identifies connecting/offline states; its menu offers **Disconnect SSH** and **Reconnect SSH**. Clicking the project path opens a bounded folder popup with **Copy path** and **Open project…**; long paths scroll independently of those actions. The native window title also identifies the SSH host. **File → Open project folder…** / **Ctrl+Shift+O** (also **Open project…** in the header when no explicit project is open) browses the currently selected host: remote folders when connected over SSH, local folders otherwise. Navigate with the path field, **Browse**, the parent-folder arrow, and the folder list, then choose **Open project** (or **Ctrl+Enter**). The explorer, relative file paths, saves, and project terminal then use that folder. Switching remote projects reuses the authenticated connection and protects unsaved buffers. **File → Open local folder…** explicitly switches back to this machine.
 
 Enable sandboxing and choose **bwrap** or **Landlock** in the folder picker or SSH profile. You can allow/block network access and grant additional read-only or read-write paths. The selected backend is probed on the project host. If it is unavailable, the bottom status bar shows **Normal · unavailable**; open its access-mode menu or hover it for the full policy and reason. The project is not presented as isolated. Once active, an operation failure never triggers an unrestricted retry.
 
 ```sh
-./target/release/rode /path/to/project --sandbox
-./target/release/rode --ssh workstation --remote-path '~/projects/simulation' --sandbox
+rode /path/to/project --sandbox
+rode --ssh workstation --remote-path '~/projects/simulation' --sandbox
 ```
 
 When available, bubblewrap isolates both editor file operations and project terminals. The desktop UI and SSH transport stay outside the sandbox. System/tool files are read-only, the project and selected tool caches are writable, and the rest of the home directory is hidden. Sandbox preparation does not install tools; see the [Ruff runner](project-tools.md#formatting-issues-and-python-environments) for its cache behavior. See [sandbox behavior, shared paths, and limitations](sandbox.md).

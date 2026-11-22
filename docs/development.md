@@ -34,6 +34,22 @@ transport tests. Its remote shell shares private session/vault coordination
 directories within that fixture, so parallel fixtures do not borrow a developer's
 service or contend over a global vault directory.
 
+Encrypted-project lock verification reads each same-account process's mount
+table, ignoring only the current host mount's kernel ID. Keep the ID comparison:
+path equality does not distinguish cloned namespaces, and reading `ns/mnt`
+symlinks unnecessarily requires ptrace permission on common SSH/service hosts.
+`cargo test -p rode-host-core vault::tests` includes a real non-dumpable process,
+same-path namespace copies, bind mounts and refused mount-table reads. The scan
+ignores procfs's exited-task errors but must preserve actual permission failures.
+
+`cargo test --test private_tmp` checks automatic writable temporary storage in
+both sandbox modes, including read-only projects nested under the private
+encrypted-mount root. It exercises desktop and helper entry points, child tools
+and native file helpers, and denies access to sibling vaults and coordination
+files. The `sandbox` and `landlock` CI suites require their respective backend;
+an unavailable backend cannot count as exercised enforcement there. On other
+hosts, unavailable modes produce explicit coverage skips.
+
 Open `target/doc/rode/index.html` for desktop/editor services, `target/doc/rode_host_core/index.html` for shared headless services, `target/doc/rode_host_protocol/index.html` for wire contracts, `target/doc/rode_agent_core/index.html` for agent protocols, `target/doc/rode_runtime_core/index.html` for notebook/debugger controllers, and `target/doc/rode_session/index.html` for the native gateway and persistent service. Add `--open` to the documentation command to open it in a browser. CI uses the same warning-free documentation check, including intra-doc links. Comment-only changes need formatting, API/documentation builds and a consistency review; application rebuilds and native UI tests are required only when executable behavior changes.
 
 The architecture guide's [operation reference](architecture.md#following-an-operation-through-the-code) traces the UI, worker and host-controller entry points for common changes. Internal Rust contracts appear in the private-item API build; the remaining interpreter/Jupyter adapter docstrings cover their protocol callbacks, byte limits and EOF/cleanup ownership. The [units and identity reference](architecture.md#units-identities-and-absence) explains coordinate conversions, version checks and the difference between queued work and acknowledged completion. Build/CI/publication helpers also document their command entry points; test functions describe behavior through their names and adjacent assertions.
@@ -54,23 +70,6 @@ Collection invariants live in `src/app/documents/tests.rs`; bounded polling and
 cross-generation routing regressions live in `src/app/workers/tests.rs`. Run the
 root library tests after changing these owners, then exercise native tab/dirty-save
 workflows and SSH disconnect/reconnect with rebuilt editor/helper artifacts.
-
-The **2026-11-10 structure/documentation review** consolidated desktop/helper
-runtime pin contracts in `runtime_cache::pins`, shared nonreaping child-exit
-observation in `process::wait`, and moved active document rendering/find controls
-to `app/editor_view.rs`. The view methods were preserved byte for byte apart from
-module visibility. The internal documentation pass added API contracts to 74
-shared items, including acknowledgement/lifetime rules, worker entry points,
-host authentication state and character/byte/cell coordinates.
-
-Validation passed **948 ordinary Rust tests** across 49 executables, with 40
-declared harness/opt-in cases ignored, zero failures and none filtered out. The
-run used rebuilt editor/helper binaries, explicit real-tool fixtures and required
-Landlock enforcement. The native keyboard/navigation fixture also passed on an
-owned authenticated X display. The fixed cache-key and retained-child-status
-regressions exercise compatibility and process ownership. These checks do not
-establish opt-in SSH/Bubblewrap/FUSE platform coverage; see the existing
-[validation limits](security.md#validation-snapshot).
 
 Session-control schema changes belong in
 `crates/rode-session/src/protocol.rs`; keep its crate-root re-exports stable and
@@ -690,8 +689,8 @@ or output text and clears notebook state when the view closes. LaTeX and Marp
 checks wait for formatted buffers, notices, rendered previews and export results;
 the DPI test retains its deliberate held-pointer interval. Slurm indicator checks
 poll the rendered result across the scheduler's normal refresh interval instead
-of sleeping for an assumed refresh time. Legacy gesture tests still contain
-timed steps; those are not evidence that all UI workflows are timing-independent.
+of sleeping for an assumed refresh time. Some gesture tests retain timed steps;
+keep these distinct from state-based readiness checks when assessing reliability.
 
 The SSH integration entry point delegates to modules under
 `tests/ssh_roundtrip/`: transport, policy, agents, documents and runtimes, alongside
@@ -721,7 +720,7 @@ Git authentication tests use a private TLS server and the real Git HTTP backend.
 
 Negative IPC probes must validate the peer's explicit rejection even if it closes before a write completes. A write-side `EPIPE` alone is not proof of policy enforcement. Use socket pairs to exercise that ordering deterministically; EOF, incomplete frames, successful replies and unrelated errors must still fail the security probe.
 
-Large-file regressions cover reads and revision-checked saves above the old 8 MiB limit, binary RPC payloads above the control-message ceiling, image/PDF sources above 32 MiB, metadata-heavy notebooks, and streaming duplication above 256 MiB. `scripts/test-large-files-ui.py` (documents suite) edits and saves the tail of a 49 MiB binary through the real UI, including undo and display-page navigation. The SSH smoke subgroup repeats the workflow with `RODE_LARGE_FILES_UI_REMOTE=1`; `RODE_SSH_TEST_FILTER=large_document bash scripts/test-ssh.sh` checks payloads above 64 MiB on direct SSH and ProxyJump. Raster allocation, control-message, attachment and tool-output bounds are separate contracts, not file-size ceilings.
+Large-file regressions cover reads and revision-checked saves above 8 MiB, binary RPC payloads above the control-message ceiling, image/PDF sources above 32 MiB, metadata-heavy notebooks, and streaming duplication above 256 MiB. `scripts/test-large-files-ui.py` (documents suite) edits and saves the tail of a 49 MiB binary through the real UI, including undo and display-page navigation. The SSH smoke subgroup repeats the workflow with `RODE_LARGE_FILES_UI_REMOTE=1`; `RODE_SSH_TEST_FILTER=large_document bash scripts/test-ssh.sh` checks payloads above 64 MiB on direct SSH and ProxyJump. Raster allocation, control-message, attachment and tool-output bounds are separate contracts, not file-size ceilings.
 
 Explorer mutations run through the shared file channel and require the `explorer_mutations` helper capability. `cargo test --test files` checks both in-process and native-helper dispatch, including symlinks, collision races, bounded copy cleanup and real sandbox restrictions. The sandbox CI suite additionally requires actual bwrap enforcement for these file tests. `scripts/test-explorer-ui.py` uses named control geometry and native clicks to exercise creation, rename with unsaved buffers, duplication, confirmed deletion, path copying and guarded project opening. The workspace CI suite runs it locally; the SSH smoke subgroup repeats it with `RODE_EXPLORER_UI_REMOTE=1`. `RODE_SSH_TEST_FILTER=explorer_mutations bash scripts/test-ssh.sh` additionally covers file requests over direct SSH and ProxyJump.
 
@@ -807,7 +806,7 @@ Shared tool presentation lives in `src/app/layout.rs`; see the [UI layout conven
 
 ## README feature tour
 
-The README embeds `assets/rode-tour.gif` and links to an H.264 MP4 and a still PNG. The 52-second tour holds captioned native screenshots rather than recording every idle frame. Its opening chapters show the clean editor canvas, the Project tools and Explorer toggles in the left activity bar, project tabs, and the application-level Connections library with saved SSH hosts and tunnel setups. The agent chapter shows the provider order and a labelled, deterministic file-edit/Undo demonstration. Its final chapter switches the same source view between Atelier Light, Atelier Dark, Sumi-e Light, Samurai and SynthWave ’84. The GIF uses variable frame durations and a shared palette; the MP4 uses H.264, `yuv420p` and fast-start metadata. Keep the GIF below 1 MiB when refreshing it and inspect the encoded text at README size.
+The README embeds `assets/rode-tour.gif` and links to an H.264 MP4 and a still PNG. The 71-second tour holds captioned native screenshots rather than recording every idle frame. Its opening chapters show the welcome screen, clean editor canvas, Project tools and Explorer toggles in the left activity bar, project tabs, and the Connections sidebar with a saved project, SSH hosts and tunnel setups. Markdown and notebook scenes typeset equations with the bundled math renderer; encrypted-project scenes demonstrate the Explorer shortcut, folder browser and compact setup form without creating or unlocking a vault. The agent chapter shows the provider order and a labelled, deterministic file-edit/Undo demonstration. A project-close chapter demonstrates the unsaved-edit guard and return to Welcome, then reopens the project. Its final chapter switches the same source view between Atelier Light, Atelier Dark, Sumi-e Light, Samurai and SynthWave ’84. The GIF uses variable frame durations at 880 pixels wide; the encoder selects the richest shared palette of 96, 80, 64, 56 or 48 colors that stays below 1 MiB and rejects oversized previews. The MP4 retains full-size frames with H.264, `yuv420p` and fast-start metadata. The still PNG uses the editor scene defined by `POSTER_SCENE`, so the README retains a useful source-code thumbnail. Inspect the encoded text at README size when refreshing these assets.
 
 `scripts/capture-readme-tour.py` captures a fresh demonstration project at 1380×900 with isolated preferences and session storage. It uses named native controls and readiness acknowledgements from the UI harness, including the inline Git change preview, and the existing loopback SSH fixture. Install the UI/SSH prerequisites above and provide a Python environment containing `jupyter_client`, `ipykernel` and Matplotlib. Build the current editor and matching helper before capturing:
 
@@ -821,7 +820,7 @@ python3 scripts/ui_display.py -- \
   bash scripts/test-ssh.sh python3 scripts/capture-readme-tour.py
 ```
 
-The capture script checks the activity-bar toggles and project/application navigation boundaries, real notebook output, terminal persistence acknowledgements, provider order and restored file contents after Undo. It switches themes through the real appearance menu and records the source revision, selected themes, sandbox backend, editor/helper/recorder/agent-fixture hashes and capture hashes in `target/readme-demo/captures/capture.json`. It publishes the new capture set only after all scenes complete. `--output` selects another capture directory. It removes its temporary project and closes its owned sessions. Review every captured screen after UI changes. The SSH scenes use an active Landlock sandbox by default; pass `--sandbox-backend bwrap` on a host that supports bubblewrap. Capture fails if the requested sandbox is unavailable rather than labelling normal mode as sandboxed. On a restricted recording host, explicitly pass `--sandbox-backend none` to record real SSH in normal mode and the sandbox configuration controls, as in the current README assets. The encoder labels this scene as setup without enforcement; it does not claim sandbox isolation. Keep the README's mode description consistent with the capture manifest.
+The capture script checks the activity-bar toggles and project/application navigation boundaries, bookmark acknowledgement, native equation rendering, encrypted-folder selection, real notebook output, terminal persistence acknowledgements, provider order, restored file contents after Undo, and project closing with unsaved-change protection. It switches themes through the real appearance menu and records the source revision, selected themes, sandbox backend, editor/helper/recorder/agent-fixture hashes and capture hashes in `target/readme-demo/captures/capture.json`. It publishes the new capture set only after all scenes complete. `--output` selects another capture directory. It removes its temporary project and closes its owned sessions. Review every captured screen after UI changes. The SSH scenes use an active Landlock sandbox by default; pass `--sandbox-backend bwrap` on a host that supports bubblewrap. Capture fails if the requested sandbox is unavailable rather than labelling normal mode as sandboxed. On a restricted recording host, explicitly pass `--sandbox-backend none` to record real SSH in normal mode and the sandbox configuration controls, as in the current README assets. The encoder labels this scene as setup without enforcement; it does not claim sandbox isolation. Keep the README's mode description consistent with the capture manifest.
 
 `scripts/readme_tour.py` shares the scene order, captions, timings and theme IDs between the recorder and encoder. With FFmpeg (including libx264 and drawtext) and DejaVu Sans installed, encode the captures into the three assets:
 
@@ -970,7 +969,7 @@ The preview is mounted at `http://127.0.0.1:8000/rode/`. Generated output goes t
 
 The **Documentation** GitHub Actions workflow validates documentation on pull requests, then builds and deploys pushes to `main` through the GitHub Pages artifact workflow. In repository **Settings → Pages**, select **GitHub Actions** as the publishing source. The expected site is `https://pbenner.github.io/rode/` after the first successful deployment. Preparing this repository does not publish a site by itself. See [GitHub's workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 
-## Before the first commit
+## Before committing
 
 Run the Ruff hooks, Rust checks, real Ruff tests, isolated SSH checks, native UI smoke tests, and strict documentation build. Keep `Cargo.lock` in version control. Generated binaries, Python bytecode, documentation output, credentials, and local preferences belong outside the commit.
 
@@ -1036,7 +1035,7 @@ Run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x
 
 With `RODE_TEST_JUPYTER` set, `xvfb-run -a -s "-screen 0 1600x1100x24" python3 scripts/test-slurm-notebooks-ui.py` exercises **Reserve for notebooks**, its persistent owner, selection of the running job, real cell execution with scheduler/GPU variables, enabling persistence on the existing kernel, complete desktop restart, reattachment preserving Python state, switching back to a fresh host kernel, and retention of the allocation after kernel changes. Screenshots and logs go to `target/slurm-notebook-ui/`; it uses the same scheduler fixtures. The debugger UI smoke test additionally enables persistence, restarts the desktop, reattaches the paused controller and exercises stepping and terminal input.
 
-Current-protocol fixtures own real shells and exercise shared attachment, opt-in persistence, rename/end operations, stale-socket recovery and idle/child cleanup in private runtimes. Control tests require the matching protocol and reject unauthenticated endpoints. Agent and runtime checks use the same current service; historical protocol fixtures and upgrade-routing tests have been removed. Shutdown regressions hold the current helper's readiness check to verify that view replacement cannot discard pending host cleanup.
+Current-protocol fixtures own real shells and exercise shared attachment, opt-in persistence, rename/end operations, stale-socket recovery and idle/child cleanup in private runtimes. Control tests require the matching protocol and reject unauthenticated endpoints. Agent and runtime checks use the same current service; protocol mismatches fail before an operation or attachment is admitted. Shutdown regressions hold the current helper's readiness check to verify that view replacement cannot discard pending host cleanup.
 
 Idle-lifetime checks start a service without a terminal and naturally exit its last shell, then verify socket cleanup and automatic restart. They keep a detached persistent shell alive beyond the five-second idle timeout, inspect the raw service protocol to verify completed records are released while that shell runs, preserve final output in open views, and check that polling or finished views cannot keep an otherwise empty service alive. The native UI check also leaves the session manager open while a terminal exits to check automatic list refresh.
 
@@ -1148,8 +1147,9 @@ retries no input.
 Debugger and shared document fixtures also pass their snapshot path to
 `wait_for_project`, which checks the exact project root and the application's
 actual prepared/connected guard. A mapped SSH window or its project title can
-exist before preparation completes or after it fails. Legacy callers without a
-snapshot path retain title-based observation.
+exist before preparation completes or after it fails. Callers without a snapshot
+path observe only the title; use the snapshot whenever a test needs a prepared
+project rather than just a mapped window.
 
 The runtime worker drains productive bounded batches immediately, checking
 queued controls between batches. It sleeps only when idle or waiting for replay
@@ -1180,7 +1180,11 @@ A display-free render sample is available for manual comparison:
 cargo test --release --lib hex_frame_profile -- --ignored --nocapture
 ```
 
-On the development machine, a dirty 8 MiB binary differing at its final byte took **0.798 ms median / 0.990 ms p95** per unchanged editor frame before the review, and **0.625 ms median / 0.642 ms p95** after moving full-buffer dirty comparisons out of unchanged frames. Each sample used 100 warmed egui frames with a virtualized hex grid. This is a synthetic render-only measurement; it does not measure total application, GPU rendering, SSH or tool execution time and is not a general speed guarantee.
+The fixture samples 100 warmed egui frames for a dirty 64 MiB binary differing at
+its final byte, using the virtualized hex grid. Compare the same build profile,
+viewport and machine. It measures CPU-side rendering, not display latency, SSH
+or tool execution, and reports timings rather than asserting a machine-specific
+performance threshold.
 
 ## Keyboard navigation checks
 

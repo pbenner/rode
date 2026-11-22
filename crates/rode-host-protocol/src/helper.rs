@@ -51,6 +51,10 @@ pub const CAPABILITIES: &[&str] = &[
     "connection_heartbeats",
     "agent_auto_persist",
     "private_home_tmp",
+    // Encrypted mounts must share the desktop's host-scoped private temp root.
+    "private_vault_tmp",
+    // Lock checks use mount IDs without requiring ptrace access to every process.
+    "vault_mount_table_scan",
 ];
 
 /// Metadata repeated in the live handshake after discovery and cache publication.
@@ -182,6 +186,30 @@ impl Installed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helpers_requiring_ptrace_for_vault_lock_checks_require_an_upgrade() {
+        let mut info = Info::current("test", 11);
+        info.capabilities
+            .retain(|cap| cap != "vault_mount_table_scan");
+        assert!(
+            info.validate(std::env::consts::OS, std::env::consts::ARCH, 11)
+                .unwrap_err()
+                .contains("vault_mount_table_scan")
+        );
+    }
+
+    #[test]
+    fn helpers_with_public_temporary_vault_mounts_require_an_upgrade() {
+        let mut info = Info::current("test", 11);
+        info.capabilities.retain(|cap| cap != "private_vault_tmp");
+        assert!(
+            info.validate(std::env::consts::OS, std::env::consts::ARCH, 11)
+                .unwrap_err()
+                .contains("private_vault_tmp")
+        );
+    }
+
     #[test]
     fn helpers_without_streaming_agent_output_require_an_upgrade() {
         let mut info = Info::current("test", 11);

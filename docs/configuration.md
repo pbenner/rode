@@ -1,6 +1,6 @@
 # Configuration and multiple windows
 
-Run multiple RODE processes normally. Each window has its own workspace, buffers, terminal views, agent process, SSH master/socket, sandbox helper, and temporary GUI snapshot. Closing one window releases its private resources without disconnecting another window's SSH master. [Native persistent terminals](terminals.md) belong to the per-user service on their host and may be shared between windows. Detaching/keeping sessions leaves all views and work intact; explicitly ending a shared session affects every attached view.
+Run multiple RODE processes normally. Each process has its own workspace, buffers, terminal views, agent connection, SSH master/socket, sandbox helper and temporary GUI snapshot. Closing one window releases its private resources without disconnecting another window's SSH master. [Native persistent terminals](terminals.md) belong to the per-user service on their host and may be shared between windows. Detaching/keeping sessions leaves all views and work intact; explicitly ending a shared session affects every attached view.
 
 For additional editor windows within the same process, choose **File → New editor window**, or right-click a file tab to move it to a new or existing editor window. These windows share the project, document collection and connection. Each has its own tabs, find state and hideable Explorer; chat, terminals and project tools keep their existing owner. Opening an already open file raises its current window. Closing an editor window returns its tabs and unsaved changes to the main window. Project tools and application views have separate detach/reattach controls; see [workspace layout](editing.md#workspace-layout).
 
@@ -8,9 +8,11 @@ Shared configuration stays in the existing locations:
 
 | File on Linux | Contents |
 | --- | --- |
-| `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron` | Theme/font/interface scale, project and agent preferences, sandbox defaults, and the last saved window/layout state |
+| `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron` | Theme/font/interface scale, project/agent/extension preferences, bookmarks, sandbox defaults and saved window/layout state |
 | `${XDG_CONFIG_HOME:-~/.config}/rode/connections.json` | Named SSH connection profiles |
-| `${XDG_CONFIG_HOME:-~/.config}/rode/themes/` | Custom theme JSON files, read at startup |
+| `${XDG_CONFIG_HOME:-~/.config}/rode/themes/` | Custom interface/terminal theme JSON files, read at startup |
+| `${XDG_CONFIG_HOME:-~/.config}/rode/syntax-themes/` | Custom syntax theme JSON files, read at startup |
+| `${XDG_CONFIG_HOME:-~/.config}/rode/extensions/` | Installed tool-adapter JSON manifests |
 
 Settings saves lock the configuration, read its latest contents, apply only the window's changed fields, and replace the file atomically. Changes to different projects, profiles, or fields merge. When two windows change the same setting, the last completed save of that setting wins; a list such as additional sandbox grants is one setting. Closing an older window does not restore its old theme, font, or project preferences over a newer edit. Unknown configuration fields are retained.
 
@@ -40,7 +42,7 @@ leaving an optional field blank retains its documented default behaviour.
 
 Configuration writes run in the background. New files use owner-only permissions. Stable adjacent `.lock` files coordinate writers and remain in place; they do not mean a process is still running. The OS releases locks on process exit, including a crash. Do not remove lock files while RODE is running. GUI state is written through private temporary snapshots so the GUI framework cannot overwrite shared configuration using an old snapshot.
 
-Malformed, oversized, or unwritable configuration is preserved and a save error is reported. After correcting the file or permissions, edit the setting again to retry retained changes. Preferences are limited to 8 MiB, agent settings to 128 entries / 256 KiB, and SSH profiles to 128 entries / 1 MiB. All concurrently running instances need the updated writer; older builds do not participate in this coordination.
+Malformed, oversized, or unwritable configuration is preserved and a save error is reported. After correcting the file or permissions, edit the setting again to retry retained changes. Preferences are limited to 8 MiB, agent settings to 128 entries / 256 KiB, and SSH profiles to 128 entries / 1 MiB. Use the same RODE version in concurrently running instances so they share the configuration contracts.
 
 ## Project settings
 
@@ -80,7 +82,7 @@ Terminal color overrides use independent `terminal_color.<theme-id>.foreground`,
 
 The host monitor preferences are desktop-wide: `host_monitor_interval` and
 `host_monitor_chart`. Each writes independently so unrelated edits in other windows are preserved. The
-monitor imports legacy project settings once when first configured. Selected
+monitor initializes from saved project monitoring preferences only when no desktop-wide choice has been configured. Selected
 application areas, host connections and Start/Stop intent are transient; they
 are not restored as running work on startup.
 

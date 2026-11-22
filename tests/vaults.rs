@@ -19,12 +19,20 @@ struct Peer {
 }
 impl Peer {
     fn new(request: &vault::Open, headless: bool) -> Self {
+        Self::configured(request, headless, |_| {})
+    }
+    fn configured(
+        request: &vault::Open,
+        headless: bool,
+        configure: impl FnOnce(&mut Command),
+    ) -> Self {
         let mut command = Command::new(if headless {
             env!("CARGO_BIN_EXE_rode-sessiond")
         } else {
             env!("CARGO_BIN_EXE_rode")
         });
         command.arg("--vault-helper");
+        configure(&mut command);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -83,12 +91,15 @@ fn request(path: &Path, program: &str, create: bool) -> vault::Open {
     }
 }
 fn runtime(path: &Path) -> PathBuf {
-    vault::runtime_directory().join(files::digest(
+    vault::runtime_directory().unwrap().join(files::digest(
         path.canonicalize().unwrap().to_string_lossy().as_bytes(),
     ))
 }
 fn cleanup_runtime(path: &Path) {
     let runtime = runtime(path);
+    cleanup_runtime_at(&runtime);
+}
+fn cleanup_runtime_at(runtime: &Path) {
     let point = runtime.join("plain");
     // The test's own empty mountpoint is inaccessible when locked. Never
     // recursively delete a mounted tree or an encrypted backing directory.
@@ -101,6 +112,72 @@ fn cleanup_runtime(path: &Path) {
     }
     fs::remove_dir(runtime).unwrap();
 }
+
+#[test]
+fn desktop_and_headless_vaults_use_host_private_temp_and_honor_explicit_overrides() {
+    for headless in [false, true] {
+        for overridden in [false, true] {
+            let fixture = tempfile::tempdir().unwrap();
+            let home = fixture.path().join("home with spaces");
+            let public_tmp = fixture.path().join("public-tmp");
+            let cipher = fixture.path().join("encrypted");
+            let custom = fixture.path().join("explicit-vault-root");
+            for path in [&home, &public_tmp, &cipher] {
+                fs::create_dir(path).unwrap();
+                fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            fs::set_permissions(&public_tmp, fs::Permissions::from_mode(0o777)).unwrap();
+            fs::write(cipher.join("gocryptfs.conf"), "fixture").unwrap();
+            let mut peer = Peer::configured(
+                &request(&cipher, "/usr/bin/true", false),
+                headless,
+                |command| {
+                    command.env("HOME", &home).env_remove("RODE_VAULT_DIR");
+                    for name in rode_host_core::private_tmp::VARIABLES {
+                        command.env(name, &public_tmp);
+                    }
+                    if overridden {
+                        command.env("RODE_VAULT_DIR", &custom);
+                    }
+                },
+            );
+            let vault::Reply::Error { message } = peer.next() else {
+                panic!("A successful tool without FUSE must not open a project");
+            };
+            assert!(message.contains("verified encrypted mount"), "{message}");
+            let temporary = home.join(".cache/rode/tmp");
+            let hostname = rode_host_core::host_identity::hostname().unwrap();
+            let default = temporary.join(format!("vaults-{}", files::digest(hostname.as_bytes())));
+            let base = if overridden { &custom } else { &default };
+            let runtime = base.join(files::digest(
+                cipher.canonicalize().unwrap().to_string_lossy().as_bytes(),
+            ));
+            assert_eq!(
+                fs::metadata(&temporary).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                fs::metadata(base).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                fs::metadata(runtime.join("plain"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0
+            );
+            assert!(fs::read_dir(&public_tmp).unwrap().next().is_none());
+            if overridden {
+                assert!(!default.exists());
+            }
+            drop(peer);
+            cleanup_runtime_at(&runtime);
+        }
+    }
+}
+
 #[test]
 fn a_successful_tool_without_a_real_mount_never_opens_plaintext() {
     for headless in [false, true] {

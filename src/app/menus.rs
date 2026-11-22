@@ -162,6 +162,9 @@ impl EditorApp {
         self.menu_commands(ui, ctx, &[Command::Connect, Command::Tunnels]);
         section(ui, "SAVE", false);
         self.menu_commands(ui, ctx, &[Command::Save, Command::SaveAs, Command::SaveAll]);
+        if self.workspace.project_open() || self.vaults.has_active() {
+            self.menu_commands(ui, ctx, &[Command::CloseProject]);
+        }
         ui.add_space(4.);
         ui.separator();
         self.menu_commands(ui, ctx, &[Command::Quit]);
