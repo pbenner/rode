@@ -51,6 +51,14 @@ pub(super) enum AfterLock {
 /// A lease held across project-view teardown stays opaque to other components.
 #[must_use = "Return retained encrypted leases to the vault owner after teardown"]
 pub(super) struct RetainedLease(Option<Client>);
+/// Read-only footer state belongs to the retained lease, even after SSH loss
+/// restores a different workspace. Its tooltip identifies the storage host.
+pub(super) struct Status {
+    pub label: &'static str,
+    pub compact_label: &'static str,
+    pub details: String,
+    pub uncertain: bool,
+}
 impl Barrier {
     /// User-facing explanation of a denied or delayed transition; an absent barrier has an empty
     /// message.
@@ -96,6 +104,34 @@ pub(super) struct State {
     picker: picker::Picker,
 }
 impl State {
+    /// Keep lock controls reachable without exposing lease lifecycle mutations
+    /// to the chrome. A disconnected lease must never imply a verified unlock.
+    pub(super) fn status(&self) -> Option<Status> {
+        let client = self.active.as_ref()?;
+        let info = client.info.as_ref()?;
+        let (label, compact_label) = if self.lost {
+            ("Encrypted · unknown", "Unknown")
+        } else if self.locking {
+            ("Encrypted · locking…", "Locking…")
+        } else {
+            ("Encrypted · unlocked", "Unlocked")
+        };
+        let host = client.remote.as_ref().map_or_else(
+            || "LOCAL".into(),
+            |remote| format!("SSH · {}", remote.profile.endpoint()),
+        );
+        Some(Status {
+            label,
+            compact_label,
+            details: format!(
+                "ENCRYPTED PROJECT · {}\nStorage host: {host}\nEncrypted folder: {}\nDecrypted folder: {}\nOpen encryption and lock controls",
+                self.lock_status(),
+                info.cipherdir,
+                info.mountpoint
+            ),
+            uncertain: self.lost,
+        })
+    }
     /// Every encrypted-project surface must distinguish an acknowledged mount
     /// from a disconnected lease whose current state cannot be verified.
     fn lock_status(&self) -> &'static str {
@@ -272,39 +308,6 @@ impl State {
     }
 }
 impl EditorApp {
-    /// Display verified unlocked/unknown state without treating transport loss as a successful lock.
-    pub(super) fn encrypted_banner(&mut self, ctx: &egui::Context) {
-        let Some(info) = self
-            .vaults
-            .active
-            .as_ref()
-            .and_then(|client| client.info.clone())
-        else {
-            return;
-        };
-        let palette = self.themes.active().palette;
-        egui::TopBottomPanel::top("encrypted-project-banner")
-            .exact_height(34.)
-            .frame(theme::frame(palette.raised))
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.colored_label(
-                        palette.accent,
-                        format!("ENCRYPTED PROJECT · {}", self.vaults.lock_status()),
-                    );
-                    layout::bounded_label(
-                        ui,
-                        RichText::new(ssh::display_name(&info.cipherdir)).monospace(),
-                        (ui.available_width() - 160.).clamp(40., 500.),
-                        20.,
-                    )
-                    .on_hover_text(&info.cipherdir);
-                    if crate::keyboard::button(ui, "Encryption / Lock…").clicked() {
-                        self.encrypted_dialog();
-                    }
-                });
-            });
-    }
     /// Cancel the current unlock/create presentation and release any unfinished staged client.
     pub(super) fn cancel_encrypted_dialog(&mut self) {
         self.vaults.cancel_folder_picker();
@@ -838,7 +841,7 @@ mod tests {
         }
     }
     #[test]
-    fn disconnected_vault_dialog_and_banner_do_not_claim_a_verified_unlock() {
+    fn disconnected_vault_dialog_and_footer_do_not_claim_a_verified_unlock() {
         for lost in [false, true] {
             let (mut app, ctx) = active(true);
             app.vaults.lost = lost;
@@ -854,7 +857,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ctx| {
-                        app.encrypted_banner(ctx);
+                        app.statusbar(ctx);
                         app.dialogs(ctx);
                     },
                 ));
@@ -875,13 +878,166 @@ mod tests {
                 "UNLOCKED"
             };
             assert!(
-                text.contains(&format!("ENCRYPTED PROJECT · {expected}")),
+                text.contains(if lost {
+                    "Encrypted · unknown"
+                } else {
+                    "Encrypted · unlocked"
+                }),
                 "{text}"
             );
             assert!(text.contains(&format!("{expected} · /cipher")), "{text}");
             if lost {
                 assert!(!text.contains("UNLOCKED"), "{text}");
             }
+        }
+    }
+    #[test]
+    fn encrypted_footer_fits_and_opens_lock_controls_without_an_extra_header() {
+        for remote in [false, true] {
+            let (mut app, ctx) = active(true);
+            if remote {
+                let mut workspace = super::super::tests::remote_workspace();
+                workspace.root = "/plain".into();
+                app.vaults.active.as_mut().unwrap().remote = workspace.remote.clone();
+                app.workspace.set_fixture(Some(workspace));
+            }
+            // A long path must yield room to the encryption and host indicators.
+            app.workspace.as_mut().unwrap().root =
+                format!("/plain/{}", "long-project-folder/".repeat(20));
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("footer.json");
+            ui_probe::install_at(&ctx, path.clone());
+            for (lost, locking) in [(false, false), (false, true), (true, true)] {
+                app.vaults.lost = lost;
+                app.vaults.locking = locking;
+                // Keep the remote lease visible even if recovery restores local CWD.
+                if lost {
+                    app.workspace.as_mut().unwrap().remote = None;
+                }
+                let status = app.vaults.status().unwrap();
+                assert!(status.details.contains(if remote {
+                    "SSH · researcher@test-host"
+                } else {
+                    "LOCAL"
+                }));
+                assert_eq!(status.uncertain, lost);
+                if lost {
+                    assert!(!status.details.contains("UNLOCKED"));
+                    assert_eq!(status.compact_label, "Unknown");
+                }
+                for (width, scale) in [(1380., 1.), (850., 1.), (480., 1.), (480., 1.5)] {
+                    ctx.set_zoom_factor(scale);
+                    for theme in ["studio", "phosphor", "sumie-dark", "atelier-light"] {
+                        app.select_theme(theme, &ctx);
+                        for _ in 0..2 {
+                            let _ = ctx.run(
+                                egui::RawInput {
+                                    screen_rect: Some(egui::Rect::from_min_size(
+                                        egui::Pos2::ZERO,
+                                        egui::vec2(width, 900.),
+                                    )),
+                                    ..Default::default()
+                                },
+                                |ctx| {
+                                    app.titlebar(ctx);
+                                    let top = ctx.available_rect().top();
+                                    app.statusbar(ctx);
+                                    assert_eq!(
+                                        ctx.available_rect().top(),
+                                        top,
+                                        "Encrypted status consumed an extra header"
+                                    );
+                                },
+                            );
+                        }
+                        let state: serde_json::Value =
+                            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                        let buttons = state["buttons"].as_array().unwrap();
+                        let controls: Vec<_> = [
+                            "status-connection",
+                            "status-project",
+                            "status-encryption",
+                            "status-access",
+                            "appearance-menu",
+                        ]
+                        .into_iter()
+                        .map(|name| {
+                            let control = buttons
+                                .iter()
+                                .find(|b| b["name"] == name)
+                                .unwrap_or_else(|| panic!("Missing {name}: {state}"));
+                            let [x1, y1, x2, y2]: [f32; 4] =
+                                serde_json::from_value(control["rect"].clone()).unwrap();
+                            egui::Rect::from_min_max(egui::pos2(x1, y1), egui::pos2(x2, y2))
+                        })
+                        .collect();
+                        let bounds = ctx.content_rect();
+                        let footer = egui::Rect::from_min_max(
+                            egui::pos2(bounds.left(), bounds.bottom() - 27.),
+                            bounds.max,
+                        );
+                        for (i, control) in controls.iter().enumerate() {
+                            assert!(
+                                footer.contains_rect(*control),
+                                "Footer escapes at {width}/{scale}/{theme}: {state}"
+                            );
+                            assert!(
+                                controls[i + 1..]
+                                    .iter()
+                                    .all(|other| !other.intersects(*control)),
+                                "Overlapping footer at {width}/{scale}/{theme}: {state}"
+                            );
+                        }
+                    }
+                }
+            }
+            app.vaults.locking = false;
+            // Activate the real footer control; it must retain access to recovery/lock UI.
+            ctx.set_zoom_factor(1.);
+            let frame = |app: &mut EditorApp, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100., 900.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| app.statusbar(ctx),
+                )
+            };
+            for _ in 0..3 {
+                let _ = frame(&mut app, vec![]);
+            }
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let button = state["buttons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["name"] == "status-encryption")
+                .unwrap();
+            let [x1, y1, x2, y2]: [f32; 4] =
+                serde_json::from_value(button["rect"].clone()).unwrap();
+            assert_eq!(button["enabled"], true, "{state}");
+            let point = egui::pos2((x1 + x2) / 2., (y1 + y2) / 2.);
+            let _ = frame(&mut app, vec![egui::Event::PointerMoved(point)]);
+            for pressed in [true, false] {
+                let _ = frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            assert!(app.dialog == Dialog::Encrypted);
         }
     }
     #[test]

@@ -169,6 +169,7 @@ impl EditorApp {
         width: f32,
     ) {
         let summary = Summary::new(self);
+        let encryption = self.vaults.status();
         let palette = self.themes.active().palette;
         let color = match summary.connection {
             Connection::Local => palette.muted,
@@ -199,20 +200,33 @@ impl EditorApp {
                 }
                 + 1.
         };
-        // Give host identity and access state their own bounded slots. Long
-        // project paths use the remainder; transient messages yield space first.
-        let gaps = if summary.mode.is_some() { 3. } else { 2. };
-        let available = (width - gaps * ui.spacing().item_spacing.x).max(0.);
+        // Reserve encryption state before host/access/path text so an unknown
+        // lease remains visible on narrow windows. Paths and transient messages
+        // yield space first; none of the controls may enlarge the footer row.
+        let gaps = 2 + usize::from(summary.mode.is_some()) + usize::from(encryption.is_some());
+        let available = (width - gaps as f32 * ui.spacing().item_spacing.x).max(0.);
+        let encryption = encryption.map(|status| {
+            let label = if natural_width(RichText::new(status.label), true) <= available * 0.35 {
+                status.label
+            } else {
+                status.compact_label
+            };
+            (status, label)
+        });
+        let encryption_width = encryption.as_ref().map_or(0., |(_, label)| {
+            natural_width(RichText::new(*label), true).min(available * 0.6)
+        });
+        let ordinary_available = (available - encryption_width).max(0.);
         let host_width = natural_width(RichText::new(&summary.host_label).strong(), true)
             .min(280.)
-            .min(available * 0.45);
+            .min(ordinary_available * 0.45);
         let mode_width = summary.mode.as_ref().map_or(0., |mode| {
             natural_width(RichText::new(mode), false)
                 .min(170.)
-                .min(available * 0.3)
+                .min(ordinary_available * 0.3)
         });
         let path_width = natural_width(RichText::new(path), false)
-            .min((available - host_width - mode_width).max(0.));
+            .min((ordinary_available - host_width - mode_width).max(0.));
         let enabled = !self.foreign_modal(ctx);
         slot(ui, host_width, |ui| {
             ui.add_enabled_ui(enabled, |ui| {
@@ -253,6 +267,30 @@ impl EditorApp {
                 ui_probe::value(ui, "status-project-value", &response, path);
             });
         });
+        if let Some((status, label)) = &encryption {
+            slot(ui, encryption_width, |ui| {
+                let color = if status.uncertain {
+                    palette.error
+                } else {
+                    palette.accent
+                };
+                let response = ui
+                    .add_enabled(
+                        enabled,
+                        crate::keyboard::Button::new(RichText::new(*label).size(12.).color(color))
+                            .small()
+                            .truncate()
+                            .min_size(egui::vec2(0., 19.))
+                            .fill(color.gamma_multiply(0.12)),
+                    )
+                    .on_hover_text(&status.details);
+                ui_probe::button(ui, "status-encryption", &response);
+                ui_probe::value(ui, "status-encryption-value", &response, status.label);
+                if response.clicked() {
+                    self.encrypted_dialog();
+                }
+            });
+        }
         if let Some(mode) = &summary.mode {
             slot(ui, mode_width, |ui| {
                 ui.add_enabled_ui(enabled, |ui| {
