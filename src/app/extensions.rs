@@ -71,21 +71,9 @@ impl EditorApp {
     pub(super) fn feature(&self, feature: Feature) -> bool {
         self.extensions.registry.feature(feature)
     }
-    /// Map optional tool views to their bundled feature gate; core views have no extra gate.
-    pub(super) fn panel_feature(panel: Panel) -> Option<Feature> {
-        match panel {
-            Panel::Transfers | Panel::SharedFolders => Some(Feature::Transfers),
-            Panel::Git => Some(Feature::Git),
-            Panel::Monitor => Some(Feature::Monitor),
-            Panel::Stocks => Some(Feature::Stocks),
-            Panel::Agent => Some(Feature::Agents),
-            Panel::Debug => Some(Feature::Debugger),
-            Panel::Problems | Panel::Tasks | Panel::Settings => None,
-        }
-    }
     /// Allow core panels and only enabled optional feature panels.
     pub(super) fn panel_enabled(&self, panel: Panel) -> bool {
-        Self::panel_feature(panel).is_none_or(|f| self.feature(f))
+        panel.feature().is_none_or(|f| self.feature(f))
     }
     /// Persist explicitly changed extension preferences; retain pending state when storage is absent.
     pub(super) fn persist_extensions<S: eframe::Storage + ?Sized>(
@@ -116,9 +104,12 @@ impl EditorApp {
         // Invalidates all source-tool results, including jobs queued before disabling.
         self.workbench.invalidate_tools();
         if !enabled {
-            if self.presentation.area.panel().is_some_and(|panel| {
-                Self::panel_feature(panel).is_some_and(|feature| feature.id() == id)
-            }) {
+            if self
+                .presentation
+                .area
+                .panel()
+                .is_some_and(|panel| panel.feature().is_some_and(|feature| feature.id() == id))
+            {
                 self.presentation.enter_area(areas::Area::Projects);
             }
             if id == Feature::Transfers.id() {
@@ -130,17 +121,6 @@ impl EditorApp {
             }
             if id == Feature::Latex.id() {
                 self.stop_latex();
-            }
-            if id == Feature::Marp.id() {
-                for doc in &mut self.documents {
-                    if let Some(view) = &mut doc.marp {
-                        view.invalidate();
-                        view.showing = false;
-                    }
-                }
-            }
-            if id == Feature::Notebooks.id() {
-                self.leave_notebooks(workspace::LeaveReason::NotebooksDisabled);
             }
             if id == Feature::Agents.id() {
                 self.stop_project_agent();
@@ -159,23 +139,7 @@ impl EditorApp {
             {
                 self.presentation.clear_panel();
             }
-            for doc in &mut self.documents {
-                if doc
-                    .paged_feature()
-                    .is_some_and(|feature| id == feature.id())
-                    && let Some(pdf) = &mut doc.pdf
-                {
-                    pdf.invalidate();
-                }
-                if (id == Feature::Markdown.id() || id == Feature::Images.id())
-                    && let Some(preview) = &mut doc.markdown
-                {
-                    preview.invalidate();
-                    if id == Feature::Markdown.id() {
-                        preview.showing = false;
-                    }
-                }
-            }
+            self.documents.disable_feature(id);
         }
     }
     /// Explain a disabled specialized viewer while preserving access to the underlying document state.
@@ -183,15 +147,7 @@ impl EditorApp {
         let Some(doc) = self.documents.active() else {
             return false;
         };
-        let feature = if doc.notebook.is_some() {
-            Some(Feature::Notebooks)
-        } else if doc.hex.is_some() {
-            Some(Feature::Binary)
-        } else if doc.image.is_some() {
-            Some(Feature::Images)
-        } else {
-            doc.paged_feature()
-        };
+        let feature = doc.feature();
         if let Some(feature) = feature
             && !self.feature(feature)
         {

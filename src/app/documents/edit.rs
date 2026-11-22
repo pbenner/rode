@@ -87,23 +87,12 @@ impl<'a> BinaryEdit<'a> {
         &mut self,
         edit: impl FnOnce(&mut super::binary_view::HexView) -> R,
     ) -> R {
-        edit(
-            self.document
-                .content
-                .hex
-                .as_mut()
-                .expect("captured binary view"),
-        )
+        edit(self.document.hex_mut().expect("captured binary view"))
     }
 }
 impl Drop for BinaryEdit<'_> {
     fn drop(&mut self) {
-        let view = self
-            .document
-            .content
-            .hex
-            .as_ref()
-            .expect("captured binary view");
+        let view = self.document.hex().expect("captured binary view");
         if view.buffer.revision() != self.revision {
             let dirty = view.buffer.dirty();
             self.document.binary_changed(dirty);

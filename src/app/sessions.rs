@@ -351,7 +351,7 @@ impl EditorApp {
         let notebook_allocation = self
             .documents
             .iter()
-            .any(|doc| doc.notebook.as_ref().is_some_and(|v| v.uses_slurm()));
+            .any(|doc| doc.notebook().is_some_and(|v| v.uses_slurm()));
         if (manager || allocation_visible || notebook_allocation || self.dialog == Dialog::Slurm)
             && self
                 .sessions

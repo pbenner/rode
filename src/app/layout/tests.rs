@@ -610,11 +610,12 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                 ] {
                     if scene == "binary" {
                         app.new_file();
-                        app.documents.active_mut().unwrap().fixture_content().hex =
-                            Some(crate::app::binary_view::HexView::new(
+                        app.documents.active_mut().unwrap().set_binary_fixture(
+                            crate::app::binary_view::HexView::new(
                                 crate::binary::Loaded::decode("AAECAwQF", &app.image_budget)
                                     .unwrap(),
-                            ));
+                            ),
+                        );
                     } else if scene == "markdown" {
                         app.new_file();
                         let doc = app.documents.active_mut().unwrap();
@@ -623,7 +624,7 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                         let mut preview =
                             crate::app::markdown::Preview::new(app.markdown_images.clone());
                         preview.showing = true;
-                        doc.markdown = Some(preview);
+                        doc.source_views_mut().unwrap().markdown = Some(preview);
                     } else if scene == "slides" {
                         app.new_marp();
                         // Paint the toolbar without starting a project-host renderer.

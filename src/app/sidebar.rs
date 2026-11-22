@@ -45,13 +45,13 @@ pub(super) fn section<R>(
 impl EditorApp {
     pub(super) fn connections_visible(&self) -> bool {
         self.presentation.sidebar == Some(View::Connections)
-            && !self.tab_detached(tool_windows::ToolTab::Connections)
+            && !self.tab_detached(ToolTab::Connections)
     }
 
     /// Reveal the sole existing owner without replacing the current central
     /// view, reconnecting a host, or starting a project service.
     pub(super) fn show_connections(&mut self, ctx: &egui::Context) {
-        let tab = tool_windows::ToolTab::Connections;
+        let tab = ToolTab::Connections;
         if self.tab_detached(tab) {
             self.focus_tool_tab(tab, ctx);
         } else {

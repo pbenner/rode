@@ -5,7 +5,10 @@
 //! Structural tab ownership and selected IDs stay here across workspace changes.
 use super::*;
 mod edit;
+mod lifecycle;
+mod view;
 pub(super) use edit::Edit;
+use view::Representation;
 
 /// Source-only projection for keyboard interpretation; preview policy stays with documents.
 pub(super) struct Source<'a> {
@@ -15,6 +18,14 @@ pub(super) struct Source<'a> {
     pub text: &'a str,
     /// Display/language hint, including recovery paths; never grants file-I/O authority.
     pub path: Option<&'a str>,
+}
+
+/// Refresh intent selected by the document representation. The desktop dispatches
+/// the read or invokes the viewer's existing versioned reload operation.
+pub(super) enum Refresh {
+    Read(Box<Request>),
+    Image,
+    Paged,
 }
 
 /// Versioned dirty/save facts shared by transition and exit admission.
@@ -43,15 +54,11 @@ struct Recovery {
     encrypted: bool,
 }
 
-/// One stable tab identity and editable source/save baseline, with optional specialized
-/// document state. Only bound paths authorize project-host file operations; recovery paths are
+/// One stable tab identity and source/save baseline with one primary representation.
+/// Only bound paths authorize project-host file operations; recovery paths are
 /// display/reconnect metadata.
 pub struct Document {
-    pub(super) markdown: Option<markdown::Preview>,
-    pub(super) marp: Option<marp_view::View>,
-    pub(super) image: Option<image_view::ImageView>,
-    pub(super) pdf: Option<pdf_view::PdfView>,
-    pub(super) notebook: Option<notebook_view::View>,
+    view: Representation,
     content: Content,
     recovery: Option<Recovery>,
     /// Cached dirty state, including structured notebook or binary edits.
@@ -84,7 +91,6 @@ pub struct Content {
     pub revision: Option<String>,
     /// Whether a source/binary save request is in flight.
     pub saving: bool,
-    pub(super) hex: Option<binary_view::HexView>,
 }
 
 impl std::ops::Deref for Document {
@@ -120,7 +126,7 @@ impl Document {
         &mut self,
         edit: impl FnOnce(&mut binary_view::HexView) -> R,
     ) -> Option<R> {
-        let revision = self.content.hex.as_ref()?.buffer.revision();
+        let revision = self.hex()?.buffer.revision();
         let mut source = edit::BinaryEdit::new(self, revision);
         Some(source.apply(edit))
     }
@@ -133,9 +139,14 @@ impl Document {
     }
     /// Prepare the preview against one owned source/version pair without copying the buffer.
     pub(super) fn prepare_markdown(&mut self, path: &str) -> Vec<(String, String)> {
-        self.markdown.as_mut().map_or_else(Vec::new, |preview| {
-            preview.prepare(self.edit_version, path, &self.content.text)
-        })
+        match &mut self.view {
+            Representation::Source(views) => {
+                views.markdown.as_mut().map_or_else(Vec::new, |preview| {
+                    preview.prepare(self.edit_version, path, &self.content.text)
+                })
+            }
+            _ => Vec::new(),
+        }
     }
     /// Revision guard for the destination: a new Save As path has no baseline, while writes to the
     /// current binding retain its captured revision.
@@ -173,7 +184,7 @@ impl Document {
             return None;
         }
         let snapshot = SaveSnapshot {
-            contents: self.hex.as_ref()?.save_snapshot(),
+            contents: self.hex()?.save_snapshot(),
             expected: self.expected_revision(path, save_as),
         };
         self.content.saving = true;
@@ -243,10 +254,10 @@ impl Document {
     pub(super) fn renamed(&mut self, path: String) {
         self.content.path = Some(path);
         self.edit_version = self.edit_version.wrapping_add(1);
-        if let Some(preview) = &mut self.markdown {
+        if let Some(preview) = self.markdown_mut() {
             preview.invalidate();
         }
-        if let Some(view) = &mut self.marp {
+        if let Some(view) = self.marp_mut() {
             view.invalidate();
         }
     }
@@ -267,11 +278,11 @@ impl Document {
     }
     /// Identify specialized documents whose bytes/source use a dedicated editor or preview path.
     pub(super) fn is_preview(&self) -> bool {
-        self.image.is_some() || self.pdf.is_some() || self.hex.is_some() || self.notebook.is_some()
+        !matches!(self.view, Representation::Source(_))
     }
     /// Explain disabled saves without suggesting that a presentation has become editable text.
     pub(super) fn read_only_preview_notice(&self) -> &'static str {
-        match self.pdf.as_ref().map(|view| view.source.format) {
+        match self.pdf().map(|view| view.source.format) {
             Some(crate::pdf::Format::Docx) => "Word previews are read-only.",
             Some(crate::pdf::Format::Pptx) => "PowerPoint previews are read-only.",
             _ => "Image and PDF previews are read-only.",
@@ -281,12 +292,12 @@ impl Document {
     ///
     /// PDF, PowerPoint and Word readers use the same loading and lifetime boundary.
     pub(super) fn preview_loading(&self) -> bool {
-        self.image.as_ref().is_some_and(|image| image.loading)
-            || self.pdf.as_ref().is_some_and(|pdf| pdf.image.loading)
+        self.image().is_some_and(|image| image.loading)
+            || self.pdf().is_some_and(|pdf| pdf.image.loading)
     }
     /// Native feature owning this paged preview; PDF, PPTX and DOCX can be enabled independently.
     pub(super) fn paged_feature(&self) -> Option<crate::extensions::Feature> {
-        self.pdf.as_ref().map(|view| match view.source.format {
+        self.pdf().map(|view| match view.source.format {
             crate::pdf::Format::Pdf => crate::extensions::Feature::Pdf,
             crate::pdf::Format::Pptx => crate::extensions::Feature::Pptx,
             crate::pdf::Format::Docx => crate::extensions::Feature::Docx,
@@ -310,7 +321,7 @@ impl Document {
         bytes: Arc<Vec<u8>>,
         revision: String,
     ) {
-        if let Some(hex) = &mut self.content.hex {
+        if let Some(hex) = self.hex_mut() {
             hex.buffer.acknowledge(bytes);
             self.modified = hex.buffer.dirty();
         }
@@ -348,7 +359,6 @@ impl Document {
                 saved_text: String::new(),
                 revision: None,
                 saving: false,
-                hex: None,
             },
             recovery: None,
             modified: true,
@@ -357,11 +367,7 @@ impl Document {
             cursor: (1, 1),
             selection: None,
             lines: 1,
-            markdown: None,
-            marp: None,
-            image: None,
-            pdf: None,
-            notebook: None,
+            view: Representation::default(),
         }
     }
 
@@ -388,7 +394,7 @@ impl Document {
         shutdowns: &notebook_view::Shutdowns,
     ) {
         if response.notebook.is_some()
-            && self.notebook.is_some()
+            && self.notebook().is_some()
             && self.content.text == response.text
             && self.revision.as_deref() == Some(&response.revision)
         {
@@ -405,31 +411,35 @@ impl Document {
         images: &Arc<markdown::Images>,
         shutdowns: &notebook_view::Shutdowns,
     ) {
-        if let Some(result) = response.notebook.take() {
-            self.notebook = result
-                .ok()
-                .map(|book| notebook_view::View::new(book, images.clone(), shutdowns.clone()));
-        }
+        // A host read selects exactly one representation. Reloading a paged/image
+        // view keeps its navigation state; changing kinds drops the old owner.
         if let Some(loaded) = response.hex.take() {
-            self.notebook = None;
-            self.content.hex = Some(binary_view::HexView::new(loaded));
-            self.pdf = None;
-            self.image = None;
-            self.markdown = None;
-        }
-        if let Some(loaded) = response.pdf.take() {
-            if let Some(pdf) = &mut self.pdf {
-                pdf.replace(loaded);
+            self.view = Representation::Binary(Box::new(binary_view::HexView::new(loaded)));
+        } else if let Some(loaded) = response.pdf.take() {
+            if let Some(view) = self.pdf_mut() {
+                view.replace(loaded);
             } else {
-                self.pdf = Some(pdf_view::PdfView::new(loaded));
+                self.view = Representation::Paged(Box::new(pdf_view::PdfView::new(loaded)));
             }
-        }
-        if let Some(loaded) = response.preview.take() {
-            if let Some(image) = &mut self.image {
-                image.replace(loaded);
+        } else if let Some(loaded) = response.preview.take() {
+            if let Some(view) = self.image_mut() {
+                view.replace(loaded);
             } else {
-                self.image = Some(image_view::ImageView::new(loaded));
+                self.view = Representation::Image(Box::new(image_view::ImageView::new(loaded)));
             }
+        } else if let Some(result) = response.notebook.take() {
+            self.view = result.map_or_else(
+                |_| Representation::default(),
+                |book| {
+                    Representation::Notebook(Some(Box::new(notebook_view::View::new(
+                        book,
+                        images.clone(),
+                        shutdowns.clone(),
+                    ))))
+                },
+            );
+        } else if !matches!(self.view, Representation::Source(_)) {
+            self.view = Representation::default();
         }
     }
 
@@ -443,15 +453,7 @@ impl Document {
     /// Cancel source/preview acknowledgements without disposing notebook cleanup owners.
     pub(super) fn invalidate_context(&mut self, include_pdf: bool) {
         self.content.saving = false;
-        if include_pdf && let Some(pdf) = &mut self.pdf {
-            pdf.invalidate();
-        }
-        if let Some(preview) = &mut self.markdown {
-            preview.invalidate();
-        }
-        if let Some(view) = &mut self.marp {
-            view.invalidate();
-        }
+        self.invalidate_previews(include_pdf);
     }
 }
 
@@ -507,7 +509,7 @@ impl Documents {
                     encrypted,
                 });
             }
-            if let Some(image) = &mut doc.image {
+            if let Some(image) = doc.image_mut() {
                 image.loading = false;
             }
         }
@@ -555,13 +557,7 @@ impl Documents {
     /// notebook cells, binary and rendered previews are excluded.
     pub(super) fn active_source(&self) -> Option<Source<'_>> {
         let doc = self.active()?;
-        if doc.image.is_some()
-            || doc.pdf.is_some()
-            || doc.hex.is_some()
-            || doc.notebook.as_ref().is_some_and(|v| !v.source_mode())
-            || doc.markdown.as_ref().is_some_and(|v| v.showing)
-            || doc.marp.as_ref().is_some_and(|v| v.showing)
-        {
+        if !doc.source_visible() {
             return None;
         }
         Some(Source {
@@ -605,7 +601,7 @@ impl Documents {
         self.items
             .iter()
             .find(|doc| doc.id == id)
-            .and_then(|doc| doc.notebook.as_ref())
+            .and_then(|doc| doc.notebook())
             .is_some_and(|view| view.lifetime_pending())
     }
 
@@ -863,7 +859,8 @@ impl Documents {
 
     /// Invalidate pending reads and save flags on a workspace change. Retained buffers keep
     /// identities; discard mode clears the collection.
-    pub(super) fn reset_context(&mut self, retention: Retention) {
+    pub(super) fn reset_context(&mut self, retention: Retention, reason: workspace::LeaveReason) {
+        self.leave_notebooks(reason);
         self.cancel_opens();
         if retention == Retention::Discard {
             self.clear();

@@ -174,7 +174,7 @@ impl EditorApp {
             self.documents
                 .iter()
                 .find(|doc| doc.id == *id)
-                .and_then(|doc| doc.pdf.as_ref())
+                .and_then(|doc| doc.pdf())
                 .map(|pdf| pdf.cancellation())
                 .unwrap_or_else(|| self.pdf_cancel.clone())
         } else {
@@ -185,7 +185,7 @@ impl EditorApp {
             self.documents
                 .iter()
                 .find(|doc| doc.id == *id)
-                .and_then(|doc| doc.pdf.as_ref())
+                .and_then(|doc| doc.pdf())
                 .map_or(1, |pdf| pdf.page)
         } else {
             1
@@ -194,7 +194,7 @@ impl EditorApp {
             self.documents
                 .iter()
                 .find(|d| d.id == *id)
-                .and_then(|d| d.image.as_ref())
+                .and_then(|d| d.image())
                 .map(|i| format!("preview.{}", i.format.to_ascii_lowercase()))
         } else {
             None

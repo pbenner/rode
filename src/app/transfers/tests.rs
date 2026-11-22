@@ -88,7 +88,7 @@ fn moving_the_transfer_view_preserves_listings_selection_and_running_copy() {
     });
     for _ in 0..2 {
         app.detach_tab(areas::Area::Transfers.tab().unwrap(), &ctx);
-        app.reattach_tool_tab(tool_windows::ToolTab::Panel(Panel::Transfers), &ctx);
+        app.reattach_tool_tab(ToolTab::Panel(Panel::Transfers), &ctx);
         assert_eq!(app.transfers.generation, generation);
         assert_eq!(app.transfers.panes[Side::Local].browser.directory, "/local");
         assert_eq!(

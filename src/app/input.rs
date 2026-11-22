@@ -68,9 +68,7 @@ impl EditorApp {
             return None;
         }
         let doc = self.documents.active()?;
-        let markdown = doc.markdown.as_ref().is_some_and(|preview| preview.showing)
-            || doc.marp.as_ref().is_some_and(|preview| preview.showing);
-        if !markdown && doc.pdf.is_none() && doc.image.is_none() {
+        if !doc.rendered_preview() {
             return None;
         }
         let shortcut = Command::Markdown.shortcut().unwrap();
@@ -94,7 +92,7 @@ impl EditorApp {
             let command = if *key == Key::W && modifiers.matches_logically(egui::Modifiers::COMMAND)
             {
                 DocumentShortcut::ClosePreview(doc.id)
-            } else if markdown
+            } else if !doc.is_preview()
                 && *key == shortcut.logical_key
                 && modifiers.matches_logically(shortcut.modifiers)
             {
@@ -141,11 +139,8 @@ impl EditorApp {
             return None;
         }
         self.documents.active().and_then(|doc| {
-            (doc.image.is_some()
-                || doc.pdf.is_some()
-                || doc.markdown.as_ref().is_some_and(|preview| preview.showing)
-                || doc.marp.as_ref().is_some_and(|preview| preview.showing))
-            .then(|| Scope::preview(ctx, doc.id, self.navigation.bindings.style()))
+            doc.rendered_preview()
+                .then(|| Scope::preview(ctx, doc.id, self.navigation.bindings.style()))
         })
     }
 
@@ -159,7 +154,7 @@ impl EditorApp {
             return;
         }
         if self.terminal_any_visible()
-            && self.tool_viewport(tool_windows::ToolTab::Terminal) == ctx.viewport_id()
+            && self.tool_viewport(ToolTab::Terminal) == ctx.viewport_id()
             && self.dialog == Dialog::None
             && !egui::Popup::is_any_open(ctx)
         {
@@ -167,7 +162,7 @@ impl EditorApp {
         }
         let terminal_focus = Terminal::focused(ctx)
             && self.terminal_any_visible()
-            && self.tool_viewport(tool_windows::ToolTab::Terminal) == ctx.viewport_id();
+            && self.tool_viewport(ToolTab::Terminal) == ctx.viewport_id();
         let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
         if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::P) {
             self.set_dialog(Dialog::Commands);

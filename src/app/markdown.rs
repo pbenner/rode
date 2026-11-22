@@ -575,18 +575,14 @@ fn file_target(base: &str, target: &str) -> Result<String, String> {
 impl EditorApp {
     /// Return the active Markdown preview to source mode without replacing its source text.
     pub(super) fn markdown_source(&mut self) {
-        if let Some(view) = self
-            .documents
-            .active_mut()
-            .and_then(|doc| doc.marp.as_mut())
-        {
+        if let Some(view) = self.documents.active_mut().and_then(|doc| doc.marp_mut()) {
             view.showing = false;
             view.stop_render();
         }
         if let Some(preview) = self
             .documents
             .active_mut()
-            .and_then(|doc| doc.markdown.as_mut())
+            .and_then(|doc| doc.markdown_mut())
         {
             preview.showing = false;
         }
@@ -596,7 +592,7 @@ impl EditorApp {
         if self.feature(crate::extensions::Feature::Marp)
             && self.documents.active().is_some_and(|doc| {
                 crate::marp::is_deck(doc.path.as_deref(), &doc.text)
-                    || doc.marp.as_ref().is_some_and(|view| view.showing)
+                    || doc.marp().is_some_and(|view| view.showing)
             })
         {
             self.toggle_marp(ctx);
@@ -614,10 +610,11 @@ impl EditorApp {
             self.notify("Open a Markdown file to switch its preview.", false);
             return;
         };
-        let preview = doc
+        let views = doc.source_views_mut().expect("Markdown source document");
+        let preview = views
             .markdown
             .get_or_insert_with(|| Preview::new(self.markdown_images.clone()));
-        if let Some(view) = &mut doc.marp {
+        if let Some(view) = &mut views.marp {
             view.showing = false;
             view.stop_render();
         }
@@ -638,21 +635,26 @@ impl EditorApp {
         }
         let untitled_path = self.join_root("untitled.marp.md");
         let doc = self.documents.active_mut().unwrap();
-        if !doc.path.as_deref().is_some_and(is_path) && doc.marp.is_none() {
-            doc.markdown = None;
+        if !doc.path.as_deref().is_some_and(is_path) && doc.marp().is_none() {
+            if let Some(views) = doc.source_views_mut() {
+                views.markdown = None;
+            }
             return false;
         }
         let dirty = doc.dirty();
         let path = doc.path.clone().unwrap_or(untitled_path);
         let id = doc.id;
-        let preview = doc
+        let Some(views) = doc.source_views_mut() else {
+            return false;
+        };
+        let preview = views
             .markdown
             .get_or_insert_with(|| Preview::new(self.markdown_images.clone()));
         let was_showing = preview.showing;
         if !markdown_enabled {
             preview.showing = false;
         }
-        let was_slides = doc.marp.as_ref().is_some_and(|view| view.showing);
+        let was_slides = views.marp.as_ref().is_some_and(|view| view.showing);
         let mut slides = was_slides && marp_enabled;
         let mut reload = false;
         ui.horizontal_wrapped(|ui| {
@@ -692,13 +694,14 @@ impl EditorApp {
             }
         });
         if slides {
-            doc.marp
+            views
+                .marp
                 .get_or_insert_with(marp_view::View::default)
                 .showing = true;
             self.marp_ui(ui, ctx);
             return true;
         }
-        if let Some(view) = &mut doc.marp {
+        if let Some(view) = &mut views.marp {
             view.showing = false;
         }
         if !preview.showing {
@@ -711,7 +714,7 @@ impl EditorApp {
             preview.invalidate();
         }
         let requests = doc.prepare_markdown(&path);
-        let preview = doc.markdown.as_ref().unwrap();
+        let preview = doc.markdown().unwrap();
         let token = preview.token;
         let cancelled = preview.cancelled.clone();
         let focus = self.take_editor_focus(ui, ctx).is_some() || !was_showing;
@@ -724,13 +727,7 @@ impl EditorApp {
             response.request_focus();
         }
         ui_probe::button(ui, "markdown-preview", &response);
-        let preview = self
-            .documents
-            .active_mut()
-            .unwrap()
-            .markdown
-            .as_mut()
-            .unwrap();
+        let preview = self.documents.active_mut().unwrap().markdown_mut().unwrap();
         let selected = egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(18, 8))
             .show(ui, |ui| {
@@ -829,7 +826,7 @@ impl EditorApp {
             .documents
             .iter_mut()
             .find(|d| d.id == id)
-            .and_then(|d| d.markdown.as_mut())
+            .and_then(|d| d.markdown_mut())
             .filter(|p| p.token == token)
         {
             preview.complete(uri, result, ctx);
@@ -853,30 +850,24 @@ mod tests {
         app.documents.active_mut().unwrap().set_source(draft.into());
         let mut preview = Preview::new(app.markdown_images.clone());
         preview.showing = true;
-        app.documents.active_mut().unwrap().markdown = Some(preview);
+        app.documents
+            .active_mut()
+            .unwrap()
+            .source_views_mut()
+            .unwrap()
+            .markdown = Some(preview);
         app.set_extension(crate::extensions::Feature::Markdown.id(), false);
-        assert!(
-            !app.documents
-                .active()
-                .unwrap()
-                .markdown
-                .as_ref()
-                .unwrap()
-                .showing
-        );
+        assert!(!app.documents.active().unwrap().markdown().unwrap().showing);
         let mut slides = marp_view::View::default();
         slides.showing = true;
-        app.documents.active_mut().unwrap().marp = Some(slides);
+        app.documents
+            .active_mut()
+            .unwrap()
+            .source_views_mut()
+            .unwrap()
+            .marp = Some(slides);
         app.set_extension(crate::extensions::Feature::Marp.id(), false);
-        assert!(
-            !app.documents
-                .active()
-                .unwrap()
-                .marp
-                .as_ref()
-                .unwrap()
-                .showing
-        );
+        assert!(!app.documents.active().unwrap().marp().unwrap().showing);
         for (markdown, marp) in [(false, true), (true, false), (false, false), (true, true)] {
             app.set_extension(crate::extensions::Feature::Markdown.id(), markdown);
             app.set_extension(crate::extensions::Feature::Marp.id(), marp);
@@ -1025,7 +1016,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
         assert!(!app.documents[0].dirty());
         app.toggle_markdown(&ctx);
-        assert!(!app.documents[0].markdown.as_ref().unwrap().showing);
+        assert!(!app.documents[0].markdown().unwrap().showing);
         assert_eq!(app.documents[0].text, source);
     }
     #[test]
@@ -1037,7 +1028,7 @@ mod tests {
         app.documents[0].fixture_content().path = Some("/project/README.md".into());
         app.toggle_markdown(&ctx);
         let id = app.documents[0].id;
-        let preview = app.documents[0].markdown.as_mut().unwrap();
+        let preview = app.documents[0].markdown_mut().unwrap();
         let requests = preview.prepare(0, "/project/README.md", "![sample](sample.png)");
         let token = preview.token;
         let cancel = preview.cancelled.clone();
@@ -1066,7 +1057,7 @@ mod tests {
             crate::images::decode_bytes(bytes.get_ref(), "sample.png", &app.image_budget, 4096)
                 .unwrap();
         // The source key was invalidated; prepare the new host context before accepting results.
-        app.documents[0].markdown.as_mut().unwrap().prepare(
+        app.documents[0].markdown_mut().unwrap().prepare(
             0,
             "/project/README.md",
             "![sample](sample.png)",

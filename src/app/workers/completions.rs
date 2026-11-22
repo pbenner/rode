@@ -59,10 +59,10 @@ impl EditorApp {
                     .iter_mut()
                     .find(|doc| doc.id == *id && doc.version() == *version)
                 {
-                    if let Some(image) = &mut doc.image {
+                    if let Some(image) = doc.image_mut() {
                         image.loading = false;
                     }
-                    if let Some(pdf) = &mut doc.pdf {
+                    if let Some(pdf) = doc.pdf_mut() {
                         pdf.reload_failed();
                     }
                 }

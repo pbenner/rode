@@ -389,37 +389,14 @@ impl EditorApp {
     /// Reload only bound, clean text documents after project mutations; dirty or
     /// saving buffers retain their local contents and preview tabs keep their own reload paths.
     pub(in crate::app) fn reload_clean_documents(&mut self, ctx: &egui::Context) {
-        let jobs: Vec<_> = self
-            .documents
-            .iter()
-            .filter(|d| !d.dirty() && !d.saving && !d.preview_loading())
-            .filter_map(|d| d.path.clone().map(|p| (p, d.id, d.version())))
-            .collect();
-        for (path, id, version) in jobs {
-            if self
-                .documents
-                .iter()
-                .any(|d| d.id == id && d.notebook.is_some())
-            {
-                self.dispatch(Request::ReadAuto { path }, Job::Reload { id, version }, ctx);
-            } else if self.documents.iter().any(|d| d.id == id && d.is_preview()) {
-                if self
-                    .documents
-                    .iter()
-                    .any(|doc| doc.id == id && doc.pdf.is_some())
-                {
-                    self.reload_pdf(id, ctx);
-                } else if self
-                    .documents
-                    .iter()
-                    .any(|doc| doc.id == id && doc.hex.is_some())
-                {
-                    self.dispatch(Request::ReadHex { path }, Job::Reload { id, version }, ctx);
-                } else {
-                    self.reload_image(id, ctx);
+        let jobs = self.documents.refreshes(|feature| self.feature(feature));
+        for (id, version, refresh) in jobs {
+            match refresh {
+                documents::Refresh::Read(request) => {
+                    self.dispatch(*request, Job::Reload { id, version }, ctx)
                 }
-            } else {
-                self.dispatch(Request::Read { path }, Job::Reload { id, version }, ctx);
+                documents::Refresh::Image => self.reload_image(id, ctx),
+                documents::Refresh::Paged => self.reload_pdf(id, ctx),
             }
         }
         if let Some(root) = self.workspace.as_ref().map(|w| w.root.clone()) {

@@ -6,7 +6,7 @@ use super::*;
 
 mod action;
 mod visibility;
-pub(super) use action::Command;
+pub(super) use action::{Command, Definition};
 
 enum PaletteAction {
     Command(Command),

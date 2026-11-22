@@ -115,7 +115,7 @@ impl EditorApp {
                     .and_then(|p| p.strip_prefix('/'))
                     .unwrap_or(path);
                 let doc = &self.documents[self.documents.active_index()];
-                if doc.notebook.is_none() && doc.pdf.is_none() {
+                if doc.notebook().is_none() && doc.pdf().is_none() {
                     egui::Frame::new()
                         .inner_margin(egui::Margin::symmetric(18, 7))
                         .show(ui, |ui| {
@@ -132,7 +132,7 @@ impl EditorApp {
                 }
                 if self.documents[self.documents.active_index()].is_recovery() {
                     let doc = self.documents.active().unwrap();
-                    let message = if doc.is_preview() && doc.notebook.is_none() {
+                    let message = if doc.is_preview() && doc.notebook().is_none() {
                         "Disconnected SSH preview · Reconnect to reload its source."
                     } else {
                         "Disconnected SSH buffer · Save As a local copy, or reconnect to restore file access."
@@ -149,13 +149,11 @@ impl EditorApp {
                     self.editor.input.after_preview(ctx, self.documents.active().unwrap().id);
                     return;
                 }
-                if self.documents[self.documents.active_index()].image.is_some() {
+                if self.documents[self.documents.active_index()].image().is_some() {
                     let focus = self.take_editor_focus(ui, ctx).is_some();
                     let doc = self.documents.active_mut().unwrap();
                     let id = doc.id;
-                    let reload = doc
-                        .image
-                        .as_mut()
+                    let reload = doc.image_mut()
                         .unwrap()
                         .ui(ui, ctx, id, palette, focus)
                         .reload;
@@ -218,7 +216,7 @@ impl EditorApp {
                     .insert(egui::TextStyle::Monospace, FontId::monospace(font_size));
                 let lang = syntax_token(
                     doc.display_path()
-                        .or_else(|| doc.marp.as_ref().map(|_| "untitled.marp.md")),
+                        .or_else(|| doc.marp().map(|_| "untitled.marp.md")),
                 )
                 .to_owned();
                 let syntax_ready = std::cell::Cell::new(false);

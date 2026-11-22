@@ -234,14 +234,14 @@ fn notebook_shutdown_probe() {
             assert!(Instant::now() < until, "Initial attachment did not finish");
             std::thread::sleep(Duration::from_millis(5));
         }
-        app.documents[0].notebook.as_mut().unwrap().kernel = Some(kernel);
+        app.documents[0].notebook_mut().unwrap().kernel = Some(kernel);
         let reason = match case.as_str() {
             "leave_workspace" => workspace::LeaveReason::ProjectChanged,
             "leave_disabled" => workspace::LeaveReason::NotebooksDisabled,
             "leave_vault" => workspace::LeaveReason::VaultLock,
             _ => unreachable!(),
         };
-        app.leave_notebooks(reason);
+        app.documents.leave_notebooks(reason);
         let stopping = reason == workspace::LeaveReason::VaultLock;
         assert_eq!(app.notebook_shutdowns.pending(), stopping);
         loop {
@@ -306,8 +306,8 @@ fn notebook_shutdown_probe() {
             crate::files::digest(doc.text.as_bytes()),
         );
         let version = doc.version();
-        let uid = doc.notebook.as_ref().unwrap().book.cells[0].uid;
-        doc.notebook.as_mut().unwrap().kernel = Some(kernel);
+        let uid = doc.notebook().unwrap().book.cells[0].uid;
+        doc.notebook_mut().unwrap().kernel = Some(kernel);
         app.reload_clean_documents(&ctx);
         let mut events = Vec::new();
         loop {
@@ -335,7 +335,7 @@ fn notebook_shutdown_probe() {
         }
         app.poll(&ctx);
         let doc = &app.documents[0];
-        let view = doc.notebook.as_ref().unwrap();
+        let view = doc.notebook().unwrap();
         assert_eq!(view.native_id(), Some(host.id.as_str()));
         assert_eq!(view.book.cells[0].uid, uid);
         assert_eq!(doc.version(), version);
@@ -347,7 +347,7 @@ fn notebook_shutdown_probe() {
         );
         return;
     }
-    app.documents[0].notebook.as_mut().unwrap().kernel = Some(kernel);
+    app.documents[0].notebook_mut().unwrap().kernel = Some(kernel);
     let failure = case == "shutdown_failure";
     let blocked = BlockedHelper::new(primary.parent().unwrap(), failure);
     app.toggle_notebook_source(&ctx);
@@ -364,7 +364,7 @@ fn notebook_shutdown_probe() {
             Ok(Notebook::parse(&doc.text).unwrap()),
             &ctx,
         );
-        assert!(!app.documents[0].notebook.as_ref().unwrap().source_mode);
+        assert!(!app.documents[0].notebook().unwrap().source_mode);
     }
     assert!(
         app.runtime_work_pending(),

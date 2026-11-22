@@ -33,6 +33,27 @@ impl Default for State {
         }
     }
 }
+impl State {
+    /// Invalidate the captured build before changing any visible state. Workers
+    /// keep their old cancellation flag and cannot publish a newer request's reply.
+    fn stop(&mut self) -> bool {
+        let was_busy = self.busy;
+        self.cancel.store(true, Ordering::Release);
+        self.token = self.token.wrapping_add(1);
+        self.busy = false;
+        self.pending_jump = None;
+        was_busy
+    }
+    /// A project switch also clears build output and source/PDF destinations.
+    pub(super) fn reset_project(&mut self) {
+        self.stop();
+        let token = self.token;
+        *self = Self {
+            token,
+            ..Self::default()
+        };
+    }
+}
 impl EditorApp {
     /// Reveal the cached build log without starting a compiler.
     pub(super) fn show_latex_output(&mut self) {
@@ -40,13 +61,9 @@ impl EditorApp {
     }
     /// Cancel the active build, invalidate its token and clear any pending diagnostic jump.
     pub(super) fn stop_latex(&mut self) {
-        if self.latex.busy {
+        if self.latex.stop() {
             self.status = "LaTeX build stopped".into();
         }
-        self.latex.cancel.store(true, Ordering::Release);
-        self.latex.token = self.latex.token.wrapping_add(1);
-        self.latex.busy = false;
-        self.latex.pending_jump = None;
     }
     /// Require saved project sources, validate settings and queue a cancellable host build;
     /// `preview` requests opening its successful PDF after the completion checks.

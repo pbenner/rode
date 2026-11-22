@@ -1,51 +1,7 @@
-//! Shared panel identities and presentation routing across application, host and
-//! project scopes. Controllers retain their own state and activation guards;
+//! Panel rendering routes across application, host and project scopes. Shared
+//! identities and metadata live in `tools`. Controllers retain state and activation guards;
 //! selecting a view does not create another controller or widen its authority.
 use super::*;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// Tool-view identity used by tabs, commands and feature gates; it carries no running job.
-pub(super) enum Panel {
-    Transfers,
-    SharedFolders,
-    Git,
-    Monitor,
-    Stocks,
-    Problems,
-    Tasks,
-    Settings,
-    Agent,
-    Debug,
-}
-impl Panel {
-    pub(in crate::app) fn scope(self) -> areas::Scope {
-        match self {
-            Self::Monitor | Self::Transfers => areas::Scope::Host,
-            Self::Stocks => areas::Scope::Application,
-            Self::SharedFolders
-            | Self::Git
-            | Self::Problems
-            | Self::Tasks
-            | Self::Settings
-            | Self::Agent
-            | Self::Debug => areas::Scope::Project,
-        }
-    }
-    fn title(self) -> &'static str {
-        match self {
-            Self::Transfers => "FILE TRANSFERS",
-            Self::SharedFolders => "SHARED FOLDERS",
-            Self::Git => "SOURCE CONTROL",
-            Self::Monitor => "SYSTEM MONITOR",
-            Self::Stocks => "STOCKS",
-            Self::Problems => "PROBLEMS",
-            Self::Tasks => "TASKS",
-            Self::Settings => "PROJECT SETTINGS",
-            Self::Agent => "AGENT CHAT",
-            Self::Debug => "DEBUGGER",
-        }
-    }
-}
 
 impl EditorApp {
     /// Render the active enabled tool view after checking host/project readiness.

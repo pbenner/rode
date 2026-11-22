@@ -50,11 +50,11 @@ impl Area {
 
     /// One existing window owner for each detachable application area. Projects
     /// keeps its editor/tool hosts instead of duplicating the entire workspace.
-    pub fn tab(self) -> Option<tool_windows::ToolTab> {
+    pub fn tab(self) -> Option<ToolTab> {
         match self {
             Self::Welcome | Self::Projects => None,
-            Self::Settings => Some(tool_windows::ToolTab::AppSettings),
-            _ => self.panel().map(tool_windows::ToolTab::Panel),
+            Self::Settings => Some(ToolTab::AppSettings),
+            _ => self.panel().map(ToolTab::Panel),
         }
     }
 }

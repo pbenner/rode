@@ -78,7 +78,7 @@ impl EditorApp {
                         return self.feature(Feature::Latex)
                             && (command == Command::Build || self.feature(Feature::Pdf));
                     }
-                    if doc.notebook.is_some() {
+                    if doc.notebook().is_some() {
                         return self.feature(Feature::Notebooks);
                     }
                 }

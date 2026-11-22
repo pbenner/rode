@@ -4,10 +4,10 @@
 //! selected tool always has content and a detached tab has exactly one owner.
 //! Native focus, refreshes and running services stay in the application adapters.
 use super::{
-    Panel,
+    Panel, ToolTab,
     areas::{Area, Scope},
     sidebar::View,
-    tool_windows::{Surface, ToolTab},
+    tool_windows::Surface,
 };
 
 /// Read-only presentation projection; it owns no project or process state.

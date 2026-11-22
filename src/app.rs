@@ -73,6 +73,7 @@ mod sidebar;
 mod stocks;
 mod terminal_colors;
 mod tool_windows;
+mod tools;
 mod transfers;
 mod tunnels;
 mod ui_probe;
@@ -83,7 +84,6 @@ mod workspace;
 use commands::Command;
 use eframe::egui::{self, Align, FontId, Key, Layout, RichText, Sense, Stroke};
 use icons::{Icon, IconButton};
-use panels::Panel;
 use saved_connections::Completion as ProfileEvent;
 use std::{
     collections::{HashMap, HashSet},
@@ -95,7 +95,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tool_windows::ToolTab;
+use tools::{Panel, ToolTab};
 use workbench::{ToolJob, Workbench};
 use workers::{Job, WorkspaceEvent};
 
@@ -577,13 +577,13 @@ impl EditorApp {
                         if self
                             .documents
                             .iter()
-                            .any(|d| d.id == id && d.notebook.is_some())
+                            .any(|d| d.id == id && d.notebook().is_some())
                         {
                             "untitled.ipynb"
                         } else if self
                             .documents
                             .iter()
-                            .any(|d| d.id == id && d.marp.is_some())
+                            .any(|d| d.id == id && d.marp().is_some())
                         {
                             "untitled.marp.md"
                         } else {
@@ -641,7 +641,7 @@ impl EditorApp {
 
     fn save_target(&mut self, id: u64, ctx: &egui::Context, save_as: bool) {
         if let Some(doc) = self.documents.by_id(id) {
-            if doc.is_preview() && doc.hex.is_none() && doc.notebook.is_none() {
+            if doc.read_only() {
                 self.notify(doc.read_only_preview_notice(), false);
                 return;
             }
@@ -696,22 +696,22 @@ impl EditorApp {
             self.notify("This buffer is disconnected. Use Save As for a local copy, or reconnect to its SSH project.",true);
             return;
         }
-        if self.documents.iter().any(|d| d.id == id && d.hex.is_some()) {
+        if self
+            .documents
+            .iter()
+            .any(|d| d.id == id && d.hex().is_some())
+        {
             self.save_hex(id, path, save_as, ctx);
             return;
         }
-        if let Some(doc) = self
-            .documents
-            .iter()
-            .find(|d| d.id == id && d.is_preview() && d.notebook.is_none())
-        {
+        if let Some(doc) = self.documents.iter().find(|d| d.id == id && d.read_only()) {
             self.notify(doc.read_only_preview_notice(), false);
             return;
         }
         if self
             .documents
             .iter()
-            .all(|d| d.id != id || d.notebook.is_none())
+            .all(|d| d.id != id || d.notebook().is_none())
             && self.save_with_tools(id, &path, save_as, ctx)
         {
             return;
@@ -727,8 +727,8 @@ impl EditorApp {
 
     /// Select or hide the terminal surface, lazily creating a shell only when none is owned or starting.
     fn toggle_terminal(&mut self, ctx: &egui::Context) {
-        if self.tab_detached(tool_windows::ToolTab::Terminal) {
-            self.focus_tool_tab(tool_windows::ToolTab::Terminal, ctx);
+        if self.tab_detached(ToolTab::Terminal) {
+            self.focus_tool_tab(ToolTab::Terminal, ctx);
             return;
         }
         self.show_terminal = !self.terminal_visible() || self.presentation.detached;

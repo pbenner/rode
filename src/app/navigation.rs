@@ -616,7 +616,7 @@ impl EditorApp {
             Pane::Explorer => self.explorer_visible(viewport),
             Pane::Connections => {
                 (viewport == egui::ViewportId::ROOT && self.connections_visible())
-                    || self.floating_tab(viewport) == Some(tool_windows::ToolTab::Connections)
+                    || self.floating_tab(viewport) == Some(ToolTab::Connections)
             }
             Pane::Editor => true,
             Pane::Terminal => self.terminal_visible(),
@@ -644,8 +644,8 @@ impl EditorApp {
             }
         }
         let tab = match pane {
-            Pane::Terminal => Some(tool_windows::ToolTab::Terminal),
-            Pane::Tools => Some(tool_windows::ToolTab::Panel(
+            Pane::Terminal => Some(ToolTab::Terminal),
+            Pane::Tools => Some(ToolTab::Panel(
                 self.presentation.panel.unwrap_or(Panel::Problems),
             )),
             _ => None,

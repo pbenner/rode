@@ -179,11 +179,16 @@ impl View {
         self.pending_clear.clear();
     }
     /// Typed workspace operations decide lifetime policy; status text is presentation only.
-    fn leave(&mut self, reason: workspace::LeaveReason) {
+    pub(super) fn leave(&mut self, reason: workspace::LeaveReason) {
         if reason.stops_persistent_work() {
             self.stop(reason.message());
         } else {
             self.detach(reason.message());
+        }
+        for cell in self.cells.values_mut() {
+            if let Some(preview) = &mut cell.preview {
+                preview.invalidate();
+            }
         }
     }
     /// Return the current raw-JSON editing mode for execution guards.
@@ -319,8 +324,7 @@ impl EditorApp {
             Arc::new(move || repaint.request_repaint()),
         )?;
         let view = self.documents[index]
-            .notebook
-            .as_mut()
+            .notebook_mut()
             .ok_or_else(|| anyhow::anyhow!("Open the notebook in Cells view before attaching"))?;
         view.detach("Switching kernel attachment");
         view.environment = environment;
@@ -350,7 +354,7 @@ impl EditorApp {
         let book = Notebook::default();
         let doc = self.documents.by_id_mut(id).unwrap();
         doc.set_source(book.serialize().expect("small new notebook"));
-        doc.notebook = Some(View::new(
+        doc.replace_notebook(View::new(
             book,
             self.markdown_images.clone(),
             self.notebook_shutdowns.clone(),
@@ -363,21 +367,7 @@ impl EditorApp {
             || self
                 .documents
                 .iter()
-                .any(|doc| doc.notebook.as_ref().is_some_and(View::lifetime_pending))
-    }
-    /// Dispose notebook attachments when context changes. Encrypted-project locking
-    /// explicitly stops even persistent kernels; other changes honor their persistence.
-    pub(super) fn leave_notebooks(&mut self, reason: workspace::LeaveReason) {
-        for doc in &mut self.documents {
-            if let Some(view) = &mut doc.notebook {
-                view.leave(reason);
-                for cell in view.cells.values_mut() {
-                    if let Some(preview) = &mut cell.preview {
-                        preview.invalidate();
-                    }
-                }
-            }
-        }
+                .any(|doc| doc.notebook().is_some_and(View::lifetime_pending))
     }
     /// Stop execution before raw-JSON editing, or parse a captured source snapshot
     /// on a worker when returning to the structured Cells view.
@@ -385,7 +375,7 @@ impl EditorApp {
         let Some(doc) = self.documents.active_mut() else {
             return;
         };
-        if let Some(view) = &mut doc.notebook
+        if let Some(view) = doc.notebook_mut()
             && !view.source_mode
         {
             view.stop("Kernel stopped for JSON editing");
@@ -433,7 +423,7 @@ impl EditorApp {
         };
         match result {
             Ok(book) => {
-                doc.notebook = Some(View::new(
+                doc.replace_notebook(View::new(
                     book,
                     self.markdown_images.clone(),
                     self.notebook_shutdowns.clone(),
@@ -474,7 +464,7 @@ impl EditorApp {
         }
         let document_id = doc.id;
         let path = doc.path.clone();
-        let Some(view) = &mut doc.notebook else {
+        let Some(view) = doc.notebook_mut() else {
             self.notify("Open a Jupyter notebook first.", false);
             return;
         };
@@ -513,7 +503,7 @@ impl EditorApp {
                 }
             }
         }
-        let view = doc.notebook.as_mut().unwrap();
+        let view = doc.notebook_mut().unwrap();
         if !all
             && let Some(index) = index
             && view.book.cells[index].kind() != "code"
@@ -622,7 +612,7 @@ impl EditorApp {
         let offline = self.workspace.as_ref().is_some_and(|w| !w.connected);
         let mut failure = None;
         for doc in &mut self.documents {
-            let Some(mut view) = doc.notebook.take() else {
+            let Some(mut view) = doc.take_notebook() else {
                 continue;
             };
             let previous_error = view.error.clone();
@@ -807,7 +797,7 @@ impl EditorApp {
             if !view.error.is_empty() && view.error != previous_error {
                 failure = Some(view.error.clone());
             }
-            doc.notebook = Some(view);
+            doc.replace_notebook(view);
         }
         self.report_runtime_failure(failure, ctx);
     }

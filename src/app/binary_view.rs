@@ -189,7 +189,7 @@ impl EditorApp {
             .iter()
             .position(|d| d.path.as_deref() == Some(&path))
         {
-            if self.documents[index].hex.is_some() {
+            if self.documents[index].hex().is_some() {
                 self.focus_document(self.documents[index].id, ctx);
                 return;
             }
@@ -256,7 +256,7 @@ impl EditorApp {
     }
     /// Render the active hex/inspection view and apply explicit edit/save/reload actions.
     pub(super) fn hex_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        if self.documents.active().is_none_or(|d| d.hex.is_none()) {
+        if self.documents.active().is_none_or(|d| d.hex().is_none()) {
             return false;
         }
         egui::Frame::new()
@@ -265,7 +265,7 @@ impl EditorApp {
             .inner
     }
     fn hex_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        if self.documents.active().is_none_or(|d| d.hex.is_none()) {
+        if self.documents.active().is_none_or(|d| d.hex().is_none()) {
             return false;
         }
         let focus = self.take_editor_focus(ui, ctx).is_some();
@@ -859,7 +859,7 @@ mod tests {
             };
             let mut view = HexView::new(loaded);
             view.select(length - 1);
-            app.documents[0].fixture_content().hex = Some(view);
+            app.documents[0].set_binary_fixture(view);
             for frame in 0..5 {
                 let output = ctx.run(
                     egui::RawInput {
@@ -978,7 +978,7 @@ mod tests {
         let mut view = HexView::new(loaded);
         view.buffer.patch(64 * 1024 * 1024 - 1, vec![1]).unwrap();
         view.version = 1;
-        app.documents[0].fixture_content().hex = Some(view);
+        app.documents[0].set_binary_fixture(view);
         app.documents[0].set_dirty_fixture(true);
         let mut sample = vec![];
         for i in 0..130 {
@@ -1010,10 +1010,10 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].fixture_content().hex = Some(HexView::new(
+        app.documents[0].set_binary_fixture(HexView::new(
             binary::Loaded::decode(&STANDARD.encode([0, 1, 2]), &app.image_budget).unwrap(),
         ));
-        let view = app.documents[0].hex.as_ref().unwrap();
+        let view = app.documents[0].hex().unwrap();
         let job = Job::SaveBinary {
             id: app.documents[0].id,
             bytes: view.buffer.bytes().clone(),
@@ -1034,7 +1034,7 @@ mod tests {
             binary::Loaded::decode(&STANDARD.encode([0, 1, 2, 3]), &app.image_budget).unwrap();
         let mut view = HexView::new(loaded);
         view.editing = true;
-        app.documents[0].fixture_content().hex = Some(view);
+        app.documents[0].set_binary_fixture(view);
         let frame = |app: &mut EditorApp, events| {
             ctx.run(
                 egui::RawInput {
@@ -1080,10 +1080,7 @@ mod tests {
         );
         frame(&mut app, vec![button(false)]);
         frame(&mut app, vec![egui::Event::Text("cc".into())]);
-        assert_eq!(
-            app.documents[0].hex.as_ref().unwrap().buffer.bytes()[0],
-            0xcc
-        );
+        assert_eq!(app.documents[0].hex().unwrap().buffer.bytes()[0], 0xcc);
         let arrow = egui::Event::Key {
             key: Key::ArrowRight,
             physical_key: None,
@@ -1093,10 +1090,7 @@ mod tests {
         };
         frame(&mut app, vec![arrow]);
         frame(&mut app, vec![egui::Event::Text("dd".into())]);
-        assert_eq!(
-            app.documents[0].hex.as_ref().unwrap().buffer.bytes()[2],
-            0xdd
-        );
+        assert_eq!(app.documents[0].hex().unwrap().buffer.bytes()[2], 0xdd);
     }
     #[test]
     fn binary_save_acknowledgements_and_disabling_preserve_newer_byte_edits() {
@@ -1107,11 +1101,15 @@ mod tests {
         let id = app.documents[0].id;
         let loaded =
             binary::Loaded::decode(&STANDARD.encode([0, 1, 2, 255]), &app.image_budget).unwrap();
-        app.documents[0].fixture_content().hex = Some(HexView::new(loaded));
-        let hex = app.documents[0].fixture_content().hex.as_mut().unwrap();
-        hex.buffer.patch(1, vec![9]).unwrap();
-        let submitted = hex.buffer.bytes().clone();
-        hex.buffer.patch(2, vec![8]).unwrap();
+        app.documents[0].set_binary_fixture(HexView::new(loaded));
+        let submitted = app.documents[0]
+            .edit_binary(|hex| {
+                hex.buffer.patch(1, vec![9]).unwrap();
+                let submitted = hex.buffer.bytes().clone();
+                hex.buffer.patch(2, vec![8]).unwrap();
+                submitted
+            })
+            .unwrap();
         app.documents[0].set_dirty_fixture(true);
         app.workers
             .workspace(&ctx)
@@ -1119,7 +1117,7 @@ mod tests {
                 job: Job::SaveBinary {
                     id,
                     bytes: submitted,
-                    _lease: app.documents[0].hex.as_ref().unwrap()._lease.clone(),
+                    _lease: app.documents[0].hex().unwrap()._lease.clone(),
                 },
                 result: Box::new(Ok(files::Response {
                     path: "/example.bin".into(),
@@ -1131,18 +1129,12 @@ mod tests {
         app.poll(&ctx);
         assert!(app.documents[0].dirty());
         assert_eq!(
-            app.documents[0]
-                .hex
-                .as_ref()
-                .unwrap()
-                .buffer
-                .bytes()
-                .as_slice(),
+            app.documents[0].hex().unwrap().buffer.bytes().as_slice(),
             [0, 9, 8, 255]
         );
         app.set_extension(crate::extensions::Feature::Binary.id(), false);
         assert!(app.documents[0].dirty());
-        assert!(app.documents[0].hex.is_some());
+        assert!(app.documents[0].hex().is_some());
         app.format_active(true, false, &ctx);
         assert!(!app.documents[0].saving);
         assert_eq!(app.documents[0].text, "");

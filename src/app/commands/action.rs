@@ -194,22 +194,25 @@ impl Command {
         Self::DebugIn,
         Self::DebugOut,
     ];
-    pub(in crate::app) const PANELS: &'static [Self] = &[
-        Self::Panel(Panel::Transfers),
-        Self::Panel(Panel::SharedFolders),
-        Self::Panel(Panel::Git),
-        Self::Panel(Panel::Monitor),
-        Self::Panel(Panel::Stocks),
-        Self::Panel(Panel::Problems),
-        Self::Environment,
-        Self::Panel(Panel::Tasks),
-        Self::Panel(Panel::Settings),
-        Self::Panel(Panel::Agent),
-        Self::Panel(Panel::Debug),
-    ];
+    /// Use the common tool inventory for the workspace menu. Environment remains
+    /// a shortcut into the Settings view, rather than a second detachable tool.
+    pub(in crate::app) fn panels() -> Vec<Self> {
+        ToolTab::ALL
+            .into_iter()
+            .flat_map(|tab| match tab {
+                ToolTab::Panel(Panel::Settings) => {
+                    [Some(Self::Environment), Some(Self::Panel(Panel::Settings))]
+                }
+                ToolTab::Panel(panel) => [Some(Self::Panel(panel)), None],
+                _ => [None, None],
+            })
+            .flatten()
+            .collect()
+    }
     /// Return shared command presentation metadata without executing or enabling the action.
     pub(in crate::app) fn definition(self) -> Definition {
         match self {
+            Self::Panel(panel) => panel.definition().command,
             Self::Projects => {
                 Definition::new("Projects", Icon::Workspace).palette("Application: Projects")
             }
@@ -268,31 +271,9 @@ impl Command {
             }
             Self::UiScaleReset => Definition::new("Reset to system default", Icon::Refresh)
                 .palette("Interface: Reset scale"),
-            Self::Panel(Panel::Git) => {
-                Definition::new("Source control", Icon::Git).palette("Git: Source control")
-            }
-            Self::Panel(Panel::Monitor) => {
-                Definition::new("System monitor", Icon::Monitor).palette("System: Monitor")
-            }
-            Self::Panel(Panel::Stocks) => Definition::new("Stocks", Icon::Stocks)
-                .palette("Stocks: Market charts and watchlist"),
-            Self::Panel(Panel::Transfers) => {
-                Definition::new("File transfers", Icon::Files).palette("Remote: File transfers")
-            }
-            Self::Panel(Panel::SharedFolders) => {
-                Definition::new("Shared folders", Icon::Folder).palette("Project: Shared folders")
-            }
-            Self::Panel(Panel::Problems) => {
-                Definition::new("Problems", Icon::Problems).palette("Code: Problems")
-            }
             Self::Python => Definition::new("Python: Select environment", Icon::Environment),
             Self::Environment => Definition::new("Environment", Icon::Environment)
                 .palette("Environment: Runtimes and project variables"),
-            Self::Panel(Panel::Tasks) => {
-                Definition::new("Tasks", Icon::Play).palette("Tasks: Run, build and test")
-            }
-            Self::Panel(Panel::Settings) => Definition::new("Project settings", Icon::Settings)
-                .palette("Project: Settings and sandbox access"),
             Self::Format => {
                 Definition::new("Format document", Icon::Format).palette("Code: Format document")
             }
@@ -303,13 +284,7 @@ impl Command {
                 .palette("Ruff: Apply safe fixes"),
             Self::Run => Definition::new("Run current file / project", Icon::Play)
                 .palette("Code: Run current file / project"),
-            Self::Panel(Panel::Agent) => {
-                Definition::new("Agent chat", Icon::Chat).palette("Agent: Chat")
-            }
             Self::AgentSessions => Definition::new("Agent: Running sessions", Icon::Chat),
-            Self::Panel(Panel::Debug) => {
-                Definition::new("Debugger", Icon::Debug).palette("Debug: Show debugger")
-            }
             Self::DebugStart => {
                 Definition::new("Start / continue", Icon::Debug).palette("Debug: Start / continue")
             }
@@ -485,7 +460,7 @@ impl EditorApp {
         match command {
             Command::Projects => self.presentation.area == areas::Area::Projects,
             Command::Connections => {
-                self.connections_visible() || self.tab_detached(tool_windows::ToolTab::Connections)
+                self.connections_visible() || self.tab_detached(ToolTab::Connections)
             }
             Command::AppSettings => {
                 self.presentation.area == areas::Area::Settings
@@ -573,7 +548,7 @@ impl EditorApp {
                 self.set_explorer_visible(viewport, !visible);
             }
             Command::Find => {
-                if let Some(view) = self.documents.active_mut().and_then(|doc| doc.pdf.as_mut())
+                if let Some(view) = self.documents.active_mut().and_then(|doc| doc.pdf_mut())
                     && view.source.format == crate::pdf::Format::Pdf
                 {
                     view.find_text();

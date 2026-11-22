@@ -391,21 +391,12 @@ impl EditorApp {
         }
         self.stop_project_agent();
         self.transfers.reset();
-        self.leave_notebooks(workspace::LeaveReason::VaultLock);
+        self.documents
+            .leave_notebooks(workspace::LeaveReason::VaultLock);
         self.stop_debugger();
         self.stop_latex();
         self.cancel_extensions();
-        for doc in &mut self.documents {
-            if let Some(view) = &mut doc.marp {
-                view.invalidate();
-            }
-            if let Some(view) = &mut doc.pdf {
-                view.invalidate();
-            }
-            if let Some(view) = &mut doc.markdown {
-                view.invalidate();
-            }
-        }
+        self.documents.invalidate_previews();
         self.vaults.locking = true;
         self.vaults.lock_sent = false;
         self.vaults.quit_after_lock = quitting;

@@ -52,7 +52,8 @@ impl State {
         self.change_pending() || self.stopping()
     }
     /// Reset project UI without discarding retained asynchronous cleanup guards.
-    fn reset_project(&mut self) {
+    fn reset_project(&mut self) -> Vec<String> {
+        let views = self.leave();
         self.client = None;
         self.versions.clear();
         self.draft_generation = None;
@@ -65,6 +66,46 @@ impl State {
         self.reattaching = false;
         self.source_digests.clear();
         self.verify_sources = false;
+        views
+    }
+
+    /// Persistent controllers detach; foreground controllers retain termination
+    /// acknowledgements. The composition root receives only ended view identities.
+    fn leave(&mut self) -> Vec<String> {
+        if self.client.as_ref().is_some_and(Client::persistent) {
+            if let Some(mut client) = self.client.take() {
+                client.detach();
+            }
+            self.release_views()
+        } else {
+            self.stop()
+        }
+    }
+    fn stop(&mut self) -> Vec<String> {
+        if let Some(client) = &mut self.client {
+            client.stop();
+            let flag = client.cleanup();
+            if flag.load(Ordering::Acquire)
+                && !self
+                    .cleanups
+                    .iter()
+                    .any(|existing| Arc::ptr_eq(existing, &flag))
+            {
+                self.cleanups.push(flag);
+            }
+        }
+        self.release_views()
+    }
+    fn release_views(&mut self) -> Vec<String> {
+        self.pending_jump = None;
+        self.source_loading = None;
+        std::mem::take(&mut self.streams)
+            .into_values()
+            .map(|(key, stream)| {
+                stream.end();
+                key
+            })
+            .collect()
     }
 
     /// Capture only a buffer whose current content matches the launched source.
@@ -85,31 +126,16 @@ impl State {
     }
 }
 impl EditorApp {
-    /// Leave the current controller according to persistence and clear project-specific UI/configuration state.
+    /// Apply debugger-owned reset effects without inspecting controller internals.
     pub(super) fn reset_debugger(&mut self) {
-        self.leave_debugger();
-        self.debugger.reset_project();
+        for key in self.debugger.reset_project() {
+            self.remove_view(&key);
+        }
     }
-    /// Detach a persistent controller or request foreground termination, then release
-    /// its terminal views and pending source jump without changing unrelated shells.
+    /// Honor the debugger's persistence policy and remove only its terminal views.
     pub(super) fn leave_debugger(&mut self) {
-        if self
-            .debugger
-            .client
-            .as_ref()
-            .is_some_and(Client::persistent)
-        {
-            if let Some(mut client) = self.debugger.client.take() {
-                client.detach();
-            }
-            for (_, (key, stream)) in std::mem::take(&mut self.debugger.streams) {
-                stream.end();
-                self.remove_view(&key);
-            }
-            self.debugger.pending_jump = None;
-            self.debugger.source_loading = None;
-        } else {
-            self.stop_debugger();
+        for key in self.debugger.leave() {
+            self.remove_view(&key);
         }
     }
     /// Attach to the captured host runtime using its original policy and source digests;
@@ -150,24 +176,11 @@ impl EditorApp {
         self.reveal_panel(Panel::Debug, ctx);
         Ok(())
     }
-    /// Request explicit termination and retain cleanup flags while ending debugger-owned
-    /// terminal streams; return immediately without claiming cleanup is complete.
+    /// Explicit Stop overrides persistence; cleanup acknowledgement remains with the owner.
     pub(super) fn stop_debugger(&mut self) {
-        if let Some(client) = &mut self.debugger.client {
-            client.stop();
-            let flag = client.cleanup();
-            if flag.load(Ordering::Acquire)
-                && !self.debugger.cleanups.iter().any(|f| Arc::ptr_eq(f, &flag))
-            {
-                self.debugger.cleanups.push(flag);
-            }
-        }
-        for (_, (key, stream)) in std::mem::take(&mut self.debugger.streams) {
-            stream.end();
+        for key in self.debugger.stop() {
             self.remove_view(&key);
         }
-        self.debugger.pending_jump = None;
-        self.debugger.source_loading = None;
     }
     /// Validate the parsed configuration draft before replacing saved project debugger settings.
     fn apply_debug_config(&mut self) -> anyhow::Result<()> {

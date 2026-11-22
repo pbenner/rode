@@ -335,7 +335,7 @@ impl EditorApp {
             SettingsSection::Latex => self.workbench.invalidate_tools(),
             SettingsSection::Presentations => {
                 for doc in &mut self.documents {
-                    if let Some(view) = &mut doc.marp {
+                    if let Some(view) = doc.marp_mut() {
                         view.stop_render();
                     }
                 }

@@ -65,13 +65,13 @@ impl EditorApp {
                         ui.label(palette.tag("RODE 0.1"));
                     }
                     if let Some(doc) = self.documents.active() {
-                        if let Some(book)=&doc.notebook {ui.label(palette.tag(format!("Notebook · {} cells",book.book.cells.len())));}
-                        else if let Some(hex)=&doc.hex {ui.label(palette.tag(format!("Binary · {} bytes",hex.buffer.bytes().len())));}
-                        else if let Some(pdf)=&doc.pdf {
+                        if let Some(book)=doc.notebook() {ui.label(palette.tag(format!("Notebook · {} cells",book.book.cells.len())));}
+                        else if let Some(hex)=doc.hex() {ui.label(palette.tag(format!("Binary · {} bytes",hex.buffer.bytes().len())));}
+                        else if let Some(pdf)=doc.pdf() {
                             let unit = if pdf.source.format == crate::pdf::Format::Pptx { "slide" } else { "page" };
                             ui.label(palette.tag(format!("{} · {unit} {} / {}",pdf.source.format.label(),pdf.page,pdf.source.pages)));
                         }
-                        else if let Some(image) = &doc.image {
+                        else if let Some(image) = doc.image() {
                             ui.label(palette.tag(format!(
                                 "{} · {} × {}",
                                 image.format, image.original[0], image.original[1]

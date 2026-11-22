@@ -411,17 +411,7 @@ impl EditorApp {
             return false;
         };
         if ctx.memory(|m| m.has_focus(ImageView::focus_id(doc.id)))
-            && let Some(image) = doc
-                .image
-                .as_mut()
-                .or_else(|| doc.pdf.as_mut().map(|pdf| &mut pdf.image))
-                .or_else(|| {
-                    doc.marp
-                        .as_mut()
-                        .filter(|view| view.showing)
-                        .and_then(|view| view.pdf.as_mut())
-                        .map(|pdf| &mut pdf.image)
-                })
+            && let Some(image) = doc.preview_image_mut()
         {
             image.zoom_by(factor);
             return true;
@@ -436,7 +426,7 @@ impl EditorApp {
         let Some(path) = doc.path.clone() else {
             return;
         };
-        let Some(image) = &mut doc.image else {
+        let Some(image) = doc.image_mut() else {
             return;
         };
         if image.loading {
@@ -548,7 +538,7 @@ mod tests {
         assert!(app.dialog == Dialog::None);
         assert!(!app.documents[0].saving);
         assert!(!app.documents[0].dirty());
-        assert!(app.documents[0].image.is_some());
+        assert!(app.documents[0].image().is_some());
         assert_eq!(app.documents[0].revision.as_deref(), Some("initial"));
     }
     #[test]
@@ -558,7 +548,7 @@ mod tests {
         let budget = app.image_budget.clone();
         let id = app.documents[0].id;
         app.documents[0].set_version_fixture(5);
-        app.documents[0].image.as_mut().unwrap().loading = true;
+        app.documents[0].image_mut().unwrap().loading = true;
         for (version, width) in [(4, 2), (5, 8)] {
             app.workers
                 .workspace(&ctx)
@@ -574,11 +564,11 @@ mod tests {
                 .unwrap();
         }
         app.poll(&ctx);
-        assert_eq!(app.documents[0].image.as_ref().unwrap().original, [8, 4]);
+        assert_eq!(app.documents[0].image().unwrap().original, [8, 4]);
         assert_eq!(budget.used(), 8 * 4 * 4);
         assert!(!app.documents[0].dirty());
         let version = app.documents[0].version();
-        app.documents[0].image.as_mut().unwrap().loading = true;
+        app.documents[0].image_mut().unwrap().loading = true;
         app.workers
             .workspace(&ctx)
             .send(WorkspaceEvent::Done {
@@ -587,8 +577,8 @@ mod tests {
             })
             .unwrap();
         app.poll(&ctx);
-        assert_eq!(app.documents[0].image.as_ref().unwrap().original, [8, 4]);
-        assert!(!app.documents[0].image.as_ref().unwrap().loading);
+        assert_eq!(app.documents[0].image().unwrap().original, [8, 4]);
+        assert!(!app.documents[0].image().unwrap().loading);
         drop(app);
         assert_eq!(budget.used(), 0);
     }

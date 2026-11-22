@@ -271,11 +271,11 @@ impl EditorApp {
             // A fresh login stays on Welcome. Late shell attachment must not
             // take over this presentation or the remembered project view.
             if self.presentation.surface == tool_windows::Surface::Terminal
-                && self.presentation.last_tool != Some(tool_windows::ToolTab::Terminal)
+                && self.presentation.last_tool != Some(ToolTab::Terminal)
             {
-                if let Some(tool_windows::ToolTab::Panel(panel)) = self.presentation.last_tool
+                if let Some(ToolTab::Panel(panel)) = self.presentation.last_tool
                     && self.panel_enabled(panel)
-                    && !self.tab_detached(tool_windows::ToolTab::Panel(panel))
+                    && !self.tab_detached(ToolTab::Panel(panel))
                 {
                     self.presentation.select_panel(panel);
                 } else {
@@ -335,25 +335,20 @@ impl EditorApp {
             );
         }
         self.reset_debugger();
-        self.stop_latex();
-        self.latex = Default::default();
+        self.latex.reset_project();
         self.reset_pdf_requests();
         self.leave_project_agent();
-        self.leave_notebooks(reason);
+        self.documents.reset_context(retention, reason);
         self.reset_editor_contexts(retention);
         self.extensions.reset_project();
         self.workbench.reset_project();
-        self.editor.git_gutter.reset();
         self.terminal = None;
         self.session_context_reset();
         self.vaults.release_project();
-        self.documents.reset_context(retention);
         self.explorer_state.reset();
         self.file_browser.reset();
-        self.editor.input = Default::default();
         self.navigation.cancel_input();
         self.workers.invalidate_workspace();
-        self.editor.show_find = false;
     }
 
     /// Cancel connection work, clear project ownership and release only this window's private SSH master.

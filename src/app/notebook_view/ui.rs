@@ -13,7 +13,7 @@ impl EditorApp {
         let Some(mut view) = self
             .documents
             .get_mut(index)
-            .and_then(|d| d.notebook.take())
+            .and_then(|d| d.take_notebook())
         else {
             return false;
         };
@@ -378,7 +378,7 @@ impl EditorApp {
             !self.documents[index].dirty() && !self.documents[index].saving,
         );
         self.notebook_picture_jobs(&view, jobs, ctx);
-        self.documents[index].notebook = Some(view);
+        self.documents[index].replace_notebook(view);
         if let Some(snapshot) = image_export {
             self.set_dialog(Dialog::NotebookImage(Box::new(snapshot)));
         }

@@ -243,7 +243,7 @@ impl EditorApp {
         } else {
             format!("{} · {shortcut}", definition.label)
         };
-        let tab = tool_windows::ToolTab::for_command(command);
+        let tab = ToolTab::for_command(command);
         if let Some(tab) = tab {
             hint.push_str(if self.tab_detached(tab) {
                 "\nRight-click to reattach to the main window"

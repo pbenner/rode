@@ -385,12 +385,12 @@ fn markdown_preview_keeps_following_commands_within_their_admitted_context() {
             ]);
             frame(&mut app, &ctx, events);
             for _ in 0..4 {
-                if app.documents[0].markdown.as_ref().unwrap().showing {
+                if app.documents[0].markdown().unwrap().showing {
                     break;
                 }
                 frame(&mut app, &ctx, vec![]);
             }
-            assert!(app.documents[0].markdown.as_ref().unwrap().showing);
+            assert!(app.documents[0].markdown().unwrap().showing);
             assert!(app.editor.input.pending());
             // Intervene after the preview rendered, before its queued command
             // is replayed. Only this same document/view/style/pane may accept it.
@@ -468,7 +468,7 @@ fn markdown_return_undo_and_save_preserve_native_input_order() {
     );
     app.toggle_markdown(&ctx);
     frame(&mut app, &ctx, vec![]);
-    assert!(app.documents[0].markdown.as_ref().unwrap().showing);
+    assert!(app.documents[0].markdown().unwrap().showing);
     frame(
         &mut app,
         &ctx,
@@ -484,7 +484,7 @@ fn markdown_return_undo_and_save_preserve_native_input_order() {
         assert!(Instant::now() < deadline, "Preview return/save stalled");
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert!(!app.documents[0].markdown.as_ref().unwrap().showing);
+    assert!(!app.documents[0].markdown().unwrap().showing);
     assert_eq!(
         app.documents[0].text, original,
         "Undo must retain its history"
@@ -732,7 +732,7 @@ fn closing_a_pdf_precedes_a_batched_palette_and_preserves_the_unsaved_source() {
             )
             .unwrap();
             let preview = app.documents.active_mut().unwrap();
-            preview.pdf = Some(pdf_view::PdfView::new(loaded));
+            preview.set_pdf_fixture(pdf_view::PdfView::new(loaded));
             preview.set_dirty_fixture(false);
             let preview_id = preview.id;
             frame(&mut app, &ctx, vec![]);
@@ -816,7 +816,7 @@ fn closing_an_image_hands_batched_commands_to_the_remaining_preview() {
             lease: Arc::new(app.image_budget.reserve(4).unwrap()),
         };
         let document = app.documents.active_mut().unwrap();
-        document.image = Some(image_view::ImageView::new(decoded));
+        document.set_image_fixture(image_view::ImageView::new(decoded));
         document.set_dirty_fixture(false);
     }
     let remaining = app.documents[0].id;

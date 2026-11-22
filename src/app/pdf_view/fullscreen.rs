@@ -39,7 +39,7 @@ impl EditorApp {
             let Some(document) = app
                 .documents
                 .active()
-                .filter(|doc| doc.pdf.is_some())
+                .filter(|doc| doc.pdf().is_some())
                 .map(|doc| doc.id)
             else {
                 app.notify(
@@ -119,7 +119,7 @@ impl EditorApp {
         {
             return;
         }
-        if let Some(view) = self.documents.active_mut().and_then(|doc| doc.pdf.as_mut())
+        if let Some(view) = self.documents.active_mut().and_then(|doc| doc.pdf_mut())
             && view.text.close_on_escape(ctx)
         {
             return;
@@ -130,7 +130,10 @@ impl EditorApp {
             self.leave_pdf_fullscreen(ctx);
         } else if (self.editor.pdf_fullscreen.is_some()
             || self.navigation.active == navigation::Pane::Editor)
-            && self.documents.active().is_some_and(|doc| doc.pdf.is_some())
+            && self
+                .documents
+                .active()
+                .is_some_and(|doc| doc.pdf().is_some())
         {
             self.consume_command(Command::PdfFullscreen, ctx);
         }
@@ -148,7 +151,7 @@ impl EditorApp {
                     .pdf_fullscreen
                     .as_ref()
                     .is_some_and(|state| state.document == doc.id)
-                    && doc.pdf.is_some()
+                    && doc.pdf().is_some()
                     && doc
                         .paged_feature()
                         .is_some_and(|feature| self.feature(feature))
@@ -200,7 +203,7 @@ mod tests {
         )
         .unwrap();
         let doc = app.documents.active_mut().unwrap();
-        doc.pdf = Some(PdfView::new(loaded));
+        doc.set_pdf_fixture(PdfView::new(loaded));
         doc.set_dirty_fixture(false);
         app
     }
@@ -234,8 +237,7 @@ mod tests {
                 .documents
                 .active()
                 .unwrap()
-                .pdf
-                .as_ref()
+                .pdf()
                 .unwrap()
                 .source
                 .clone();
@@ -251,7 +253,7 @@ mod tests {
             );
             assert!(Arc::ptr_eq(
                 &source,
-                &app.documents.active().unwrap().pdf.as_ref().unwrap().source
+                &app.documents.active().unwrap().pdf().unwrap().source
             ));
             let output = run(&ctx, egui::ViewportId::ROOT, true, |ctx| {
                 app.toggle_pdf_fullscreen(ctx)

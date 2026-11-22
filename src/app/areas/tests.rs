@@ -1,6 +1,6 @@
 //! Navigation state and independently merged application preferences.
 use super::*;
-use tool_windows::{Surface, ToolTab};
+use tool_windows::Surface;
 
 #[derive(Default)]
 struct Storage(HashMap<String, String>);

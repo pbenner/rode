@@ -159,7 +159,7 @@ impl EditorApp {
         }
         if let Some(info) = self.sessions.runtimes.attaching.clone() {
             if let Some(index) = self.documents.iter().position(|doc| {
-                doc.path.as_deref() == Some(info.document.as_str()) && doc.notebook.is_some()
+                doc.path.as_deref() == Some(info.document.as_str()) && doc.notebook().is_some()
             }) {
                 self.sessions.runtimes.attaching = None;
                 match self.attach_notebook_runtime(index, info, ctx) {
@@ -231,7 +231,7 @@ impl EditorApp {
                     ui.label(&info.status);
                     let current = match info.kind {
                         Kind::Notebook => self.documents.iter().any(|d| {
-                            d.notebook.as_ref().and_then(|v| v.native_id()) == Some(info.id.as_str())
+                            d.notebook().and_then(|v| v.native_id()) == Some(info.id.as_str())
                         }),
                         Kind::Debugger => self.debugger.client.as_ref().and_then(|c| c.native_id())
                             == Some(info.id.as_str()),
@@ -258,7 +258,7 @@ impl EditorApp {
             if let Some(index) = self
                 .documents
                 .iter()
-                .position(|d| d.path.as_deref() == Some(&info.document) && d.notebook.is_some())
+                .position(|d| d.path.as_deref() == Some(&info.document) && d.notebook().is_some())
             {
                 if current {
                     self.focus_document(self.documents[index].id, ctx);

@@ -134,7 +134,7 @@ fn transfer_access_and_detached_views_cannot_reset_project_shares() {
     app.bind_project_transfers();
     assert!(app.pending.is_none());
     app.transfers.reset();
-    let tab = tool_windows::ToolTab::Panel(Panel::SharedFolders);
+    let tab = ToolTab::Panel(Panel::SharedFolders);
     app.reveal_panel(Panel::SharedFolders, &ctx);
     app.detach_tab(tab, &ctx);
     app.reattach_tool_tab(tab, &ctx);

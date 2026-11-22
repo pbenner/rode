@@ -18,7 +18,7 @@ fn markdown_previews_are_compact_and_keep_html_source_through_editing() {
                 );
                 ctx.set_pixels_per_point(scale);
                 app.new_notebook();
-                let view = app.documents[0].notebook.as_mut().unwrap();
+                let view = app.documents[0].notebook_mut().unwrap();
                 let source = "## A section\n\n<p>A short <strong>HTML paragraph</strong>.</p>";
                 view.book.cells[0].change_kind("markdown");
                 view.book.cells[0].set_source(source.into());
@@ -47,7 +47,7 @@ fn markdown_previews_are_compact_and_keep_html_source_through_editing() {
                 };
                 frame(&mut app, vec![]);
                 let output = frame(&mut app, vec![]);
-                let view = app.documents[0].notebook.as_ref().unwrap();
+                let view = app.documents[0].notebook().unwrap();
                 assert!(
                     view.cells[&uid].height < 125.,
                     "{theme}/{width}/{scale}: {}",
@@ -117,7 +117,7 @@ fn markdown_previews_are_compact_and_keep_html_source_through_editing() {
                         "Missing editing control {label}: {theme}/{width}/{scale}"
                     );
                 }
-                let view = app.documents[0].notebook.as_ref().unwrap();
+                let view = app.documents[0].notebook().unwrap();
                 assert!(!view.cells[&uid].previewing);
                 assert_eq!(view.book.cells[0].source, source);
                 assert_eq!(view.book.serialize().unwrap(), original);
@@ -141,7 +141,7 @@ fn cell_sources_expand_to_fit_and_wheel_scrolls_the_notebook() {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_notebook();
-        let view = app.documents[0].notebook.as_mut().unwrap();
+        let view = app.documents[0].notebook_mut().unwrap();
         let cell = &mut view.book.cells[0];
         cell.change_kind(kind);
         cell.set_source(source.clone());
@@ -180,7 +180,7 @@ fn cell_sources_expand_to_fit_and_wheel_scrolls_the_notebook() {
             })
             .expect("cell source was rendered");
         assert!(source_text.galley.size().y > 320.);
-        let height = app.documents[0].notebook.as_ref().unwrap().cells[&uid].height;
+        let height = app.documents[0].notebook().unwrap().cells[&uid].height;
         assert!(
             height >= source_text.galley.size().y,
             "{kind} cell clips its source: cell={height}, text={}",
@@ -211,17 +211,17 @@ fn cell_sources_expand_to_fit_and_wheel_scrolls_the_notebook() {
             "Scrolling over {kind} source left the cell header fixed"
         );
         assert_eq!(
-            app.documents[0].notebook.as_ref().unwrap().book.cells[0].source,
+            app.documents[0].notebook().unwrap().book.cells[0].source,
             *source
         );
 
-        let view = app.documents[0].notebook.as_mut().unwrap();
+        let view = app.documents[0].notebook_mut().unwrap();
         view.book.cells[0].set_source("short source".into());
         view.reveal = true;
         frame(&mut app, vec![]);
         frame(&mut app, vec![]);
         assert!(
-            app.documents[0].notebook.as_ref().unwrap().cells[&uid].height < 320.,
+            app.documents[0].notebook().unwrap().cells[&uid].height < 320.,
             "Shortened {kind} cell did not shrink"
         );
     }
@@ -258,7 +258,7 @@ fn a_disconnected_notebook_cannot_start_a_local_kernel_or_read_external_images()
         .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.detach_ssh(documents::Retention::Keep, &ctx);
     app.run_notebook(false, &ctx);
-    assert!(app.documents[0].notebook.as_ref().unwrap().kernel.is_none());
+    assert!(app.documents[0].notebook().unwrap().kernel.is_none());
     assert!(
         app.notice
             .as_ref()
@@ -266,7 +266,7 @@ fn a_disconnected_notebook_cannot_start_a_local_kernel_or_read_external_images()
             .0
             .contains("disconnected notebook")
     );
-    let view = app.documents[0].notebook.as_ref().unwrap();
+    let view = app.documents[0].notebook().unwrap();
     app.notebook_picture_jobs(
         view,
         vec![PictureJob {
@@ -324,7 +324,7 @@ fn kernel_startup_failure_preserves_saved_outputs_and_a_clean_buffer() {
     app.documents[0].fixture_content().text = text.clone();
     app.documents[0].fixture_content().saved_text = text.clone();
     app.documents[0].set_dirty_fixture(false);
-    app.documents[0].notebook = Some(View::new(
+    app.documents[0].replace_notebook(View::new(
         book,
         app.markdown_images.clone(),
         app.notebook_shutdowns.clone(),
@@ -354,7 +354,7 @@ fn kernel_startup_failure_preserves_saved_outputs_and_a_clean_buffer() {
     }));
     app.run_notebook(true, &ctx);
     let start = Instant::now();
-    while app.documents[0].notebook.as_ref().unwrap().error.is_empty() {
+    while app.documents[0].notebook().unwrap().error.is_empty() {
         assert!(start.elapsed() < Duration::from_secs(5));
         std::thread::sleep(Duration::from_millis(10));
         app.poll_notebooks(&ctx);
@@ -362,7 +362,7 @@ fn kernel_startup_failure_preserves_saved_outputs_and_a_clean_buffer() {
     assert_eq!(app.documents[0].text, text);
     assert!(!app.documents[0].dirty());
     assert_eq!(
-        app.documents[0].notebook.as_ref().unwrap().book.cells[2].outputs()[0]["text"],
+        app.documents[0].notebook().unwrap().book.cells[2].outputs()[0]["text"],
         json!(["42\n"])
     );
 }
@@ -394,7 +394,7 @@ fn missing_slurm_target_preserves_outputs_and_never_starts_a_host_kernel() {
         runner: "/bin/false".into(),
     };
     view.set_execution_target(Some(target.clone()));
-    app.documents[0].notebook = Some(view);
+    app.documents[0].replace_notebook(view);
     app.workspace.set_fixture(Some(Workspace {
         root: root.path().to_string_lossy().into(),
         remote: None,
@@ -420,12 +420,12 @@ fn missing_slurm_target_preserves_outputs_and_never_starts_a_host_kernel() {
     }));
     app.run_notebook(true, &ctx);
     let start = Instant::now();
-    while app.documents[0].notebook.as_ref().unwrap().error.is_empty() {
+    while app.documents[0].notebook().unwrap().error.is_empty() {
         assert!(start.elapsed() < Duration::from_secs(5));
         std::thread::sleep(Duration::from_millis(10));
         app.poll_notebooks(&ctx);
     }
-    let view = app.documents[0].notebook.as_mut().unwrap();
+    let view = app.documents[0].notebook_mut().unwrap();
     assert!(view.kernel.is_none());
     assert_eq!(view.execution_target, Some(target));
     assert!(
@@ -449,7 +449,7 @@ fn enter_in_notebook_find_reveals_and_selects_a_matching_cell() {
     let book = Notebook::parse(include_str!("../../../tests/fixtures/notebook.ipynb")).unwrap();
     let expected = book.cells[1].uid;
     app.documents[0].fixture_content().text = book.serialize().unwrap();
-    app.documents[0].notebook = Some(View::new(
+    app.documents[0].replace_notebook(View::new(
         book,
         app.markdown_images.clone(),
         app.notebook_shutdowns.clone(),
@@ -483,7 +483,7 @@ fn enter_in_notebook_find_reveals_and_selects_a_matching_cell() {
             modifiers: Default::default(),
         }],
     );
-    assert_eq!(app.documents[0].notebook.as_ref().unwrap().active, expected);
+    assert_eq!(app.documents[0].notebook().unwrap().active, expected);
 }
 
 #[test]
@@ -501,9 +501,9 @@ fn unchanged_notebook_reload_keeps_view_state_and_source_identity() {
     };
     docs.open(response.clone(), &images, &shutdowns);
     let doc = docs.active_mut().unwrap();
-    doc.notebook.as_mut().unwrap().error = "retained view state".into();
+    doc.notebook_mut().unwrap().error = "retained view state".into();
     doc.reload(response, &images, &shutdowns);
-    assert_eq!(doc.notebook.as_ref().unwrap().error, "retained view state");
+    assert_eq!(doc.notebook().unwrap().error, "retained view state");
     assert_eq!(doc.version(), 0);
 }
 
@@ -523,7 +523,7 @@ fn toolbar_is_compact_and_expanded_settings_leave_a_separated_cell_viewport() {
                 );
                 ctx.set_pixels_per_point(scale);
                 app.new_notebook();
-                let mut view = app.documents[0].notebook.take().unwrap();
+                let mut view = app.documents[0].take_notebook().unwrap();
                 let mut closed_height = 0.;
                 for expanded in [false, true] {
                     view.settings_open = expanded;

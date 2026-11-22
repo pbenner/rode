@@ -61,11 +61,11 @@ After SSH teardown, the workspace controller queues one Normal-mode local CWD pr
 | --- | --- |
 | `src/main.rs`, `src/lib.rs` | CLI/helper dispatch, native startup, library entry points |
 | `src/app.rs`, `src/app/lifecycle.rs` | Desktop composition, native frame order and acknowledged window exit |
-| `src/app/documents.rs` | Shared document factories, save/reload baselines, structural tab mutations, active selection and pending reads |
+| `src/app/documents.rs`, `src/app/documents/` | Shared document factories, exclusive representations, document lifecycle, save/reload baselines, structural tab mutations, active selection and pending reads |
 | `src/app/editor_operations.rs` | Bounded editor operation queue, native input acknowledgement and generation-checked ownership changes |
 | `src/app/editor_windows.rs` | Editor viewport registry and presentation borrowing; shared buffers and project services retain their owners |
 | `src/app/presentation.rs`, `src/app/tool_windows.rs`, `src/app/tool_windows/` | Pure root navigation/placement controller, native presentation adapters and docking regressions; independent of project resets |
-| `src/app/panels.rs` | Shared panel identities, scope classification and rendering routes for application, host and project views; project caches remain in `workbench` |
+| `src/app/tools.rs`, `src/app/panels.rs` | Shared tool identities, labels, scopes, feature gates and ordered inventory; rendering routes for application, host and project views |
 | `src/keyboard.rs`, `src/keyboard/` | Window-local control metadata, native focus handoffs, hints/search and button-only focus groups |
 | `src/app/workspace.rs`, `src/app/connections.rs` | Project preparation/activation, ordered teardown, transport release and disconnect/reconnect recovery |
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
@@ -327,8 +327,10 @@ Panel selection and detachment use `refresh_project_panel` for the same Git and
 environment refresh rules. Settings drafts remain with the project owner, so
 moving a view neither copies a draft nor applies it to running work.
 
-`app/panels.rs` owns the shared panel catalogue and rendering routes across all
-three scopes. Host tools and application views therefore need no project-tool
+`app/tools.rs` owns tool identities, the ordered inventory and one panel definition
+for tab/menu/search labels, icons, scope and feature ownership. Menus, navigation,
+feature gates and native tool-window adapters consume that definition.
+`app/panels.rs` owns rendering routes across all three scopes. Host tools and application views therefore need no project-tool
 selection or project-ready state to render. `tool_windows` owns reveal/toggle
 navigation; the project workbench supplies its domain views and explicit refresh
 operations without owning global panel routing. Existing widget identities and
@@ -667,6 +669,28 @@ workspace reply generation and vault work guard; workers retain it through reply
 publication. Domain-specific readiness checks run before capture. File, tool and
 terminal/scheduler workers execute against these snapshots, and explicit host-mode
 Git prepares its separate context on the worker without replacing project authority.
+
+## Document representation and lifecycle
+
+Each tab owns one primary representation: source, binary, image, paged reader or
+notebook. Markdown and Marp are adjunct views inside the source representation;
+showing either preserves the same source buffer and native undo history. Paged
+readers share the PDF/PowerPoint/Word viewer, with independent feature ownership.
+Read-only status, source-input admission and rendered-preview keyboard routing
+follow that representation, independently of the filename. Reloads can replace
+the representation; dropping the previous view releases its own work and leases.
+
+The document collection owns notebook departure, preview invalidation and the
+response to extension toggles. Disabling a feature retains documents, edits and
+pending saves while canceling that feature's derived or executable work. Workspace
+teardown supplies retention and departure policy once; document owners honor
+notebook persistence and release attachments before the project vault lease.
+Vault locking invalidates previews without clearing submitted save state.
+Debugger state similarly owns detach/stop/reset policy and retained cleanup
+acknowledgements, returning only terminal-view identities for the application to
+remove. LaTeX state owns build cancellation and token invalidation before resetting
+its project-specific results. Editor-window reset reaches every presentation,
+including hidden windows, through the existing shared operation.
 
 ## Native editor windows
 

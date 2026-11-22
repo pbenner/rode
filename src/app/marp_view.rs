@@ -94,7 +94,7 @@ impl EditorApp {
         let id = self.documents.new_file_in(viewport);
         let doc = self.documents.by_id_mut(id).unwrap();
         doc.set_source(marp::TEMPLATE.into());
-        doc.marp = Some(View::default());
+        doc.source_views_mut().unwrap().marp = Some(View::default());
         Some(id)
     }
     /// Switch a Markdown document between source and slide view, preserving its source buffer.
@@ -105,7 +105,7 @@ impl EditorApp {
         }
         let Some(doc) = self.documents.active().filter(|doc| {
             !doc.is_preview()
-                && (doc.marp.is_some() || doc.path.as_deref().is_some_and(markdown::is_path))
+                && (doc.marp().is_some() || doc.path.as_deref().is_some_and(markdown::is_path))
         }) else {
             self.notify(
                 "Open a Markdown file or create a Marp presentation first.",
@@ -113,11 +113,13 @@ impl EditorApp {
             );
             return;
         };
-        let showing = doc.marp.as_ref().is_some_and(|view| view.showing);
+        let showing = doc.marp().is_some_and(|view| view.showing);
         self.markdown_source();
         let view = self
             .documents
             .active_mut()
+            .unwrap()
+            .source_views_mut()
             .unwrap()
             .marp
             .get_or_insert_with(View::default);
@@ -133,7 +135,7 @@ impl EditorApp {
         for doc in self.documents.iter_mut() {
             let selected = active.contains(&doc.id);
             let version = doc.version();
-            if let Some(view) = &mut doc.marp
+            if let Some(view) = doc.marp_mut()
                 && (!selected
                     || !view.showing
                     || view
@@ -155,7 +157,7 @@ impl EditorApp {
         let mut settings = false;
         let mut refresh_button = None;
         {
-            let view = self.documents.active_mut().unwrap().marp.as_mut().unwrap();
+            let view = self.documents.active_mut().unwrap().marp_mut().unwrap();
             ui.horizontal_wrapped(|ui| {
                 let button =
                     ui.add_enabled(!view.busy, crate::keyboard::Button::new("Refresh slides"));
@@ -233,7 +235,7 @@ impl EditorApp {
             .clone()
             .unwrap_or_else(|| self.join_root("untitled.marp.md"));
         let settings = self.workbench.marp_settings();
-        let needs_render = doc.marp.as_ref().is_some_and(|view| {
+        let needs_render = doc.marp().is_some_and(|view| {
             !view.busy
                 && !view
                     .attempted
@@ -247,14 +249,13 @@ impl EditorApp {
         }
         let focus = self.take_editor_focus(ui, ctx).is_some()
             || self.documents[self.documents.active_index()]
-                .marp
-                .as_ref()
+                .marp()
                 .is_some_and(|view| view.focus);
         let keyboard = self.dialog == Dialog::None
             && !self.pending.modal()
             && !self.workbench_modal()
             && !egui::Popup::is_any_open(ctx);
-        let view = self.documents.active_mut().unwrap().marp.as_mut().unwrap();
+        let view = self.documents.active_mut().unwrap().marp_mut().unwrap();
         let Some(pdf) = &mut view.pdf else {
             ui.label("Slides use an installed Marp CLI and browser on the project host, and the bundled Rust PDF renderer on the desktop for display.");
             ui.label("The current buffer is rendered without saving it.");
@@ -283,7 +284,7 @@ impl EditorApp {
         if !self.documents.iter().any(|doc| {
             doc.id == id
                 && !doc.is_preview()
-                && (doc.marp.is_some() || doc.path.as_deref().is_some_and(markdown::is_path))
+                && (doc.marp().is_some() || doc.path.as_deref().is_some_and(markdown::is_path))
         }) {
             self.notify("Open a Markdown file to export Marp slides.", false);
             return;
@@ -388,8 +389,7 @@ impl EditorApp {
         };
         let exporting = destination.is_some();
         if doc
-            .marp
-            .as_ref()
+            .marp()
             .is_some_and(|view| if exporting { view.exporting } else { view.busy })
         {
             return;
@@ -401,7 +401,11 @@ impl EditorApp {
                 .to_string_lossy()
                 .into()
         });
-        let view = doc.marp.get_or_insert_with(View::default);
+        let view = doc
+            .source_views_mut()
+            .unwrap()
+            .marp
+            .get_or_insert_with(View::default);
         let settings = self.workbench.marp_settings().clone();
         if let Err(error) = settings.validate() {
             self.notify(error.to_string(), true);
@@ -497,7 +501,7 @@ impl EditorApp {
             return;
         };
         let current_version = doc.version();
-        let Some(view) = &mut doc.marp else {
+        let Some(view) = doc.marp_mut() else {
             return;
         };
         if exporting {
@@ -569,7 +573,7 @@ mod tests {
             .set_fixture(Some(crate::app::tests::remote_workspace()));
         app.detach_ssh(documents::Retention::Keep, &ctx);
         app.start_marp(app.documents[0].id, Format::Pdf, None, &ctx);
-        assert!(!app.documents[0].marp.as_ref().unwrap().busy);
+        assert!(!app.documents[0].marp().unwrap().busy);
         assert!(
             app.notice
                 .as_ref()
@@ -607,16 +611,13 @@ mod tests {
         let doc = app.documents.active_mut().unwrap();
         let id = doc.id;
         let version = doc.version();
-        let view = doc.marp.as_mut().unwrap();
+        let view = doc.marp_mut().unwrap();
         view.busy = true;
         view.exporting = true;
         view.token = 1;
         view.export_token = 1;
         app.marp_complete(id, version, 1, true, Err("Export refused".into()), &ctx);
-        let view = app.documents[app.documents.active_index()]
-            .marp
-            .as_ref()
-            .unwrap();
+        let view = app.documents[app.documents.active_index()].marp().unwrap();
         assert!(view.busy && !view.exporting);
         assert_eq!(
             app.documents[app.documents.active_index()].text,
@@ -632,19 +633,16 @@ mod tests {
         app.new_marp();
         let doc = app.documents.active_mut().unwrap();
         let version = doc.version();
-        let view = doc.marp.as_mut().unwrap();
+        let view = doc.marp_mut().unwrap();
         view.showing = true;
         view.attempted = Some((version, Settings::default(), "deck.md".into()));
         app.markdown_source();
-        let view = app.documents.active_mut().unwrap().marp.as_mut().unwrap();
+        let view = app.documents.active_mut().unwrap().marp_mut().unwrap();
         assert!(!view.showing && view.attempted.is_some());
         view.busy = true;
         let cancel = view.cancel.clone();
         app.markdown_source();
-        let view = app.documents[app.documents.active_index()]
-            .marp
-            .as_ref()
-            .unwrap();
+        let view = app.documents[app.documents.active_index()].marp().unwrap();
         assert!(cancel.load(Ordering::Acquire) && !view.busy && view.attempted.is_none());
     }
 }

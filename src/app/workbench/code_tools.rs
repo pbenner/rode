@@ -170,7 +170,7 @@ impl EditorApp {
         if self
             .documents
             .active()
-            .is_some_and(|d| d.notebook.is_some())
+            .is_some_and(|d| d.notebook().is_some())
         {
             if !build {
                 self.run_notebook(false, ctx);

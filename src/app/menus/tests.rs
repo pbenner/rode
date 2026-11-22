@@ -38,7 +38,7 @@ fn disabling_features_removes_their_activity_menu_and_palette_entries_and_reenab
                     app.titlebar(ctx);
                     app.activity(ctx);
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        app.menu_commands(ui, ctx, Command::PANELS);
+                        app.menu_commands(ui, ctx, &Command::panels());
                         app.menu_commands(
                             ui,
                             ctx,

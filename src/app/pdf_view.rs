@@ -35,8 +35,8 @@ pub(super) enum Target {
 impl Target {
     fn view(self, doc: &mut Document) -> Option<&mut PdfView> {
         match self {
-            Self::Document => doc.pdf.as_mut(),
-            Self::Presentation => doc.marp.as_mut().and_then(|view| view.pdf.as_mut()),
+            Self::Document => doc.pdf_mut(),
+            Self::Presentation => doc.marp_mut().and_then(|view| view.pdf.as_mut()),
         }
     }
 }
@@ -733,7 +733,7 @@ impl EditorApp {
 
     /// Render the active PDF and dispatch requested page turns/reloads after releasing its borrow.
     pub(super) fn pdf_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        let Some(doc) = self.documents.active().filter(|doc| doc.pdf.is_some()) else {
+        let Some(doc) = self.documents.active().filter(|doc| doc.pdf().is_some()) else {
             return false;
         };
         let id = doc.id;
@@ -744,7 +744,7 @@ impl EditorApp {
             && !egui::Popup::is_any_open(ctx);
         let palette = self.themes.active().palette;
         let fullscreen = self.editor.pdf_fullscreen.is_some();
-        let view = self.documents.active_mut().unwrap().pdf.as_mut().unwrap();
+        let view = self.documents.active_mut().unwrap().pdf_mut().unwrap();
         let response = view.ui(
             ui,
             id,
@@ -835,7 +835,7 @@ impl EditorApp {
         let Some(path) = doc.path.clone() else {
             return;
         };
-        let Some(view) = &mut doc.pdf else {
+        let Some(view) = doc.pdf_mut() else {
             return;
         };
         if view.reloading {
@@ -889,7 +889,7 @@ mod tests {
             .unwrap();
             app.new_file();
             let doc = app.documents.active_mut().unwrap();
-            doc.pdf = Some(PdfView::new(loaded));
+            doc.set_pdf_fixture(PdfView::new(loaded));
             doc.set_dirty_fixture(false);
             assert_eq!(doc.paged_feature(), Some(feature));
             assert!(app.documents.active_source().is_none());
@@ -965,7 +965,7 @@ mod tests {
         let doc = &mut app.documents[0];
         doc.fixture_content().path = Some(path.to_string_lossy().into());
         doc.set_dirty_fixture(false);
-        doc.pdf = Some(PdfView::new(loaded));
+        doc.set_pdf_fixture(PdfView::new(loaded));
         let id = doc.id;
         app.save_active(&ctx, false);
         app.save_active(&ctx, true);
@@ -978,24 +978,23 @@ mod tests {
         assert!(matches!(app.dialog, Dialog::None));
         assert!(!root.path().join("copy.pdf").exists());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        let view = app.documents[0].pdf.as_mut().unwrap();
+        let view = app.documents[0].pdf_mut().unwrap();
         view.navigate(2, PageEntry::Start, 128);
         let (_, _, admitted) = view.begin_page(2, PageEntry::Start).unwrap();
         for token in [admitted.wrapping_add(1), admitted] {
             let pixels = app.documents[0]
-                .pdf
-                .as_ref()
+                .pdf()
                 .unwrap()
                 .source
                 .render(2, &budget, 128, &AtomicBool::new(false))
                 .unwrap();
             app.pdf_page(Target::Document, id, 0, token, 2, Ok(pixels));
             assert_eq!(
-                app.documents[0].pdf.as_ref().unwrap().page,
+                app.documents[0].pdf().unwrap().page,
                 if token == admitted { 2 } else { 1 }
             );
         }
-        let view = app.documents[0].pdf.as_mut().unwrap();
+        let view = app.documents[0].pdf_mut().unwrap();
         view.wanted = 1;
         let (_, _, failed) = view.begin_page(1, PageEntry::Start).unwrap();
         app.pdf_page(
@@ -1006,21 +1005,20 @@ mod tests {
             1,
             Err("Renderer failed".into()),
         );
-        assert_eq!(app.documents[0].pdf.as_ref().unwrap().page, 2);
+        assert_eq!(app.documents[0].pdf().unwrap().page, 2);
         assert!(!app.documents[0].preview_loading());
         app.clear_project(
             documents::Retention::Keep,
             workspace::LeaveReason::ProjectChanged,
         );
         let pixels = app.documents[0]
-            .pdf
-            .as_ref()
+            .pdf()
             .unwrap()
             .source
             .render(1, &budget, 128, &AtomicBool::new(false))
             .unwrap();
         app.pdf_page(Target::Document, id, 0, 0, 1, Ok(pixels));
-        assert_eq!(app.documents[0].pdf.as_ref().unwrap().page, 2);
+        assert_eq!(app.documents[0].pdf().unwrap().page, 2);
         assert!(!app.documents[0].dirty());
         drop(app);
         assert_eq!(budget.used(), 0);
