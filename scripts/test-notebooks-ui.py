@@ -90,6 +90,8 @@ def save_as(ui, name):
 def execution(ui, source, original, label):
     ui.open_file("demo.ipynb")
     notebook(ui)
+    ui.control("markdown-math-inline")
+    ui.control("markdown-math-display")
     screenshot(ui.window, label + "-opened.png")
     ui.click("notebook-settings")
     screenshot(ui.window, label + "-settings.png")
@@ -267,6 +269,10 @@ def run(remote=False):
         source = project / "demo.ipynb"
         shutil.copyfile(ROOT / "tests/fixtures/notebook.ipynb", source)
         original = json.loads(source.read_text())
+        original["cells"][0]["source"].extend(
+            ["\n\nInline $E=mc^2$.\n\n", "$$x_i^2 + y_i^2 = z_i^2$$\n"]
+        )
+        source.write_text(json.dumps(original))
         (project / "notes.txt").write_text("preserve text\n")
         environment = fixture_environment(base)
         if remote:

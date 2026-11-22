@@ -1,4 +1,5 @@
-//! Bounded, worker-rendered formula textures. No TeX process, file loader or network access.
+//! Shared, bounded formula textures for chat, Markdown and notebook previews.
+//! Raster work never starts a TeX process or loads files or network resources.
 use eframe::egui;
 use latex_rust::{Dim, MathFont, MathStyle, PngOptions};
 use std::{
@@ -37,11 +38,39 @@ struct Entry {
     frame: u64,
 }
 
+impl Entry {
+    /// Publish an available worker reply, returning the additional texture bytes.
+    /// Failed replies also change layout: callers retain a readable source fallback.
+    fn poll(&mut self, ctx: &egui::Context) -> Option<usize> {
+        let State::Pending(rx) = &self.state else {
+            return None;
+        };
+        match rx.try_recv() {
+            Ok(Ok(image)) => {
+                let bytes = image.pixels.len() * 4;
+                self.state = State::Ready(ctx.load_texture(
+                    "math-formula",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ));
+                Some(bytes)
+            }
+            Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
+                self.state = State::Failed;
+                Some(0)
+            }
+            Err(mpsc::TryRecvError::Empty) => None,
+        }
+    }
+}
+
 #[derive(Default)]
 struct Cache {
     entries: HashMap<Key, Entry>,
     worker: Option<mpsc::SyncSender<Work>>,
     bytes: usize,
+    revision: u64,
+    polled_pass: Option<u64>,
 }
 
 impl Cache {
@@ -49,21 +78,9 @@ impl Cache {
         let frame = ctx.cumulative_frame_nr();
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.frame = frame;
-            if let State::Pending(rx) = &entry.state {
-                match rx.try_recv() {
-                    Ok(Ok(image)) => {
-                        self.bytes += image.pixels.len() * 4;
-                        entry.state = State::Ready(ctx.load_texture(
-                            "agent-math",
-                            image,
-                            egui::TextureOptions::LINEAR,
-                        ));
-                    }
-                    Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
-                        entry.state = State::Failed
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                }
+            if let Some(bytes) = entry.poll(ctx) {
+                self.bytes += bytes;
+                self.revision = self.revision.wrapping_add(1);
             }
             return match &entry.state {
                 State::Ready(texture) => Some(texture.clone()),
@@ -100,12 +117,13 @@ impl Cache {
             }) = self.entries.remove(&oldest)
             {
                 self.bytes -= texture.size()[0] * texture.size()[1] * 4;
+                self.revision = self.revision.wrapping_add(1);
             }
         }
         if self.worker.is_none() {
             let (tx, rx) = mpsc::sync_channel::<Work>(MAX_PENDING);
             std::thread::Builder::new()
-                .name("agent-math".into())
+                .name("math-renderer".into())
                 .spawn(move || {
                     let font = MathFont::stix_two_math();
                     while let Ok(work) = rx.recv() {
@@ -139,6 +157,37 @@ impl Cache {
     }
 }
 
+fn cache(ctx: &egui::Context) -> Arc<Mutex<Cache>> {
+    ctx.data_mut(|data| {
+        data.get_temp_mut_or_default::<Arc<Mutex<Cache>>>(egui::Id::new("math-cache"))
+            .clone()
+    })
+}
+
+/// Drain completed work once per UI pass, including formulas outside a scrolled
+/// viewport. Preview layout caches must be invalidated when this revision changes.
+pub(super) fn revision(ctx: &egui::Context) -> u64 {
+    let cache = cache(ctx);
+    let Ok(mut cache) = cache.lock() else {
+        return 0;
+    };
+    let pass = ctx.cumulative_pass_nr();
+    if cache.polled_pass != Some(pass) {
+        let mut added_bytes = 0;
+        let mut completed = 0;
+        for entry in cache.entries.values_mut() {
+            if let Some(bytes) = entry.poll(ctx) {
+                added_bytes += bytes;
+                completed += 1;
+            }
+        }
+        cache.bytes += added_bytes;
+        cache.revision = cache.revision.wrapping_add(completed);
+        cache.polled_pass = Some(pass);
+    }
+    cache.revision
+}
+
 /// Obtain a cached formula, scheduling bounded native raster work on demand.
 pub(super) fn texture(
     ctx: &egui::Context,
@@ -156,10 +205,7 @@ pub(super) fn texture(
         scale: (ctx.pixels_per_point().clamp(1., 3.) * 64.).ceil() as u16,
     };
     let scale = key.scale as f32 / 64.;
-    let cache = ctx.data_mut(|data| {
-        data.get_temp_mut_or_default::<Arc<Mutex<Cache>>>(egui::Id::new("agent-math-cache"))
-            .clone()
-    });
+    let cache = cache(ctx);
     let texture = cache.lock().ok()?.texture(ctx, key)?;
     let size = texture.size_vec2() / scale;
     Some((texture, size))
@@ -227,6 +273,41 @@ mod tests {
             size: 16 * 64,
             scale: 64,
         }
+    }
+
+    #[test]
+    fn layout_revision_publishes_offscreen_results_without_double_accounting() {
+        let ctx = egui::Context::default();
+        let shared = cache(&ctx);
+        let (worker, requests) = mpsc::sync_channel(MAX_PENDING);
+        shared.lock().unwrap().worker = Some(worker);
+        assert!(shared.lock().unwrap().texture(&ctx, key("x")).is_none());
+        requests
+            .try_recv()
+            .unwrap()
+            .reply
+            .send(Ok(egui::ColorImage::filled([12, 8], egui::Color32::WHITE)))
+            .unwrap();
+        assert_eq!(revision(&ctx), 1);
+        assert_eq!(revision(&ctx), 1);
+        assert_eq!(shared.lock().unwrap().bytes, 12 * 8 * 4);
+        assert!(shared.lock().unwrap().texture(&ctx, key("x")).is_some());
+        assert_eq!(revision(&ctx), 1);
+
+        assert!(shared.lock().unwrap().texture(&ctx, key("bad")).is_none());
+        requests
+            .try_recv()
+            .unwrap()
+            .reply
+            .send(Err("Unsupported".into()))
+            .unwrap();
+        let _ = ctx.run(Default::default(), |_| {});
+        assert_eq!(revision(&ctx), 2);
+        assert!(matches!(
+            shared.lock().unwrap().entries[&key("bad")].state,
+            State::Failed
+        ));
+        assert_eq!(shared.lock().unwrap().bytes, 12 * 8 * 4);
     }
 
     #[test]

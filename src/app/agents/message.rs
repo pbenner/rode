@@ -1,11 +1,11 @@
 //! Markdown styled as one text buffer, retaining selection across block boundaries.
+use crate::app::math;
 use crate::theme;
 use eframe::egui::{self, FontId, Stroke, TextFormat, text::LayoutJob};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::{ops::Range, sync::Arc};
 
 mod formulas;
-mod math;
 mod tables;
 
 /// One selectable buffer with native formula artwork at stable character positions.

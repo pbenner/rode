@@ -14,6 +14,7 @@ use pulldown_cmark::{Event as MdEvent, Options, Parser, Tag, TagEnd};
 use std::sync::{Mutex, atomic::AtomicU64};
 
 mod html;
+mod math;
 
 const MAX_BYTES: usize = 256 * 1024;
 const MAX_EVENTS: usize = 12_000;
@@ -104,6 +105,7 @@ pub(super) struct Preview {
     appearance: Option<(String, u32, [u32; 2])>,
     notebook: bool,
     presentation: Arc<html::Presentation>,
+    math_revision: u64,
 }
 impl Preview {
     /// Create an inert preview backed by the application's scoped image loader.
@@ -122,6 +124,7 @@ impl Preview {
             appearance: None,
             notebook: false,
             presentation: Default::default(),
+            math_revision: 0,
         }
     }
     /// Notebook text cells accept a bounded semantic HTML subset while document
@@ -277,6 +280,9 @@ impl Preview {
                 *click_target.borrow_mut() = Some(url);
             }
         };
+        let render_math = move |ui: &mut egui::Ui, source: &str, inline| {
+            math::ui(ui, source, inline, font_size, palette);
+        };
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing.y = 3.;
             for (style, font) in [
@@ -293,6 +299,7 @@ impl Preview {
                 .indentation_spaces(2)
                 .explicit_image_uri_scheme(true)
                 .render_html_fn(Some(&render_html))
+                .render_math_fn(Some(&render_math))
                 .show(ui, &mut self.cache, &self.source);
         });
         let clicked = clicked.borrow_mut().take();
@@ -327,6 +334,11 @@ impl Preview {
             self.cache.clear_scrollable();
             self.appearance = Some(appearance);
         }
+        let revision = super::math::revision(ui.ctx());
+        if revision != self.math_revision {
+            self.cache.clear_scrollable();
+            self.math_revision = revision;
+        }
         if !self.warnings.is_empty() {
             crate::keyboard::collapsing(
                 ui,
@@ -348,8 +360,12 @@ impl Preview {
         ui.style_mut()
             .text_styles
             .insert(egui::TextStyle::Monospace, FontId::monospace(font_size));
+        let render_math = move |ui: &mut egui::Ui, source: &str, inline| {
+            math::ui(ui, source, inline, font_size, palette);
+        };
         CommonMarkViewer::new()
             .explicit_image_uri_scheme(true)
+            .render_math_fn(Some(&render_math))
             .show_scrollable(("markdown-preview", id), ui, &mut self.cache, &self.source);
         self.cache
             .link_hooks()
@@ -377,6 +393,7 @@ fn options() -> Options {
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_MATH
 }
 #[cfg(test)]
 fn prepare(text: &str, path: &str, token: u64) -> Result<Prepared, String> {
@@ -435,6 +452,10 @@ fn prepare_images(
                 for (event, span) in events.by_ref() {
                     match event {
                         MdEvent::Text(text) | MdEvent::Code(text) => alt.push_str(&text),
+                        // Alternative text stays literal. Reconstitute math events
+                        // before escaping so the viewer cannot typeset inside an image.
+                        MdEvent::InlineMath(text) => alt.push_str(&format!("${text}$")),
+                        MdEvent::DisplayMath(text) => alt.push_str(&format!("$${text}$$")),
                         MdEvent::Start(Tag::Image { .. }) => depth += 1,
                         MdEvent::End(TagEnd::Image) => {
                             depth -= 1;
@@ -454,7 +475,7 @@ fn prepare_images(
                 let alt = alt
                     .chars()
                     .flat_map(|c| {
-                        if "\\[]*_`<>()!".contains(c) {
+                        if "\\[]*_`<>()!$".contains(c) {
                             vec!['\\', c]
                         } else {
                             vec![c]

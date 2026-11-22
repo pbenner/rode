@@ -8,6 +8,8 @@ Code cells use the independent syntax theme and the kernel's language. Markdown 
 
 Markdown cells support native headings, paragraphs, lists, tables, emphasis, links, images and embedded PNG/JPEG attachments. They can mix Markdown with static HTML equivalents: `h1`–`h6`, `p`/`div`, `br`/`hr`, `strong`/`b`, `em`/`i`, lists, links, images, code and basic tables. HTML character references are decoded, while fenced Markdown code stays literal. Line breaks and paragraphs within table cells are folded into spaces to keep each table row intact. Rendering leaves the original cell source and metadata intact.
 
+Markdown cells also typeset inline `$…$` and display `$$…$$` LaTeX equations, using the same native [Markdown math renderer](markdown.md#latex-equations). No TeX installation or running kernel is needed. Code examples remain literal; unsupported expressions remain visible as source. Click an equation, or focus it and press **Enter**, to copy its LaTeX source; the right-click menu also offers **Copy LaTeX**.
+
 Text headings (`h1`–`h6`) honor `align="left|center|right"` and inline `text-align`; a valid inline style takes precedence. Centered headings wrap within the cell and keep their level, emphasis and clickable links. Headings containing images retain the shared Markdown image layout. Horizontal rules accept solid `border`/`border-top` styles with widths from 0 to 8px and literal colors (hex values or common names such as `gray`). For example:
 
 ```html

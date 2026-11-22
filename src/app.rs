@@ -57,6 +57,7 @@ mod transitions;
 use transitions::Action;
 mod markdown;
 mod marp_view;
+mod math;
 mod menus;
 mod monitoring;
 mod navigation;

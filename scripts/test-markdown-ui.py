@@ -78,6 +78,10 @@ Native **Markdown**, *emphasis*, ~~old text~~, and `inline code`.
 
 ![Signal](signal.png)
 
+Inline math $E=mc^2$ and display math:
+
+$$x_i^2 + y_i^2 = z_i^2$$
+
 ## Checklist
 - [x] Keep edits safe
 - [ ] Review [notes](notes.txt)
@@ -167,6 +171,20 @@ fn main() { println!("ready"); }
                     "The Markdown preview did not render its relative image",
                 )
                 assert source.read_text() == original, "Preview silently saved the source"
+                ui.control("markdown-math-inline")
+                ui.control("markdown-math-display")
+                ui.click("markdown-math-inline", mouse_button=3)
+                ui.click("markdown-math-copy")
+                wait_for(
+                    lambda: ui.clipboard() == "$E=mc^2$",
+                    "Copy LaTeX did not preserve the equation source",
+                )
+                ui.hint("Copy LaTeX: x_i^2 + y_i^2 = z_i^2")
+                ui.press("markdown-math-display", "Return")
+                wait_for(
+                    lambda: ui.clipboard() == "$$x_i^2 + y_i^2 = z_i^2$$",
+                    "Keyboard activation did not copy the display equation",
+                )
                 if isolated:
                     assert (
                         colors(window, label + "-sandbox.png").get(bytes((241, 91, 132)), 0) == 0
