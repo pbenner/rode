@@ -157,6 +157,8 @@ The bottom status bar has separate **LOCAL** or **SSH · user@host**,
 project-path and access-mode controls. Open the connection control to disconnect
 or reconnect; open the path control for the full folder path, **Copy path** and
 **Open project…**. Long paths truncate in the footer and scroll inside the popup.
+Encrypted projects add a compact lock-status control to this same footer; click
+it for encryption and lock controls, or hover for the storage host and paths.
 A **Disconnect** button also appears beside the project action while SSH is
 connected. It closes the project first and releases SSH after any required lock
 succeeds; a failed lock keeps the connection available.
