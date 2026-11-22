@@ -127,7 +127,7 @@ fn shown(entry: &Entry, show_hidden: bool) -> bool {
     show_hidden || !ssh::display_name(&entry.path).starts_with('.')
 }
 
-/// Both pickers use this row renderer, including full-row hit targets, keyboard
+/// Native pickers share this row renderer, including full-row hit targets, keyboard
 /// selection and clipped, left-aligned labels. File names have no type prefixes.
 #[allow(clippy::too_many_arguments)] // One shared renderer for project and file dialog state.
 pub(super) fn rows(
@@ -451,6 +451,17 @@ pub(super) fn parent(path: &str) -> String {
         .map_or_else(|| "/".into(), |path| path.to_string_lossy().into())
 }
 
+/// Interpret a typed path relative to a known directory on its selected host.
+/// Absolute and home-prefixed paths stay literal; canonicalization and home
+/// expansion belong to the host rather than the desktop filesystem.
+pub(super) fn resolve_path(directory: &str, path: &str) -> String {
+    if path.starts_with(['/', '~']) {
+        path.into()
+    } else {
+        format!("{}/{}", directory.trim_end_matches('/'), path)
+    }
+}
+
 impl EditorApp {
     /// Queue a directory listing with picker token and captured location; ordinary host
     /// file pickers use the active plan, while explicit desktop attachments use local scope.
@@ -467,16 +478,12 @@ impl EditorApp {
         );
     }
     fn picker_path(&self, path: &str) -> String {
-        if path.starts_with('/') || path.starts_with('~') {
-            path.into()
+        let directory = if self.file_browser.loading {
+            &self.file_browser.requested
         } else {
-            let directory = if self.file_browser.loading {
-                &self.file_browser.requested
-            } else {
-                &self.file_browser.directory
-            };
-            format!("{}/{}", directory.trim_end_matches('/'), path)
-        }
+            &self.file_browser.directory
+        };
+        resolve_path(directory, path)
     }
     fn picker_directory(&mut self, path: String, ctx: &egui::Context) {
         self.dialog_input = if is_save_dialog(&self.dialog) {
@@ -819,6 +826,10 @@ mod tests {
         assert_eq!(app.picker_path("test.rs"), "/project/sub/test.rs");
         assert_eq!(app.picker_path("~/test.rs"), "~/test.rs");
         assert_eq!(app.picker_path("/elsewhere/file"), "/elsewhere/file");
+        app.file_browser.directory = "/project/sub/".into();
+        assert_eq!(app.picker_path("../🦀.rs"), "/project/sub/../🦀.rs");
+        app.file_browser.directory = "/".into();
+        assert_eq!(app.picker_path("root.txt"), "/root.txt");
         app.file_browser.loading = true;
         app.file_browser.requested = "/project/other".into();
         assert_eq!(app.picker_path("new.txt"), "/project/other/new.txt");

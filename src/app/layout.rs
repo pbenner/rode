@@ -14,6 +14,19 @@ pub(super) mod resize;
 #[cfg(test)]
 pub(super) mod tests;
 
+/// Width of a standard text button using the active font and control padding.
+/// Path rows reserve this before sizing their editor so adjacent controls cannot overlap.
+pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let width = ui.fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap(text.into(), font, ui.visuals().text_color())
+            .size()
+            .x
+    });
+    (width + 2. * ui.spacing().button_padding.x).max(ui.spacing().interact_size.x)
+}
+
 /// Shared binary-unit labels for monitoring and file-transfer progress.
 pub(super) fn bytes(value: u64) -> String {
     if value >= 1024 * 1024 * 1024 {

@@ -137,7 +137,7 @@ After SSH teardown, the workspace controller queues one Normal-mode local CWD pr
 | `src/terminal/backend.rs` | Typed raw-PTY, framed-attachment, debugger-stream and retained-output ownership; backend-specific input, resize and cleanup |
 | `crates/rode-session/src/tunnels.rs`, `src/app/tunnels.rs`, `src/ssh.rs` | Daemon-owned reverse SSH forwarding, reconnect/trust state, explicit host controls and return profiles preserving compute identity |
 | `src/slurm.rs`, `crates/rode-host-core/src/slurm/`, `src/app/sessions/allocation.rs`, `crates/rode-session/src/workspace.rs` | Interactive allocations, persistent notebook reservations, captured execution targets, stdio compute steps, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
-| `src/vault.rs`, `crates/rode-host-core/src/vault.rs`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
+| `src/vault.rs`, `crates/rode-host-core/src/vault.rs`, `src/app/vaults.rs`, `src/app/vaults/` | Verified gocryptfs mounts, selected-host storage browsing, cross-window leases and guarded locking |
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |
 | `scripts/rust_tests.py`, `scripts/test-rust-tests.py` | Isolated native Cargo test execution, private home/runtime fixtures and checked cleanup/exit propagation |
 | `tests/`, `tests/fixtures/`, `scripts/test-*.py` | Service integration tests, deterministic peers and isolated native UI checks |

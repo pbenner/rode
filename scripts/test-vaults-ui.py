@@ -81,6 +81,8 @@ def run(remote=False):
         project, cipher = base / "plain-project", base / "encrypted"
         project.mkdir()
         cipher.mkdir()
+        shortcut = project / "encrypted-from-explorer"
+        shortcut.mkdir()
         (cipher / "gocryptfs.conf").write_text("fixture")
         source = project / "main.txt"
         source.write_text("keep the existing project\n" + "\n" * 8)
@@ -121,23 +123,43 @@ def run(remote=False):
                 ui = project_ui(process, environment, project, log.name)
                 window = ui.window
                 command = ui.command
+                if not any(
+                    control["name"] == "pane-Explorer" for control in ui.layout()["buttons"]
+                ):
+                    ui.click("workspace-explorer")
+                ui.control("pane-Explorer")
+                ui.click("explorer-row:" + str(shortcut), mouse_button=3)
+                ui.click("explorer-open-encrypted")
+                ui.value("vault-folder-value", str(shortcut))
+                ui.click("vault-cancel")
                 ui.open_file("main.txt")
                 click(600, 250)
                 key("End", ("Control_L",))
                 text("\nunsaved-vault-marker")
                 command("Project: Open encrypted project")
                 ui.control("vault-folder", focused=True)
-                ui.fill("vault-folder", str(cipher))
-                key("Tab")
-                key("a", ("Control_L",))
-                text("/usr/bin/true")
-                key("Tab")  # Unmount executable
-                key("Tab")  # Creation checkbox, left off
-                key("Tab")  # Password
+                ui.click("vault-password")
                 text("RODEUiSecret4821")
-                key("Tab")  # Sandbox checkbox
-                key("Tab")  # Unlock button
-                key("Return")
+                ui.click("vault-browse")
+                ui.value("vault-picker-directory", str(shortcut))
+                key("Escape")
+                ui.control("vault-password")
+                ui.click("vault-browse")
+                ui.value("vault-picker-directory", str(shortcut))
+                ui.click("vault-picker-up")
+                ui.value("vault-picker-directory", str(project))
+                ui.click("vault-picker-up")
+                ui.value("vault-picker-directory", str(base))
+                ui.resize(850, 560)
+                screenshot(window, label + "-folder-browser.png")
+                ui.click("file-picker-row:" + hashlib.sha256(str(cipher).encode()).hexdigest())
+                ui.click("vault-picker-select")
+                ui.value("vault-folder-value", str(cipher))
+                ui.resize(1380, 900)
+                screenshot(window, label + "-form.png")
+                ui.click("vault-advanced")
+                ui.edit("vault-program", "/usr/bin/true")
+                ui.click("vault-unlock")
                 ui.control("vault-operation-complete")
                 screenshot(window, label + "-refused-plaintext.png")
                 assert "unsaved-vault-marker" not in source.read_text()

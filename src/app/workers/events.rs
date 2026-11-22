@@ -32,6 +32,13 @@ pub(in crate::app) enum Job {
         path: String,
         local: bool,
     },
+    /// Explicit encrypted-storage discovery on the selected host, outside
+    /// project grants. This job only lists directories; it cannot unlock a vault.
+    BrowseEncrypted {
+        token: u64,
+        path: String,
+        remote: bool,
+    },
     AgentAttachment {
         token: u64,
         local: bool,

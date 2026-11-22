@@ -107,6 +107,8 @@ impl EditorApp {
                     680.
                 } else if matches!(self.dialog, Dialog::Folder | Dialog::SharedFolder) {
                     720.
+                } else if self.dialog == Dialog::Encrypted {
+                    620.
                 } else if self.dialog == Dialog::Connect {
                     500.
                 } else {
@@ -117,6 +119,7 @@ impl EditorApp {
                     self.dialog,
                     Dialog::Folder
                         | Dialog::SharedFolder
+                        | Dialog::Encrypted
                         | Dialog::Tunnels
                         | Dialog::NewTunnel
                         | Dialog::Connect
@@ -142,7 +145,12 @@ impl EditorApp {
             && !(self.dialog == Dialog::TerminalExit && self.exit_pending())
             && !self.vaults.locking()
         {
-            self.dialog = Dialog::None;
+            if self.dialog == Dialog::Encrypted && self.vaults.cancel_folder_picker() {
+                self.dialog_focus = true;
+                ctx.request_repaint();
+            } else {
+                self.dialog = Dialog::None;
+            }
         }
         if file_dialog && !file_browser::is_file_dialog(&self.dialog) {
             self.file_browser.reset();

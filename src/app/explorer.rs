@@ -174,6 +174,14 @@ impl EditorApp {
             ) {
                 self.open_folder_dialog_at(entry.path.clone());
             }
+            if item(
+                ui,
+                "explorer-open-encrypted",
+                "Open as encrypted project…",
+                ready,
+            ) {
+                self.encrypted_dialog_at(entry.path.clone());
+            }
         } else {
             if item(ui, "explorer-open", "Open", ready) {
                 self.open_file(entry.path.clone(), ctx);

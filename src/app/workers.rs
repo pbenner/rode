@@ -96,6 +96,7 @@ impl EditorApp {
             &job,
             Job::Prepare { .. }
                 | Job::Browse { .. }
+                | Job::BrowseEncrypted { .. }
                 | Job::BrowseFiles { local: true, .. }
                 | Job::AgentAttachment { local: true, .. }
         );
@@ -122,6 +123,9 @@ impl EditorApp {
                             .into(),
                     );
                 }
+                Job::BrowseEncrypted { .. } => self.vaults.folder_failed(
+                    "Wait for encrypted-project locking to finish before browsing.".into(),
+                ),
                 Job::List(path, _) => {
                     self.explorer_state.loading.remove(path);
                 }
@@ -138,7 +142,9 @@ impl EditorApp {
             return;
         }
         let use_remote = match &job {
-            Job::Prepare { remote, .. } | Job::Browse { remote, .. } => *remote,
+            Job::Prepare { remote, .. }
+            | Job::Browse { remote, .. }
+            | Job::BrowseEncrypted { remote, .. } => *remote,
             Job::BrowseFiles { local: true, .. } | Job::AgentAttachment { local: true, .. } => {
                 false
             }

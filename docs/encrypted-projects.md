@@ -5,11 +5,13 @@ RODE uses an installed **gocryptfs** on the project host to present an encrypted
 ## Open or create
 
 1. Choose **File → Open encrypted project…**, or **Project: Open encrypted project** in the command palette.
-2. Select **On the connected SSH host** for remote storage. Authenticate SSH first; the existing connection carries passwords and file operations.
-3. Enter the encrypted storage folder as an absolute path or `~/` path, plus its password, then **Unlock & open**. The gocryptfs executable and unmount tool paths are configurable.
+2. Choose **This computer** or **SSH host** for the storage location. Authenticate SSH first for remote storage; the existing connection carries passwords and file operations.
+3. Use **Browse…** to select the encrypted storage folder, enter its password, then **Unlock & open**. The browser supports parent navigation, filtering, hidden folders and keyboard navigation. You can still enter an absolute or `~/` path directly. Executable overrides are under **Advanced options**; the usual gocryptfs and automatic unmount defaults need no configuration.
 4. To create storage, enable **Create new encrypted storage** and confirm the new password. The selected folder must be empty, or have an existing parent if RODE needs to create it. Existing plaintext files are never converted, deleted or replaced.
 
-Cancelling an unlock lets the host operation finish and performs normal cleanup; normal exit waits for cleanup to finish. A refused cleanup must be resolved with **Lock existing mount**.
+You can also right-click a folder in the Explorer and choose **Open as encrypted project…**. This selects the folder on the Explorer's host and opens the form; it does not create storage or unlock anything automatically. Cancelling the folder browser, including with Escape, returns to the existing form without losing its draft. Closing the encrypted-project dialog clears its password.
+
+Cancelling an unlock lets the host operation finish and performs normal cleanup; normal exit waits for cleanup to finish. A refused cleanup must be resolved with **Advanced options → Lock existing mount**.
 
 After opening, the explorer, Git, terminals, agents, language tools, notebooks and previews use the decrypted project root. **ENCRYPTED PROJECT · UNLOCKED** stays visible. The optional sandbox is prepared around this root; mount management itself runs on the host outside that sandbox. The backing store is not added as a project grant.
 

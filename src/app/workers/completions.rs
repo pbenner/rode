@@ -38,6 +38,16 @@ impl EditorApp {
             {
                 return;
             }
+            Job::BrowseEncrypted {
+                token,
+                path,
+                remote,
+            } if self.dialog != Dialog::Encrypted
+                || !self.vaults.folder_matches(*token, path, *remote) =>
+            {
+                return;
+            }
+            Job::BrowseEncrypted { .. } => {}
             Job::BrowseFiles { .. } => self.file_browser.loading = false,
             Job::AgentAttachment { .. } | Job::ExportImage(_) => {}
             Job::Prepare { .. } | Job::StandaloneFile { .. } => {}
@@ -109,6 +119,8 @@ impl EditorApp {
                     self.file_browser
                         .location
                         .clone_from(&self.file_browser.directory);
+                } else if matches!(job, Job::BrowseEncrypted { .. }) {
+                    self.vaults.folder_failed(error);
                 } else {
                     self.notify(error, true);
                 }
@@ -166,6 +178,7 @@ impl EditorApp {
                     self.guarded(Action::PreparedProject { id: token }, ctx);
                 }
                 Job::BrowseFiles { .. } => self.file_browser.loaded(response),
+                Job::BrowseEncrypted { .. } => self.vaults.folder_loaded(response),
                 Job::Browse { options, .. } => {
                     let saved = self.saved_sandbox_for(&response.path, self.project_picker.remote);
                     self.project_picker.loaded(response, &options, saved);

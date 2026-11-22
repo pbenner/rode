@@ -337,17 +337,7 @@ impl State {
             *focus = false;
         }
         let height = layout::control_height(ui);
-        let browse_width = ui.fonts_mut(|fonts| {
-            fonts
-                .layout_no_wrap(
-                    "Browse".into(),
-                    egui::TextStyle::Button.resolve(ui.style()),
-                    ui.visuals().text_color(),
-                )
-                .size()
-                .x
-                + 2. * ui.spacing().button_padding.x
-        });
+        let browse_width = layout::button_width(ui, "Browse");
         let mut browse = None;
         let response = ui
             .horizontal(|ui| {
