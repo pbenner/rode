@@ -25,7 +25,7 @@ Use `cargo xtask install --root /path/to/prefix` for a custom install directory;
 
 For Codex chat, click **Install Codex** in the chat panel, install the optional `rode-codex` package, or use an existing executable. Authenticate locally with `rode --codex login`, then leave the agent executable set to `auto`; see [agent setup](agents.md). VS Code, Node.js and npm are not needed. Editing and other tools work without Codex.
 
-For development without installing, `cargo build --locked --release` builds `target/release/rode` and `target/release/rode-sessiond`; `cargo run --release -- .` runs only the editor target. Use the release build when evaluating responsiveness or memory use. Linux is the validated platform; the default SSH client is embedded Rust (`russh`), with an optional OpenSSH backend. Remote transport currently requires Unix.
+For development without installing, `cargo build --locked --release` builds `target/release/rode`, `target/release/rode-sessiond` and the independent `target/release/rode-stocks` extension; `cargo run --release -- .` runs only the editor target. Use the release build when evaluating responsiveness or memory use. Linux is the validated platform; the default SSH client is embedded Rust (`russh`), with an optional OpenSSH backend. Remote transport currently requires Unix.
 
 On Debian/Ubuntu, common build/runtime prerequisites are a C compiler, `pkg-config`, OpenGL, X11 or Wayland libraries. The OpenSSH client is optional for compatibility mode and external tools such as Git-over-SSH. If development libraries are missing:
 

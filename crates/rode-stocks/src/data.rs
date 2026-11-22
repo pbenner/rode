@@ -2,6 +2,7 @@
 //! These public endpoints are unofficial: callers retain cached data on failure and
 //! display the provider and observation dates instead of promising live quotes.
 use anyhow::{Context, Result, bail, ensure};
+pub use rode_extension_api::panel::{Bar, Series};
 use serde_json::Value;
 use std::{collections::BTreeMap, io::Read, time::Duration};
 
@@ -69,36 +70,6 @@ pub(super) struct Instrument {
     pub exchange: String,
     pub kind: String,
 }
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Bar {
-    pub at: i64,
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
-    pub volume: f64,
-}
-#[derive(Debug)]
-pub(super) struct Series {
-    pub name: String,
-    pub currency: String,
-    pub exchange: String,
-    pub bars: Vec<Bar>,
-}
-impl Series {
-    /// A first-to-last close change is meaningful only with a positive starting
-    /// price and a finite result; negative-price instruments have no such return.
-    pub fn change_percent(&self) -> Option<f64> {
-        let first = self.bars.first()?.close;
-        let last = self.bars.last()?.close;
-        if first <= 0. {
-            return None;
-        }
-        let change = (last / first - 1.) * 100.;
-        change.is_finite().then_some(change)
-    }
-}
-
 /// A small allowlist admits international suffixes, indices and FX/crypto symbols.
 /// Symbols are still percent-encoded before entering the fixed HTTPS URL.
 pub(super) fn symbol(value: &str) -> Result<String> {

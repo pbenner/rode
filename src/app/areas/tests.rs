@@ -33,7 +33,6 @@ fn global_areas_preserve_project_selection_drafts_and_unsaved_source() {
     for area in [
         Area::Welcome,
         Area::Settings,
-        Area::Stocks,
         Area::Monitor,
         Area::Transfers,
     ] {
@@ -152,7 +151,7 @@ fn scope_registry_keeps_host_and_application_tools_out_of_project_tabs() {
                 tab.scope() != Scope::Project
             );
             if let Some(area) = Area::for_panel(panel) {
-                assert!(frame::ACTIVITY.contains(&area.command()));
+                assert!(area == Area::Extension || frame::ACTIVITY.contains(&area.command()));
                 assert_eq!(area.panel(), Some(panel));
             }
         }
@@ -174,7 +173,6 @@ fn area_windows_preserve_project_state_and_raise_without_replacing_the_root_view
             (ToolTab::AppSettings, Area::Settings),
             (ToolTab::Panel(Panel::Monitor), Area::Monitor),
             (ToolTab::Panel(Panel::Transfers), Area::Transfers),
-            (ToolTab::Panel(Panel::Stocks), Area::Stocks),
         ] {
             let ctx = egui::Context::default();
             let mut app = EditorApp::new(
@@ -639,7 +637,6 @@ fn late_file_reads_keep_global_areas_visible_and_existing_edits_intact() {
         (ToolTab::Connections, Area::Projects),
         (ToolTab::Panel(Panel::Monitor), Area::Monitor),
         (ToolTab::Panel(Panel::Transfers), Area::Transfers),
-        (ToolTab::Panel(Panel::Stocks), Area::Stocks),
         (ToolTab::AppSettings, Area::Settings),
     ] {
         for existing_alias in [false, true] {

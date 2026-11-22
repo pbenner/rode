@@ -1,6 +1,6 @@
 # Source architecture
 
-RODE has seven Rust library crates. `rode` owns the egui/eframe desktop; `rode-host-protocol` owns bounded host wire contracts; `rode-host-core` owns shared headless filesystem, command, environment and sandbox services; `rode-agent-core` and `rode-runtime-core` own agent and notebook/DAP controllers; `rode-session` composes the native host gateway and independent persistent service; `rode-bwrap` builds the pinned native sandbox fallback. The native SSH backend links no GUI libraries and needs no Python for general host operations. Only Python-specific interpreter and Jupyter adapters use Python at runtime.
+RODE separates its desktop, host services and independently built extensions into Rust crates. `rode` owns the egui/eframe desktop; `rode-host-protocol` owns bounded host wire contracts; `rode-host-core` owns shared headless filesystem, command, environment and sandbox services; `rode-agent-core` and `rode-runtime-core` own agent and notebook/DAP controllers; `rode-session` composes the native host gateway and independent persistent service; `rode-bwrap` builds the pinned native sandbox fallback. `rode-extension-api` owns GUI-independent manifest validation, execution-scoped contributions, project-tool/panel contracts and bounded serving helpers; `rode-stocks` owns the independently replaceable Stocks executable. The desktop does not depend on Stocks domain code. The native SSH backend links no GUI libraries and needs no Python for general host operations. Only Python-specific interpreter and Jupyter adapters use Python at runtime.
 
 The [native host architecture](#native-host-architecture) below records the host services, deployment contract and supported limits.
 
@@ -10,7 +10,7 @@ Build browsable API documentation with:
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --open
 ```
 
-The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/index.html`, `target/doc/rode_runtime_core/index.html`, `target/doc/rode_session/index.html`, `target/doc/rode_host_core/index.html`, `target/doc/rode_host_protocol/index.html` and `target/doc/rode_bwrap/index.html`. Public items document input/output contracts; module comments explain private state and ownership. [Development](development.md) lists validation commands and test fixtures; the [release checklist](release.md) distinguishes ordinary checks from platform and package validation.
+The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/index.html`, `target/doc/rode_runtime_core/index.html`, `target/doc/rode_session/index.html`, `target/doc/rode_host_core/index.html`, `target/doc/rode_host_protocol/index.html`, `target/doc/rode_bwrap/index.html`, `target/doc/rode_extension_api/index.html` and `target/doc/rode_stocks/index.html`. Public items document input/output contracts; module comments explain private state and ownership. [Development](development.md) lists validation commands and test fixtures; the [release checklist](release.md) distinguishes ordinary checks from platform and package validation.
 
 ## Keyboard discovery
 
@@ -65,6 +65,9 @@ After SSH teardown, the workspace controller queues one Normal-mode local CWD pr
 | `src/app/editor_operations.rs` | Bounded editor operation queue, native input acknowledgement and generation-checked ownership changes |
 | `src/app/editor_windows.rs` | Editor viewport registry and presentation borrowing; shared buffers and project services retain their owners |
 | `src/app/presentation.rs`, `src/app/tool_windows.rs`, `src/app/tool_windows/` | Pure root navigation/placement controller, native presentation adapters and docking regressions; independent of project resets |
+| `crates/rode-extension-api/` | Manifest/contribution validation, project-tool and panel DTOs, chart validation and bounded stdio serving; no GUI or domain dependencies |
+| `crates/rode-stocks/` | Independent Stocks executable, public market requests, watchlist behavior and bounded series cache |
+| `src/app/extension_panels.rs`, `src/app/extension_panels/` | Common provider supervision, serial runtime/confirmation ownership, deadline scheduling, field/settings admission, virtual table rows, native widgets/charts and independent provider/window identities |
 | `src/app/tools.rs`, `src/app/panels.rs` | Shared tool identities, labels, scopes, feature gates and ordered inventory; rendering routes for application, host and project views |
 | `src/keyboard.rs`, `src/keyboard/` | Window-local control metadata, native focus handoffs, hints/search and button-only focus groups |
 | `src/app/workspace.rs`, `src/app/connections.rs` | Project preparation/activation, ordered teardown, transport release and disconnect/reconnect recovery |

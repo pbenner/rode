@@ -4,13 +4,13 @@ The optional [mise extension](mise.md) (`rode.mise`) adds project toolchain/envi
 
 Click the **Extensions** icon (four blocks) in the left activity bar, press **Ctrl+Shift+X**, or choose **View → Extensions** to open the extension manager. It is also available as **Extensions: Manage installed extensions** in the command palette, and works without an open project.
 
-Use the checkboxes to enable/disable native features and installed adapters. The manager also installs local tool manifests, reloads installed manifests and edits extension-specific JSON settings. Changes save immediately and merge safely with other RODE windows' edits. A running window keeps its own choices until changed or restarted.
+Use the checkboxes to enable/disable native features and installed adapters. The manager also installs local manifests, reloads them and edits extension-specific JSON settings through each entry's **Settings** button, including desktop panels. Changes save immediately and merge safely with other RODE windows' edits. A running window keeps its own choices until changed or restarted.
 
 Filter the list by extension name or ID. The filter receives keyboard focus when the manager opens; after filtering, press **Tab** to focus a checkbox and **Space** to toggle it.
 
-## Bundled features
+## Included extensions
 
-Project bookmarks, Stocks, Git, the system/GPU monitor, Python environments, language tools, agent chat, image previews, Markdown previews, PDF previews, [PowerPoint previews](powerpoint.md), [Word previews](word.md), hex/binary analysis, Jupyter notebooks, Marp presentations, LaTeX and the [interactive debugger](debugger.md) are bundled native modules, enabled by default. The editor, syntax renderer/grammars, Problems UI, files, SSH, sandbox, preferences and persistent terminals remain core services. Interface and syntax themes retain their existing bounded data formats; they execute no plugin code.
+Project bookmarks, Git, the system/GPU monitor, Python environments, language tools, agent chat, image previews, Markdown previews, PDF previews, [PowerPoint previews](powerpoint.md), [Word previews](word.md), hex/binary analysis, Jupyter notebooks, Marp presentations, LaTeX and the [interactive debugger](debugger.md) are bundled native modules, enabled by default. Stocks is an included independent executable using the same panel API as installed providers. “Included” and “Installed” describe distribution, not different integration capabilities. Native service modules remain in process while their host interfaces are migrated incrementally. The editor, syntax renderer/grammars, Problems UI, files, SSH, sandbox, preferences and persistent terminals remain core services. Interface and syntax themes retain their existing bounded data formats; they execute no plugin code.
 
 Disabling a feature preserves open documents and unsaved edits. Binary edits can still be saved while their view is disabled. Monitoring starts only through **Start monitoring** and continues while hidden until stopped. Disabling the monitor stops collection. Python environment discovery starts when a Python file or environment panel is used, rather than probing every opened project. New terminals still honor configured environments; disabling the Python module leaves existing terminals alone and omits its environment activation from new ones. Chat still starts a process only on Send; disabling it stops its process. Debug adapters start only on explicit launch/attach; disabling the debugger stops its session.
 
@@ -21,7 +21,7 @@ including file/save actions, terminals, project settings and the extension manag
 remain available. Enabled tool adapters can still expose formatting/checking
 actions independently of the bundled Language tools extension.
 
-Changing extensions/settings or the workspace cancels executable adapter jobs and rejects stale edits/diagnostics. Source saves already submitted by a user can complete with their original buffer if formatting was cancelled. Disabling a bundled module stops future activation; short built-in tool requests already running may finish, but their disabled/stale results are not applied. Runtime disabling does not remove compiled dependencies or promise a smaller executable.
+Changing extensions/settings or the workspace cancels project-host executable adapter jobs and rejects stale edits/diagnostics. Source saves already submitted by a user can complete with their original buffer if formatting was cancelled. Disabling a bundled module stops future activation; short built-in tool requests already running may finish, but their disabled/stale results are not applied. Runtime disabling does not remove compiled dependencies or promise a smaller executable.
 
 ## File transfers
 
@@ -74,14 +74,14 @@ project preparation has finished.
 
 ## Stocks
 
-The bundled **Stocks** extension (`rode.stocks`) adds a native market viewer. Open
+The included **Stocks** extension (`rode.stocks`) adds a native market viewer. Open
 it from the rising-chart icon in the activity bar, **View → Workspace panels → Stocks**, or the
-command palette: **Stocks: Market charts and watchlist**. It works without an
+command palette: **Stocks: Open panel**. It works without an
 open project. Right-click its activity icon and choose **Open in separate window**
 to detach it; **Reattach** or closing that window returns it to the main window.
 Enable or disable it in the extension manager.
 
-- Search by company name or ticker, then select a result. **Open ticker** opens
+- Search by company name or ticker (Enter submits the search), then select a result. **Open ticker** opens
   an exact exchange symbol directly, including international symbols such as
   `SIE.DE`, `7203.T` and `VOD.L`. The provider also supports many ETFs, indices,
   currencies and other instruments; availability varies by market.
@@ -96,7 +96,7 @@ Enable or disable it in the extension manager.
   the same actions. Focus the chart with Tab or keyboard hints, then use **+ / −**,
   **Left / Right** and **Home**. Hover an observation for its date, OHLC and volume.
 
-No API key, Python, npm or external program is required. The viewer requests
+No API key, Python, npm or separately installed tool is required. The viewer requests
 [Yahoo Finance](https://finance.yahoo.com/) public search/chart data over HTTPS
 from the desktop. It uses unofficial endpoints (also used by the
 [yfinance-rs client](https://docs.rs/yfinance-rs/latest/src/yfinance_rs/core/client/constants.rs.html));
@@ -113,8 +113,16 @@ Requests start only when the panel is first opened or a search, uncached selecti
 or **Refresh** is requested. Zooming and panning operate entirely on cached data.
 Up to 12 recent charts are retained in memory; selections are reused for five minutes.
 **Refresh** explicitly requests newer data. There is no automatic quote polling.
-A single background worker, response/time limits and selection generations keep
-network stalls or late results from blocking editing or replacing a newer chart.
+A separately supervised `rode-stocks` process, response/time limits and serial
+request identities keep network stalls or late results from blocking editing.
+Only the chart matching the selected symbol/range is displayed. The executable
+is discovered beside RODE, then on PATH, and ships with source and Debian
+installations. Update it independently with `cargo install --locked --path
+crates/rode-stocks --force` for the default source prefix (use `--root PREFIX`
+for a custom prefix). Disable/re-enable Stocks after replacing its executable;
+compatible updates do not rebuild the editor. For a packaged installation, update
+the packaged executable or use an explicit installed manifest for a user-owned
+build.
 Disabling the extension discards pending results; a request already on the wire
 may finish within its timeout. No stock requests run on an SSH host, execute
 project tools, start an agent or alter document buffers. Only watchlist/display
@@ -122,7 +130,7 @@ preferences are saved; market responses are kept in memory.
 
 ## Installing a tool adapter
 
-RODE API **v1** supports commands, buffer formatting and buffer diagnostics through a single, bounded JSON request/reply on stdio. It does not load third-party Rust libraries into the GUI. Adapters contribute command-palette actions and use native output/Problems views; they cannot inject arbitrary UI, panels or document renderers.
+RODE manifest API **v1** supports project-host commands, buffer formatting and buffer diagnostics through a single, bounded JSON request/reply on stdio. Extensions can declare project-host tools, a [desktop panel](#desktop-panels), or both through [explicit contributions](#execution-scoped-contributions). RODE renders panel data using native widgets; it does not load third-party Rust libraries or execute provider-supplied UI code inside the GUI.
 
 Create a manifest like this, replacing the adapter path with its **absolute path on the project host**:
 
@@ -149,6 +157,57 @@ Use **Install manifest** with its desktop path, then explicitly enable the insta
 Installed tools start **disabled**. Review their executable and arguments before enabling. An enabled matching provider can run on explicit Format/Check, configured save actions and debounced live checks. An adapter's language IDs match the built-in language catalogue; unrecognized file types use `text`. With several enabled matches, the first matching manifest in filename order wins; disable competing adapters to choose another provider. A format operation can return diagnostics too; a check-only adapter returns diagnostics without replacing text. The bundled formatter is used when no enabled adapter matches.
 
 The program may be a PATH name or an absolute project-host executable. Arguments are passed literally, with no shell interpolation or placeholder expansion. The project root, file path, buffer contents and settings arrive as JSON instead. For SSH, the adapter and its dependencies must already exist on the SSH host and be visible inside the active sandbox. There is no desktop fallback. Explicit grants may be needed for tools outside the standard/project mounts.
+
+## Execution-scoped contributions
+
+New manifests can declare one desktop panel and one project tool under a single
+extension identity. The extension manager shows each contribution's execution
+location, access and executable before enablement. For example:
+
+```json
+{
+  "api": 1,
+  "id": "example.workbench",
+  "name": "My workbench",
+  "version": "1.0.0",
+  "description": "A desktop dashboard and project inspection tools",
+  "contributions": [
+    {
+      "kind": "panel",
+      "host": "desktop",
+      "protocol": 2,
+      "icon": "chart",
+      "tool": {"program": "/opt/workbench/dashboard", "args": ["--stdio"]}
+    },
+    {
+      "kind": "project-tool",
+      "host": "project",
+      "tool": {
+        "program": "workbench-tools",
+        "languages": ["rust"],
+        "check": true,
+        "commands": [{"id": "example.inspect", "title": "Inspect project"}]
+      }
+    }
+  ]
+}
+```
+
+A `panel` must use `host: "desktop"`; a `project-tool` must use `host: "project"`.
+The host rejects mismatches and duplicate contribution kinds. The desktop panel
+always runs on this computer with the user's ordinary files, network and
+credentials, even in an SSH workspace. Its process never receives project
+sandbox authority. Project tools run on the active local or SSH project host
+under that project's actual access policy. Both share only their extension's
+settings and enablement; their requests, processes and UI application guards
+remain separate. Disabling a combined extension stops its panel and invalidates
+its project-tool work.
+
+Existing API-1 `tool`, `panel`, `panel_version` and `icon` manifests remain valid
+with their original execution rules. Use either that legacy form or
+`contributions`, never both. The contributions form requires a host supporting
+it; older hosts reject it instead of guessing a location. Project-tool and panel
+request/reply protocols retain their existing wire shapes.
 
 ## Protocol
 
@@ -204,6 +263,164 @@ Programs have a 20-second request limit, bounded stdout/stderr (8 MiB each), an 
 
 The core launches adapters under the actual project sandbox and owns SSH transport, request limits, cancellation and edit application. Normal mode grants the host user's ordinary access. A manifest is not a separate security boundary; an enabled executable can use the filesystem/network available in that mode. Repository-provided manifests are never loaded automatically, and adapters cannot request the built-in monitor's host telemetry bypass. Model servers and agent credentials remain user-managed through the existing chat module.
 
-The current API intentionally excludes dynamic Rust `.so` plugins, scripting/Wasm runtimes, marketplaces, webviews, language servers and installed-tool debugger APIs (the bundled debugger uses DAP separately). Bundled native UI modules and declarative themes remain separate from installed tool adapters.
+The current API excludes dynamic Rust `.so` plugins, scripting/Wasm runtimes, marketplaces, webviews, language servers and installed-tool debugger APIs (the bundled debugger uses DAP separately). Bundled native modules, declarative themes, project-host tool adapters and installed desktop panels have separate lifecycles.
 
 LaTeX tools (`rode.latex`) add explicit project-host builds and compiler diagnostics; the source toolbar and palette expose building and PDF opening. Optional LaTeX buffer formatting/linting also uses Language tools. See [LaTeX](latex.md).
+
+
+## Desktop panels
+
+An installed executable can supply a native application panel through panel
+protocol **1 or 2**. Existing providers default to protocol 1; add
+`"panel_version": 2` for the shared settings and chart capabilities. Add `"panel": true` to its API-1 manifest and supply `tool.program`
+and `tool.args`. The panel executable itself cannot also declare project-host
+capabilities. An extension that needs both declares a separate `project-tool`
+in [explicit contributions](#execution-scoped-contributions). A legacy panel-only
+manifest remains valid, for example:
+
+```json
+{
+  "api": 1,
+  "id": "example.dashboard",
+  "name": "My dashboard",
+  "version": "1.0.0",
+  "description": "A desktop dashboard",
+  "panel": true,
+  "tool": {
+    "program": "/absolute/path/to/dashboard",
+    "args": ["--stdio"]
+  }
+}
+```
+
+Independently installed panels start disabled; included providers retain their
+documented defaults. Installation never starts a process. The extension manager uses **INCLUDED** or **INSTALLED** to identify their source;
+execution and native UI capabilities are shared. Enabling one trusts its executable with
+the desktop user's ordinary filesystem and network access, independently of any
+project sandbox. It always runs on this computer, including while an SSH
+workspace is open; no binary, credentials or panel requests are sent to the
+project host. Native themes and keyboard navigation apply automatically.
+
+An enabled panel adds its own left-rail icon, an **Open panel** action in the
+extension manager and a **Name: Open panel** command-palette entry. Right-click
+the icon to detach or reattach its window. Closing a detached panel returns its
+view to the main window. Each provider owns a separate process, draft, refresh timer and native window
+identity. Selecting another provider preserves existing background work. Reloading only
+desktop contributions or changing display metadata preserves their processes and
+unrelated project-tool work; changing executable arguments or the panel protocol
+stops the affected provider.
+Providers can detach into separate windows simultaneously. Visiting another area
+or hiding a panel keeps its explicitly started background refresh active.
+Disabling/replacing the provider or closing RODE stops its supervised process.
+A stopped or replaced provider cannot leave its old controls active.
+
+The process receives newline-delimited requests without stdin being closed:
+
+```json
+{"api":1,"id":1,"action":"open","values":{}}
+```
+
+Return one response for each request, echoing its identity:
+
+```json
+{
+  "api": 1,
+  "id": 1,
+  "view": {
+    "title": "My dashboard",
+    "status": "Ready",
+    "message": "",
+    "fields": [{"key":"filter","label":"Filter","value":""}],
+    "metrics": [{"label":"Progress","value":"12 / 20","progress":0.6}],
+    "tables": [{"title":"Items","columns":["Name","State"],"rows":[["Example","Ready"]]}],
+    "actions": [{"id":"refresh","label":"Refresh","enabled":true}],
+    "refresh_seconds": null
+  }
+}
+```
+
+Actions receive current field values. The IDs `open`, `tick` and `settings` are
+reserved for lifecycle requests and cannot be declared as user actions. Fields support optional `choices` (objects
+with `value` and `label`) or `multiline: true`. Actions can specify `primary: true`
+and a `confirm` string; RODE sends that action only after its native confirmation
+dialog is accepted. The confirmation is tied to the reviewed action, input and settings snapshot;
+a changed configuration, changed input or disabled action invalidates it. No
+background request runs behind a pending confirmation. The provider must still
+validate its own operation state and arguments. Responses never modify editor buffers or execute host commands.
+
+An explicit background-refresh action can return `refresh_seconds` from 30 to
+3600. RODE then sends `tick` requests, including while the view is hidden. The
+scheduled request has empty `values` and preserves draft fields; only explicit
+actions submit current input. The protocol defines `tick` as read-only; this is
+a provider responsibility, not a
+sandbox around an installed executable. No refresh is scheduled when the value
+is null. Hidden panels sleep until their actual refresh or request deadline;
+transport events wake the owner immediately. Pending configuration is applied
+before a due refresh, and reply settings are merged before another request is
+queued. The provider should keep monitoring off until explicitly started.
+
+One request runs at a time per provider. Input is bounded to 1 MiB, output frames to 4 MiB,
+individual text values to 8 KiB, fields to 128, actions to 32, metrics to 24 and
+tables to 12 (16 columns and 4096 rows each). Replies must have unique field and
+action IDs, valid table widths and finite progress in 0–1. Invalid replies,
+transport loss or a request exceeding 180 seconds stop that provider. The SDK
+server and host validate request/reply identities and protocol capabilities;
+version-1 providers cannot emit version-2 controls or host settings. Failed sends
+retain pending configuration and request snapshots. Read-only lifecycle requests
+remain independent of the size of an unsent draft. Large tables scroll and render
+only their visible rows. Focus a table with Tab, keyboard hints or a click, then
+use the arrow keys, Page Up/Down and Home/End to scroll it. Replies
+cannot overwrite edits made after the request was sent. Runtime restarts are
+explicit and preserve the current input draft, settings disclosure, chart views
+and detached-window ownership. Reopening sends empty input values and never
+replays an action that may have written data. A provider performing writes must journal uncertain outcomes and avoid
+blind retries after a dropped connection or process termination.
+
+## Shared SDK and protocol 2
+
+`rode-extension-api` owns manifest validation, execution-scoped contributions,
+project-tool requests/replies and diagnostics, and panel protocols. It has no
+editor, GUI or host-service dependency. Other
+languages can implement the same documented JSON protocol. `rode-stocks` uses
+this SDK; its domain/network code is outside the desktop crate. Host rendering
+and window ownership are implemented once in `app::extension_panels`.
+
+A protocol-2 request includes the extension's own `settings` object. The provider
+can return an updated settings object alongside `view`. The host merges changed
+leaves against the sent snapshot, preserving host edits made while a request was
+running and retaining unrelated preferences. Missing keys and JSON `null` remain
+distinct; deleting a group removes its unchanged leaves while retaining concurrent
+host edits. Settings are bounded to 192 KiB per extension and 256 KiB for the whole
+extension preference map, and use the existing private preference writer. Rejected
+edits preserve the previous settings. Desktop-only settings edits notify that
+provider without cancelling unrelated project work; combined extensions also
+invalidate their project-tool jobs. No other extension's settings are
+sent. A host settings edit triggers a `settings` action, with empty draft values;
+providers should adopt that configuration without submitting domain writes.
+Protocol-1 requests remain unchanged and cannot write host-owned preferences.
+
+Protocol 2 adds these native view contributions:
+
+- `action_groups`: labeled rows of ordinary actions. An action's `selected`
+  flag supports watchlists, ranges and display choices. IDs must be unique across
+  all groups and the main actions; the total limit is 128.
+- Fields with `inline: true` remain visible outside the settings disclosure.
+  `submit` names a declared action to run on Enter in a single-line input.
+- `charts`: up to four native OHLC/volume charts, identified by stable `key`,
+  with `title`, `subtitle`, `series`, `candles` and `volume`. A series contains
+  `name`, `currency`, `exchange` and at most 25,000 strictly ordered observations
+  (`at`, `open`, `high`, `low`, `close`, `volume`). Invalid/nonfinite prices,
+  inconsistent OHLC bounds and negative volume are rejected. Wheel, drag,
+  keyboard, reset and density aggregation all run in the shared renderer without
+  further provider requests. Zoom is kept separately for each chart identity.
+- `links`: up to eight user-activated HTTP(S) links with `label` and `url`.
+
+Optional panel `icon` values are `chart`, `monitor` and `folder`;
+RODE paints these with the active theme. Providers do not supply executable UI
+code, alter document buffers or obtain a project host's authority through a
+panel. Monitor and document controllers retain their existing host/document
+services; they have not been forced into this dashboard-only API.
+
+A compatible host update is needed when adopting a new protocol capability.
+After that, plugin code can be rebuilt and replaced independently. There is no
+shared Rust ABI or plugin-specific code to link into RODE.

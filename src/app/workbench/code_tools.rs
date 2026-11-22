@@ -408,19 +408,27 @@ impl EditorApp {
         let check = crate::languages::detect(Some(&path)).is_some_and(|l| l.check);
         self.workbench.code_tools.checking.insert(id);
         let request = if let Some(manifest) = external {
-            project::Request::Extension {
-                root: self.root(),
-                invocation: self.extensions.registry.invocation(
-                    &manifest,
-                    if format && manifest.tool.format {
-                        "format"
-                    } else {
-                        "check"
-                    }
-                    .into(),
-                    Some(path.clone()),
-                    original.clone(),
-                ),
+            let invocation = self.extensions.registry.invocation(
+                &manifest,
+                if format && manifest.project_tool().is_some_and(|tool| tool.format) {
+                    "format"
+                } else {
+                    "check"
+                }
+                .into(),
+                Some(path.clone()),
+                original.clone(),
+            );
+            match invocation {
+                Ok(invocation) => project::Request::Extension {
+                    root: self.root(),
+                    invocation,
+                },
+                Err(error) => {
+                    self.workbench.code_tools.checking.remove(&id);
+                    self.notify(error.to_string(), true);
+                    return;
+                }
             }
         } else if language.is_some_and(|l| l.id == "latex") && !fix {
             project::Request::LatexAnalyze {

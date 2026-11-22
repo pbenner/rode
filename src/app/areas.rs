@@ -16,7 +16,7 @@ pub(super) enum Area {
     Projects,
     Monitor,
     Transfers,
-    Stocks,
+    Extension,
     Settings,
     #[default]
     Welcome,
@@ -27,7 +27,7 @@ impl Area {
             Self::Welcome | Self::Projects => Command::Projects,
             Self::Monitor => Command::Panel(Panel::Monitor),
             Self::Transfers => Command::Panel(Panel::Transfers),
-            Self::Stocks => Command::Panel(Panel::Stocks),
+            Self::Extension => Command::Panel(Panel::Extension),
             Self::Settings => Command::AppSettings,
         }
     }
@@ -35,7 +35,7 @@ impl Area {
         match panel {
             Panel::Monitor => Some(Self::Monitor),
             Panel::Transfers => Some(Self::Transfers),
-            Panel::Stocks => Some(Self::Stocks),
+            Panel::Extension => Some(Self::Extension),
             _ => None,
         }
     }
@@ -43,7 +43,7 @@ impl Area {
         match self {
             Self::Monitor => Some(Panel::Monitor),
             Self::Transfers => Some(Panel::Transfers),
-            Self::Stocks => Some(Panel::Stocks),
+            Self::Extension => Some(Panel::Extension),
             _ => None,
         }
     }
@@ -52,7 +52,7 @@ impl Area {
     /// keeps its editor/tool hosts instead of duplicating the entire workspace.
     pub fn tab(self) -> Option<ToolTab> {
         match self {
-            Self::Welcome | Self::Projects => None,
+            Self::Welcome | Self::Projects | Self::Extension => None,
             Self::Settings => Some(ToolTab::AppSettings),
             _ => self.panel().map(ToolTab::Panel),
         }
@@ -145,8 +145,16 @@ impl EditorApp {
         );
     }
 
+    pub(in crate::app) fn area_tab(&self, area: Area) -> Option<ToolTab> {
+        if area == Area::Extension {
+            self.extension_panels.tab(&self.extension_panels.selected)
+        } else {
+            area.tab()
+        }
+    }
     pub(super) fn area_detached(&self, area: Area) -> bool {
-        area.tab().is_some_and(|tab| self.tab_detached(tab))
+        self.area_tab(area)
+            .is_some_and(|tab| self.tab_detached(tab))
     }
 
     /// Do not mutate the selected project surface while visiting a global area.
@@ -154,7 +162,7 @@ impl EditorApp {
         if !self.command_visible(area.command()) {
             return;
         }
-        if let Some(tab) = area.tab().filter(|tab| self.tab_detached(*tab)) {
+        if let Some(tab) = self.area_tab(area).filter(|tab| self.tab_detached(*tab)) {
             // Raising a floating area must not replace the root's current view.
             self.focus_tool_tab(tab, ctx);
             return;
@@ -214,7 +222,7 @@ impl EditorApp {
                         .show(ui, |ui| self.application_settings_ui(ui, ctx));
                 });
             }
-            Area::Monitor | Area::Transfers | Area::Stocks => {
+            Area::Monitor | Area::Transfers | Area::Extension => {
                 self.panel_content(area.panel().unwrap(), ui, ctx);
             }
             Area::Projects => unreachable!("Projects render through workspace_content"),

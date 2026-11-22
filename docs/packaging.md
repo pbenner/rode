@@ -15,7 +15,7 @@ For a manual build:
 
 Pushing a version tag such as `v0.1.0` also triggers packaging. The tag must exactly match `v` plus the version in `Cargo.toml`; this catches accidentally mislabelled packages. Tag builds use **DEB_MAINTAINER**. Set that variable before pushing a version tag. Package versions retain the builder's Debian `-1` revision and prerelease conversion described below.
 
-The workflow uses a fixed **Ubuntu 24.04 amd64** runner, builds the release editor and static terminal helper with the locked Cargo dependencies, and validates metadata, licenses, extracted binaries, a real terminal session and GUI startup before uploading. Each artifact contains the `.deb` and `SHA256SUMS`, with a requested retention of 30 days. Runtime library requirements reflect that build system; see [compatibility and dependencies](#contents-and-dependencies).
+The workflow uses a fixed **Ubuntu 24.04 amd64** runner, builds the release editor, independent Stocks extension and static terminal helper with the locked Cargo dependencies, and validates metadata, licenses, extracted binaries, a real terminal session and GUI startup before uploading. Each artifact contains the `.deb` and `SHA256SUMS`, with a requested retention of 30 days. Runtime library requirements reflect that build system; see [compatibility and dependencies](#contents-and-dependencies).
 
 The optional Codex job runs after the editor artifact has been published. It builds and validates `rode-codex` separately, checks discovery alongside the extracted editor, and exercises the real agent protocol without an account or model. A missing runtime/download failure does not discard the editor artifact. Manual runs can disable **build_codex**; tags build both components. Package assembly remains release-only.
 
@@ -31,7 +31,7 @@ sudo apt install build-essential pkg-config musl-tools dpkg-dev binutils python3
 scripts/build-deb.sh
 ```
 
-The default builder compiles the release editor, ensures the matching Rust musl target is available and builds the static terminal helper. It never resolves or downloads Codex assets and includes no Codex executable. Cargo/rustup may download build dependencies. Output goes to `target/debian/rode_<version>_<architecture>.deb`, or the corresponding Cargo target directory if configured. For the current version on amd64:
+The default builder compiles the release editor and Stocks extension, ensures the matching Rust musl target is available and builds the static terminal helper. It never resolves or downloads Codex assets and includes no Codex executable. Cargo/rustup may download build dependencies. Output goes to `target/debian/rode_<version>_<architecture>.deb`, or the corresponding Cargo target directory if configured. For the current version on amd64:
 
 ```sh
 sudo apt install ./target/debian/rode_0.1.0-1_amd64.deb
@@ -66,6 +66,7 @@ The editor lists `rode-codex` only in **Suggests**, so ordinary installation doe
 The package installs:
 
 - `/usr/bin/rode` and the static `/usr/bin/rode-sessiond`. The editor discovers the sibling helper for SSH deployment; local terminals default to the matching embedded service.
+- `/usr/bin/rode-stocks`, the independent included Stocks extension, discovered beside the editor.
 - A desktop launcher and the scalable `[r]` application icon.
 - The project license, [artwork licensing notes](licensing.md), upstream dependency/Rust/embedded-definition notices, README, and package changelog under `/usr/share/doc/rode/`. The notices include the complete Hack, Noto Emoji, Ubuntu and emoji-icon-font license texts supplied by egui; these are separate from the Rust code license. Missing crate license files use versioned upstream snapshots with verified hashes; missing license coverage stops packaging.
 
@@ -88,7 +89,7 @@ scripts/build-deb.sh --skip-build
 python3 scripts/test-deb.py target/debian/rode_0.1.0-1_amd64.deb
 ```
 
-`--binary PATH` and `--helper PATH`, used with `--skip-build`, select other existing release outputs. The helper must be static, and both ELF architectures must match the native Debian architecture; mismatches are rejected. This is a native packager, not a cross-build system.
+`--binary PATH`, `--stocks PATH` and `--helper PATH`, used with `--skip-build`, select other existing release outputs. The helper must be static, and all ELF architectures must match the native Debian architecture; mismatches are rejected. This is a native packager, not a cross-build system.
 
 Without `--helper`, the expected artifact is `<Cargo target directory>/<architecture>-unknown-linux-musl/release/rode-sessiond-standalone`, produced by `cargo xtask build-helper`. A missing artifact is an error; the packager does not substitute an older `rode-sessiond` build left in that directory.
 

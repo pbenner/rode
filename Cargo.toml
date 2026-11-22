@@ -15,6 +15,7 @@ path = "src/bin/rode-sessiond.rs"
 
 [dependencies]
 rode-host-protocol = { path = "crates/rode-host-protocol" }
+rode-extension-api = { path = "crates/rode-extension-api" }
 rode-host-core = { path = "crates/rode-host-core" }
 rode-session = { path = "crates/rode-session" }
 rode-agent-core = { path = "crates/rode-agent-core" }
@@ -78,8 +79,8 @@ incremental = false
 
 [workspace]
 exclude = ["vendor/vt100", "vendor/russh", "vendor/ssh-key"]
-members = ["crates/rode-host-protocol", "crates/rode-host-core", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core", "crates/rode-bwrap", "xtask"]
-default-members = ["crates/rode-host-protocol", "crates/rode-host-core", ".", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]
+members = ["crates/rode-extension-api", "crates/rode-stocks", "crates/rode-host-protocol", "crates/rode-host-core", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core", "crates/rode-bwrap", "xtask"]
+default-members = ["crates/rode-extension-api", "crates/rode-stocks", "crates/rode-host-protocol", "crates/rode-host-core", ".", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]
 
 [patch.crates-io]
 vt100 = { path = "vendor/vt100" }

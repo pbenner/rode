@@ -67,6 +67,15 @@ pub(super) fn install(workspace: &Workspace, destination: PathBuf) -> Result<()>
     let destination = env::current_dir()?.join(destination);
     let binaries = destination.join("bin");
     publish(&helper, &binaries.join("rode-sessiond-static"), || {
+        // Included extensions are independently installed executables, sharing
+        // only the versioned protocol with the GUI.
+        run(workspace
+            .cargo()
+            .args(["install", "--locked", "--path"])
+            .arg(workspace.root.join("crates/rode-stocks"))
+            .arg("--root")
+            .arg(&destination)
+            .args(["--force", "--bins"]))?;
         run(workspace
             .cargo()
             .args(["install", "--locked", "--path"])
@@ -76,7 +85,7 @@ pub(super) fn install(workspace: &Workspace, destination: PathBuf) -> Result<()>
             .args(["--force", "--bins"]))
     })?;
     println!(
-        "Installed RODE and its static SSH helper in {}",
+        "Installed RODE, Stocks and its static SSH helper in {}",
         binaries.display()
     );
     Ok(())

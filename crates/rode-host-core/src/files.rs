@@ -28,7 +28,7 @@ use std::{
 mod mutations;
 
 /// Independent source/input bound for formatter and extension tool execution.
-pub const MAX_TOOL_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_TOOL_BYTES: u64 = rode_extension_api::tool::TEXT_LIMIT as u64;
 
 pub use rode_host_protocol::files::{Entry, MAX_ATTACHMENT_BYTES, MAX_ENTRIES, Response};
 /// Concrete shared file envelope for headless service callers.

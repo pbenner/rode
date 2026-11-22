@@ -32,10 +32,17 @@ fn registry_keeps_bundled_features_and_never_activates_installed_tools_implicitl
     assert!(registry.feature(Feature::Binary));
     assert!(!registry.feature(Feature::Mise));
     assert!(!registry.enabled("test.adapter"));
-    assert!(registry.commands().is_empty());
+    assert_eq!(
+        registry
+            .commands()
+            .iter()
+            .map(|c| c.0.as_str())
+            .collect::<Vec<_>>(),
+        vec!["rode.stocks"]
+    );
     assert!(registry.provider("rust", true, true).is_none());
     registry.set_enabled("test.adapter", true);
-    assert_eq!(registry.commands().len(), 1);
+    assert_eq!(registry.commands().len(), 2);
     assert!(registry.provider("rust", true, true).is_some());
     registry.set_enabled(Feature::Monitor.id(), false);
     assert!(!registry.feature(Feature::Monitor));
@@ -51,7 +58,7 @@ fn registry_keeps_bundled_features_and_never_activates_installed_tools_implicitl
     bad.api = 99;
     assert!(bad.validate().is_err());
     bad = manifest;
-    bad.tool.program = "./from-project".into();
+    bad.tool.as_mut().unwrap().program = "./from-project".into();
     assert!(bad.validate().is_err());
 }
 #[test]
@@ -61,12 +68,14 @@ fn adapters_format_unsaved_snapshots_and_match_the_headless_helper_without_savin
     fs::write(&path, "disk").unwrap();
     let manifest = manifest();
     let registry = Registry::default();
-    let invocation = registry.invocation(
-        &manifest,
-        "format".into(),
-        Some(path.to_string_lossy().into()),
-        "unsaved 🦀".into(),
-    );
+    let invocation = registry
+        .invocation(
+            &manifest,
+            "format".into(),
+            Some(path.to_string_lossy().into()),
+            "unsaved 🦀".into(),
+        )
+        .unwrap();
     let request = project::Request::Extension {
         root: root.path().to_string_lossy().into(),
         invocation,
@@ -112,8 +121,9 @@ fn adapters_format_unsaved_snapshots_and_match_the_headless_helper_without_savin
 fn adapter_readiness_marker_is_not_visible_until_its_pid_is_written() {
     let root = tempfile::tempdir().unwrap();
     let marker = root.path().join("pid");
-    let mut invocation =
-        Registry::default().invocation(&manifest(), "format".into(), None, "ready".into());
+    let mut invocation = Registry::default()
+        .invocation(&manifest(), "format".into(), None, "ready".into())
+        .unwrap();
     invocation
         .settings
         .insert("marker".into(), serde_json::json!(marker));
@@ -169,7 +179,9 @@ fn closing_a_coordinator_lifeline_stops_the_adapter_process() {
     let pid = root.path().join("pid");
     let manifest = manifest();
     let registry = Registry::default();
-    let mut invocation = registry.invocation(&manifest, "test.inspect".into(), None, String::new());
+    let mut invocation = registry
+        .invocation(&manifest, "test.inspect".into(), None, String::new())
+        .unwrap();
     invocation
         .settings
         .insert("marker".into(), serde_json::json!(pid));
@@ -231,7 +243,9 @@ fn coordinators_finish_successfully_while_the_lifetime_pipe_stays_open() {
     let root = tempfile::tempdir().unwrap();
     let manifest = manifest();
     let registry = Registry::default();
-    let invocation = registry.invocation(&manifest, "format".into(), None, "normal finish".into());
+    let invocation = registry
+        .invocation(&manifest, "format".into(), None, "normal finish".into())
+        .unwrap();
     let request = project::Request::Extension {
         root: root.path().to_string_lossy().into(),
         invocation,
@@ -276,4 +290,111 @@ fn coordinators_finish_successfully_while_the_lifetime_pipe_stays_open() {
         assert_eq!(reply.text.as_deref(), Some("NORMAL FINISH"));
         drop(input);
     }
+}
+
+#[test]
+fn combined_extensions_route_desktop_panels_and_project_tools_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut value = serde_json::to_value(manifest()).unwrap();
+    let project_tool = value.as_object_mut().unwrap().remove("tool").unwrap();
+    value["contributions"] = serde_json::json!([
+        {"kind":"panel","host":"desktop","protocol":2,"tool":{"program":"unused-desktop-provider"}},
+        {"kind":"project-tool","host":"project","tool":project_tool}
+    ]);
+    fs::write(
+        dir.path().join("test.adapter.json"),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+    let mut registry = Registry::load(dir.path(), Default::default());
+    registry.set_enabled("test.adapter", true);
+    assert_eq!(
+        registry.panels().filter(|e| e.id == "test.adapter").count(),
+        1
+    );
+    assert!(
+        registry
+            .commands()
+            .iter()
+            .any(|c| c.0 == "test.adapter" && c.1 == "@panel.open")
+    );
+    assert!(
+        registry
+            .commands()
+            .iter()
+            .any(|c| c.0 == "test.adapter" && c.1 == "test.inspect")
+    );
+    let manifest = registry.provider("rust", true, true).unwrap();
+    let invocation = registry
+        .invocation(manifest, "format".into(), None, "project snapshot".into())
+        .unwrap();
+    let reply = extensions::run(dir.path().to_str().unwrap(), &invocation).unwrap();
+    assert_eq!(reply.text.as_deref(), Some("PROJECT SNAPSHOT"));
+    let revision = registry.revision;
+    registry
+        .set_settings(
+            "test.adapter",
+            std::collections::BTreeMap::from([("option".into(), true.into())]),
+        )
+        .unwrap();
+    assert!(
+        registry.revision > revision,
+        "Settings for the project contribution invalidate captured work"
+    );
+    let revision = registry.revision;
+    registry.set_enabled("test.adapter", false);
+    assert!(registry.revision > revision);
+    assert!(registry.provider("rust", true, true).is_none());
+    assert!(!registry.panels().any(|e| e.id == "test.adapter"));
+}
+
+#[test]
+fn public_invocation_builder_rejects_panel_roles_and_undeclared_operations() {
+    let registry = Registry::default();
+    let tool = manifest();
+    assert!(
+        registry
+            .invocation(&tool, "test.undeclared".into(), None, String::new())
+            .is_err()
+    );
+    let mut panel = tool.clone();
+    panel.panel = true;
+    panel.tool.as_mut().unwrap().commands.clear();
+    panel.tool.as_mut().unwrap().languages.clear();
+    panel.tool.as_mut().unwrap().format = false;
+    panel.tool.as_mut().unwrap().check = false;
+    panel.validate().unwrap();
+    assert!(
+        registry
+            .invocation(&panel, "format".into(), None, String::new())
+            .is_err()
+    );
+}
+
+#[test]
+fn capped_discovery_preserves_filename_priority_independent_of_creation_order() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in (0..extensions::MAX_EXTENSIONS + 4).rev() {
+        let mut item = manifest();
+        item.id = format!("test.tool-{i:03}");
+        fs::write(
+            dir.path().join(format!("{i:03}.json")),
+            serde_json::to_vec(&item).unwrap(),
+        )
+        .unwrap();
+    }
+    let registry = Registry::load(dir.path(), Default::default());
+    let installed: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|e| !e.included())
+        .map(|e| e.id.clone())
+        .collect();
+    assert_eq!(
+        installed,
+        (0..extensions::MAX_EXTENSIONS)
+            .map(|i| format!("test.tool-{i:03}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(registry.warnings.len(), 1);
 }

@@ -30,3 +30,7 @@ Source: https://github.com/pbenner/rode
 Package installation/removal does not start or stop user terminal sessions,
 alter user preferences, or deploy a system service. Restart the editor to use
 new binaries, retaining persistent sessions when needed.
+
+The included Stocks extension runs from /usr/bin/rode-stocks through the same
+versioned panel API as separately installed providers. Opening a catalogue or
+enabling the extension starts no market requests; opening its panel does.

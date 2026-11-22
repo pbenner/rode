@@ -4795,6 +4795,7 @@ dependencies = [
  "rand 0.10.3",
  "rdocx",
  "rode-agent-core",
+ "rode-extension-api",
  "rode-host-core",
  "rode-host-protocol",
  "rode-runtime-core",
@@ -4839,6 +4840,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rode-extension-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rode-host-core"
 version = "0.1.0"
 dependencies = [
@@ -4854,6 +4864,7 @@ dependencies = [
  "portable-pty",
  "pretty_yaml",
  "rode-bwrap",
+ "rode-extension-api",
  "rode-host-protocol",
  "rode-runtime-core",
  "serde",
@@ -4903,6 +4914,16 @@ dependencies = [
  "tokio",
  "vt100",
  "zeroize",
+]
+
+[[package]]
+name = "rode-stocks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rode-extension-api",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]

@@ -137,6 +137,8 @@ SUITES = {
         ui("navigation"),
         ui("navigation-areas"),
         ui("keyboard-controls"),
+        ui("extension-panels"),
+        ui("extension-charts"),
         ui("explorer"),
         ui("git-identity"),
         ui("git-gutter"),
@@ -590,6 +592,12 @@ def suite_environment(name):
             raise SystemExit(
                 f"Missing executable {variable}={env[variable]}; build the CI bundle first"
             )
+    if name == "workspace":
+        stocks = Path(env["RODE_TEST_BINARY"]).with_name("rode-stocks")
+        if not os.access(stocks, os.X_OK):
+            raise SystemExit(
+                f"Missing executable Stocks provider {stocks}; build the CI bundle first"
+            )
     # Do not accidentally add remote cases to a local-only shard.
     if name in FAST + EXTENDED + ["reliability"]:
         env.pop("RODE_TEST_SSH_CONFIG", None)
@@ -718,7 +726,14 @@ def bundle():
     tools.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "target/test-tools/bin/ruff", tools / "ruff")
     with tarfile.open(ROOT / "target/ci-bundle.tar.gz", "w:gz", compresslevel=1) as archive:
-        for name in ["rode", "rode-sessiond", "rode-sessiond-static", "tests", "tools"]:
+        for name in [
+            "rode",
+            "rode-sessiond",
+            "rode-sessiond-static",
+            "rode-stocks",
+            "tests",
+            "tools",
+        ]:
             archive.add(ROOT / "target/ci" / name, arcname=f"target/ci/{name}")
 
 

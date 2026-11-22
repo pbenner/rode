@@ -386,7 +386,7 @@ class RunnerTests(unittest.TestCase):
     def test_bundle_uses_cargo_paths_and_retains_executable_modes(self):
         build = self.root / "target/ci"
         build.mkdir(parents=True)
-        for name in ["rode", "rode-sessiond"]:
+        for name in ["rode", "rode-sessiond", "rode-stocks"]:
             (build / name).write_text(name)
             (build / name).chmod(0o755)
         helper = self.root / "target/release/rode-sessiond-static"
@@ -413,8 +413,25 @@ class RunnerTests(unittest.TestCase):
             )
             self.assertEqual(archive.getmember("target/ci/tests/ssh_roundtrip").mode, 0o755)
             self.assertEqual(archive.extractfile("target/ci/rode").read(), b"rode")
+            self.assertEqual(archive.extractfile("target/ci/rode-stocks").read(), b"rode-stocks")
+            self.assertEqual(archive.getmember("target/ci/rode-stocks").mode, 0o755)
             self.assertEqual(archive.extractfile("target/ci/tools/ruff").read(), b"pinned ruff")
             self.assertEqual(archive.getmember("target/ci/tools/ruff").mode, 0o755)
+
+    def test_workspace_requires_the_transferred_stocks_provider_before_running_cases(self):
+        for name in ["rode", "rode-sessiond-static", "rode-stocks"]:
+            path = self.root / "target/ci" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture")
+            path.chmod(0o755)
+        with patch.dict(os.environ, {}, clear=True), patch.object(ci, "measure") as run:
+            ci.run_suite("workspace")
+            self.assertTrue(run.called)
+            run.reset_mock()
+            (self.root / "target/ci/rode-stocks").unlink()
+            with self.assertRaisesRegex(SystemExit, "Stocks provider"):
+                ci.run_suite("workspace")
+            run.assert_not_called()
 
     def test_remote_documents_receive_bundled_ruff_and_fail_early_if_it_is_missing(self):
         for name in ["rode", "rode-sessiond-static", "tools/ruff"]:

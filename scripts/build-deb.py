@@ -323,6 +323,9 @@ def main():
     parser.add_argument(
         "--skip-build", action="store_true", help="package existing release binaries"
     )
+    parser.add_argument(
+        "--stocks", type=Path, help="existing Stocks extension executable (with --skip-build)"
+    )
     parser.add_argument("--binary", type=Path, help="existing GUI executable (with --skip-build)")
     parser.add_argument(
         "--helper", type=Path, help="existing static terminal helper (with --skip-build)"
@@ -343,10 +346,12 @@ def main():
     )
     args = parser.parse_args()
     codex_component = args.component == "codex"
-    if codex_component and (args.binary or args.helper or args.skip_build or args.shlibs_depends):
+    if codex_component and (
+        args.binary or args.helper or args.stocks or args.skip_build or args.shlibs_depends
+    ):
         parser.error("--binary/--helper/--skip-build/--shlibs-depends apply only to the editor")
-    if (args.binary or args.helper) and not args.skip_build:
-        parser.error("--binary/--helper require --skip-build")
+    if (args.binary or args.helper or args.stocks) and not args.skip_build:
+        parser.error("--binary/--helper/--stocks require --skip-build")
     tools = ["dpkg", "dpkg-deb", "readelf"]
     if not codex_component:
         tools.extend([CARGO, "rustc"])
@@ -371,6 +376,7 @@ def main():
     helper_target = {"amd64": "x86_64", "arm64": "aarch64"}[architecture] + "-unknown-linux-musl"
     if args.skip_build:
         binary = (args.binary or target / "release/rode").resolve()
+        stocks = (args.stocks or target / "release/rode-stocks").resolve()
         helper = (
             args.helper or target / helper_target / "release/rode-sessiond-standalone"
         ).resolve()
@@ -381,6 +387,7 @@ def main():
             )
     else:
         binary = build("rode", "rode")
+        stocks = build("rode-stocks", "rode-stocks")
         helper = Path(
             output(
                 CARGO,
@@ -389,14 +396,22 @@ def main():
                 {"amd64": "x86_64", "arm64": "aarch64"}[architecture],
             )
         )
+    check_elf(stocks, architecture)
     check_elf(binary, architecture)
     check_elf(helper, architecture, static=True)
     version = args.version or package["version"].replace("-", "~", 1) + "-1"
-    shlibs = args.shlibs_depends or shared_dependencies(binary, args.maintainer)
+    shlibs = args.shlibs_depends or ", ".join(
+        dict.fromkeys(
+            part.strip()
+            for executable in (binary, stocks)
+            for part in shared_dependencies(executable, args.maintainer).split(",")
+        )
+    )
     if not shlibs.strip():
         raise ValueError("Shared-library dependency list must not be empty")
     files = {
         "usr/bin/rode": binary,
+        "usr/bin/rode-stocks": stocks,
         "usr/bin/rode-sessiond": helper,
         "usr/share/applications/RODE.desktop": ROOT / "packaging/debian/RODE.desktop",
         "usr/share/icons/hicolor/scalable/apps/rode.svg": ROOT / "assets/rode.svg",
@@ -412,7 +427,7 @@ def main():
             architecture,
             args.output or target / "debian",
             files,
-            {"usr/bin/rode", "usr/bin/rode-sessiond"},
+            {"usr/bin/rode", "usr/bin/rode-sessiond", "usr/bin/rode-stocks"},
             {
                 "README.md.gz": (ROOT / "README.md").read_bytes(),
                 "THIRD-PARTY-NOTICES.gz": notices(binary),

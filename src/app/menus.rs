@@ -128,6 +128,21 @@ impl EditorApp {
 
     fn menu_commands(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, commands: &[Command]) {
         for &command in commands {
+            if command == Command::Panel(Panel::Extension) {
+                let panels: Vec<_> = self
+                    .extensions
+                    .registry
+                    .panels()
+                    .map(|e| (e.id.clone(), e.name.clone()))
+                    .collect();
+                for (id, name) in panels {
+                    if item(ui, Icon::Extensions, &name, "") {
+                        self.open_extension_panel(&id, ctx);
+                        ui.close();
+                    }
+                }
+                continue;
+            }
             if !self.command_visible(command) {
                 continue;
             }

@@ -139,7 +139,6 @@ impl Command {
         Self::UiScaleReset,
         Self::Panel(Panel::Git),
         Self::Panel(Panel::Monitor),
-        Self::Panel(Panel::Stocks),
         Self::Panel(Panel::Transfers),
         Self::Panel(Panel::SharedFolders),
         Self::Panel(Panel::Problems),
@@ -209,6 +208,7 @@ impl Command {
                 _ => [None, None],
             })
             .flatten()
+            .chain(std::iter::once(Self::Panel(Panel::Extension)))
             .collect()
     }
     /// Return shared command presentation metadata without executing or enabling the action.

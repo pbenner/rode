@@ -321,7 +321,7 @@ impl EditorApp {
 
     /// Report a source-control confirmation that must participate in global input guards.
     pub(super) fn workbench_modal(&self) -> bool {
-        self.workbench.git.confirm.is_some()
+        self.workbench.git.confirm.is_some() || self.extension_panels.confirming()
     }
 
     /// Use the same domain refresh on selection and detachment. A settings draft

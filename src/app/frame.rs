@@ -8,12 +8,11 @@ use super::*;
 
 /// The rail mixes a project destination, a sidebar and host tools. It is not a
 /// catalogue of central pages: Connections leaves the central view intact.
-pub(super) const ACTIVITY: [Command; 5] = [
+pub(super) const ACTIVITY: [Command; 4] = [
     Command::Projects,
     Command::Connections,
     Command::Panel(Panel::Monitor),
     Command::Panel(Panel::Transfers),
-    Command::Panel(Panel::Stocks),
 ];
 
 impl EditorApp {
@@ -186,6 +185,20 @@ impl EditorApp {
     pub(super) fn activity(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let project_controls = ctx.viewport_id() == egui::ViewportId::ROOT;
+        let installed_panels: Vec<_> = self
+            .extensions
+            .registry
+            .panels()
+            .map(|e| {
+                (
+                    e.id.clone(),
+                    e.name.clone(),
+                    e.panel()
+                        .map(|panel| panel.icon.to_owned())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
         egui::SidePanel::left("activity")
             .exact_width(52.0)
             .resizable(false)
@@ -210,8 +223,10 @@ impl EditorApp {
                 // minimum button size cannot fit every area above those controls.
                 let area_height = (ui.available_height() - 112.).max(0.);
                 let group_gap = if project_controls { 12. } else { 0. };
-                let button_height =
-                    ((area_height - group_gap) / commands.len() as f32 - 6.).clamp(22., 40.);
+                let button_height = ((area_height - group_gap)
+                    / (commands.len() + installed_panels.len()) as f32
+                    - 6.)
+                    .clamp(22., 40.);
                 egui::ScrollArea::vertical()
                     .id_salt("application-areas")
                     .max_height(area_height)
@@ -233,6 +248,37 @@ impl EditorApp {
                                 ui.separator();
                                 ui.add_space(3.);
                             }
+                        }
+                        for (id, name, icon) in &installed_panels {
+                            let selected = self.presentation.area == areas::Area::Extension
+                                && self.extension_panels.selected == *id;
+                            let response = ui.add_sized(
+                                [36., button_height],
+                                IconButton::icon(
+                                    match icon.as_str() {
+                                        "chart" => Icon::Stocks,
+                                        "monitor" => Icon::Monitor,
+                                        "folder" => Icon::Folder,
+                                        _ => Icon::Extensions,
+                                    },
+                                    name,
+                                )
+                                .icon_size(23.)
+                                .selected(selected),
+                            );
+                            keyboard::target(ui, name, &response);
+                            ui_probe::button(ui, &format!("extension-panel:{id}"), &response);
+                            ui_probe::button(ui, &format!("activity:{name}"), &response);
+                            if response.clicked() || response.secondary_clicked() {
+                                keyboard::consume_activation(&response);
+                                self.open_extension_panel(id, ctx);
+                            }
+                            keyboard::context_menu(&response, |ui| {
+                                if let Some(tab) = self.extension_panels.tab(id) {
+                                    self.tool_window_menu(ui, tab, ctx);
+                                }
+                            });
+                            ui.add_space(6.);
                         }
                     });
                 ui.with_layout(Layout::bottom_up(Align::Center), |ui| {

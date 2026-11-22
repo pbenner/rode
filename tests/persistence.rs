@@ -1031,9 +1031,14 @@ fn map_deletions_preserve_other_windows_additions_and_unknown_typed_fields() {
 fn newly_added_empty_objects_and_nested_json_deletions_are_real_edits() {
     let initial =
         json!({"review.example":{"settings":{"options":{"old":true,"kept":2},"scalar":"old"}}});
-    let next = json!({"review.example":{"settings":{"options":{"kept":2},"scalar":{},"added":{}}}});
+    let next = json!({"review.example":{"settings":{"options":{"kept":2},"scalar":{},"added":{},"nullable":null,"group":{"nullable":null}}}});
     let saved = roundtrip("extension_preferences", initial, next.clone());
     assert_eq!(saved, next);
+    let removed = json!({"review.example":{"settings":{"options":{"kept":2},"scalar":{},"added":{},"group":{}}}});
+    assert_eq!(
+        roundtrip("extension_preferences", next, removed.clone()),
+        removed
+    );
     for before in [
         Value::Null,
         json!("old"),

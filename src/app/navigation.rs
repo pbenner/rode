@@ -612,6 +612,9 @@ impl EditorApp {
                 _ => false,
             };
         }
+        if let Some(ToolTab::Extension(_)) = self.floating_tab(viewport) {
+            return matches!(pane, Pane::Tools | Pane::Menus);
+        }
         match pane {
             Pane::Explorer => self.explorer_visible(viewport),
             Pane::Connections => {
@@ -626,6 +629,16 @@ impl EditorApp {
     }
     /// Record focus intent and reveal the requested surface before focusing its native widget.
     pub(super) fn focus_pane(&mut self, pane: Pane, ctx: &egui::Context) {
+        if pane == Pane::Tools
+            && matches!(
+                self.floating_tab(ctx.viewport_id()),
+                Some(ToolTab::Extension(_))
+            )
+        {
+            self.navigation.request_focus(pane, ctx.viewport_id());
+            ctx.request_repaint();
+            return;
+        }
         if pane == Pane::Connections {
             self.show_connections(ctx);
             return;

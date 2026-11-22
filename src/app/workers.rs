@@ -420,6 +420,7 @@ impl EditorApp {
     /// then apply domain-specific buffer/version checks before mutating visible state.
     pub(super) fn poll(&mut self, ctx: &egui::Context) {
         self.poll_host_tools(ctx);
+        self.poll_extension_panels(ctx);
         if let Some(error) = self.connection_profiles.poll_reload() {
             self.notify(error, true);
         }

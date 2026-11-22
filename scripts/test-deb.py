@@ -142,6 +142,7 @@ def main():
         assert {
             "usr/bin/rode",
             "usr/bin/rode-sessiond",
+            "usr/bin/rode-stocks",
             "usr/share/applications/RODE.desktop",
             "usr/share/icons/hicolor/scalable/apps/rode.svg",
             "usr/share/doc/rode/copyright",
@@ -162,6 +163,8 @@ def main():
             assert checksum(extracted / name) == digest, name
         binary = extracted / "usr/bin/rode"
         helper = extracted / "usr/bin/rode-sessiond"
+        stocks = extracted / "usr/bin/rode-stocks"
+        assert "Stocks provider" in subprocess.check_output([str(stocks)], text=True)
         help_text = subprocess.check_output([str(binary), "--help"], text=True)
         assert "native Rust editor" in help_text
         for program in (binary, helper):

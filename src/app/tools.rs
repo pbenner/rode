@@ -14,7 +14,7 @@ pub(in crate::app) enum Panel {
     SharedFolders,
     Git,
     Monitor,
-    Stocks,
+    Extension,
     Problems,
     Tasks,
     Settings,
@@ -79,16 +79,16 @@ impl Panel {
                 scope: Scope::Host,
                 feature: Some(Feature::Monitor),
             },
-            Self::Stocks => PanelDefinition {
-                tab_label: "Stocks",
-                title: "STOCKS",
+            Self::Extension => PanelDefinition {
+                tab_label: "Extension",
+                title: "EXTENSION PANEL",
                 command: Definition {
-                    label: "Stocks",
-                    palette_label: "Stocks: Market charts and watchlist",
-                    icon: Icon::Stocks,
+                    label: "Extension panel",
+                    palette_label: "Extensions: Open panel",
+                    icon: Icon::Extensions,
                 },
                 scope: Scope::Application,
-                feature: Some(Feature::Stocks),
+                feature: None,
             },
             Self::Problems => PanelDefinition {
                 tab_label: "Problems",
@@ -165,10 +165,11 @@ pub(in crate::app) enum ToolTab {
     Panel(Panel),
     Connections,
     AppSettings,
+    Extension(u64),
 }
 
 impl ToolTab {
-    pub(in crate::app) const ALL: [Self; 13] = [
+    pub(in crate::app) const ALL: [Self; 12] = [
         Self::Panel(Panel::Agent),
         Self::Terminal,
         Self::Panel(Panel::Git),
@@ -178,7 +179,6 @@ impl ToolTab {
         Self::Panel(Panel::SharedFolders),
         Self::Panel(Panel::Debug),
         Self::Panel(Panel::Settings),
-        Self::Panel(Panel::Stocks),
         Self::Panel(Panel::Transfers),
         Self::Connections,
         Self::AppSettings,
@@ -190,6 +190,7 @@ impl ToolTab {
             Self::Panel(panel) => Command::Panel(panel),
             Self::Connections => Command::Connections,
             Self::AppSettings => Command::AppSettings,
+            Self::Extension(_) => Command::Panel(Panel::Extension),
         }
     }
 
@@ -207,6 +208,7 @@ impl ToolTab {
         match self {
             Self::Connections | Self::AppSettings => self.command().definition().label,
             Self::Terminal => "Terminal",
+            Self::Extension(_) => "Extension",
             Self::Panel(panel) => panel.definition().tab_label,
         }
     }
@@ -214,7 +216,7 @@ impl ToolTab {
         match self {
             Self::Terminal => Scope::Project,
             Self::Panel(panel) => panel.scope(),
-            Self::Connections | Self::AppSettings => Scope::Application,
+            Self::Connections | Self::AppSettings | Self::Extension(_) => Scope::Application,
         }
     }
     /// Ordered project navigation and fallback share the same tool inventory.
@@ -227,7 +229,7 @@ impl ToolTab {
         match self {
             Self::Terminal => navigation::Pane::Terminal,
             Self::Connections => navigation::Pane::Connections,
-            Self::Panel(_) | Self::AppSettings => navigation::Pane::Tools,
+            Self::Panel(_) | Self::AppSettings | Self::Extension(_) => navigation::Pane::Tools,
         }
     }
     pub fn viewport(self) -> egui::ViewportId {

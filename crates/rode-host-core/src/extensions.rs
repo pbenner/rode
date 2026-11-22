@@ -1,20 +1,19 @@
 //! Native feature registry and an explicitly enabled, versioned tool adapter API.
-//! Manifests are desktop data; executable adapters always run on the project host.
+//! Manifests describe capabilities. Tool adapters run on the project host; native
+//! panel providers run as independent desktop executables, including bundled ones.
 //!
 //! # Design decisions
 //!
-//! Bundled features remain ordinary Rust modules to keep their native UI and
-//! shared lifecycle guards. Disabling controls activation and background work;
-//! it does not unload code or reduce the compiled binary. Installed integrations
-//! use a narrow versioned executable protocol instead of a dynamic Rust ABI or
-//! a general scripting runtime. The tradeoff is process startup overhead and
-//! limited extension surfaces, with a single bounded execution boundary.
+//! Distribution and execution are independent. Included and installed panel
+//! executables declare the same contributions and use the same bounded process,
+//! settings, rendering and window lifecycle. Included distribution only supplies
+//! default enablement and sibling-executable discovery. Native controllers for
+//! editor/host services retain their existing authority and document guards.
 //!
-//! Manifests come from explicit desktop installation and start disabled so
-//! opening a repository cannot implicitly activate its own executable metadata.
-//! The command still runs on the project host inside its actual sandbox; an
-//! adapter reply can supply a version-checked buffer result, not permission to
-//! bypass source-save guards or widen host access.
+//! Explicitly installed manifests start disabled. Reading a repository or a
+//! catalogue cannot implicitly execute it. Project tool replies remain subject
+//! to captured host policy and version-checked source-save guards. Desktop panel
+//! providers use the shared data-only protocol rather than a dynamic Rust ABI.
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -22,8 +21,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Supported installed-adapter wire protocol version.
-pub const API_VERSION: u32 = 1;
 /// Shared preference key for field-merged extension settings.
 pub const STORAGE_KEY: &str = "extension_preferences";
 /// Maximum installed manifest size in bytes.
@@ -31,8 +28,8 @@ pub const MANIFEST_LIMIT: usize = 64 * 1024;
 /// Maximum discovered installed extension manifests.
 pub const MAX_EXTENSIONS: usize = 64;
 
-/// Bundled native capabilities; disabling one stops its activation without removing compiled
-/// code.
+/// Stable preference identities of included extensions. Native service modules
+/// and independent executables share these enablement records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Feature {
     /// Explicit local/SSH file copies, independent of project navigation.
@@ -100,126 +97,9 @@ impl Feature {
         }
     }
 }
-/// One installed adapter command contributed to the palette.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolCommand {
-    /// Stable command identifier within its extension.
-    pub id: String,
-    /// User-visible command title.
-    pub title: String,
-}
-/// Installed executable capabilities declared by a validated manifest.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Tool {
-    /// Installed executable on the project host, not a shell command string.
-    pub program: String,
-    /// Literal executable arguments.
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Language identifiers that activate this tool.
-    #[serde(default)]
-    pub languages: Vec<String>,
-    /// Whether the adapter accepts buffer formatting operations.
-    #[serde(default)]
-    pub format: bool,
-    /// Whether the adapter accepts buffer diagnostic operations.
-    #[serde(default)]
-    pub check: bool,
-    /// Explicit commands contributed to the command palette.
-    #[serde(default)]
-    pub commands: Vec<ToolCommand>,
-}
-/// Desktop-installed metadata for an opt-in project-host adapter; repository files are not
-/// automatically executed as manifests.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Manifest {
-    /// Required protocol version, currently [`API_VERSION`].
-    pub api: u32,
-    /// Stable namespaced extension identifier.
-    pub id: String,
-    /// User-visible extension name.
-    pub name: String,
-    /// Extension version label.
-    pub version: String,
-    /// Bounded description shown in the extension manager.
-    pub description: String,
-    /// Declared executable and activation capabilities.
-    pub tool: Tool,
-}
-impl Manifest {
-    /// Validate manifest identity, capabilities and bounded arguments without executing it.
-    pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.api == API_VERSION,
-            "Unsupported extension API; RODE supports version 1."
-        );
-        ensure!(
-            valid_id(&self.id) && !self.id.starts_with("rode."),
-            "Use a unique publisher.name ID; rode.* is reserved."
-        );
-        ensure!(
-            !self.name.trim().is_empty()
-                && self.name.len() <= 80
-                && self.version.len() <= 40
-                && self.description.len() <= 1024,
-            "Invalid extension description."
-        );
-        let tool = &self.tool;
-        // No shell interpolation, relative project executable or implicit upload.
-        ensure!(
-            !tool.program.is_empty()
-                && tool.program.len() <= 4096
-                && !tool.program.contains('\0')
-                && (!tool.program.contains('/') || Path::new(&tool.program).is_absolute()),
-            "The program must be an absolute project-host path or a name on its PATH."
-        );
-        ensure!(
-            tool.args.len() <= 64
-                && tool.args.iter().map(String::len).sum::<usize>() <= 16 * 1024
-                && tool.args.iter().all(|s| !s.contains('\0')),
-            "Invalid adapter arguments."
-        );
-        ensure!(
-            tool.languages.len() <= 64
-                && tool
-                    .languages
-                    .iter()
-                    .all(|s| !s.is_empty() && s.len() <= 40),
-            "Invalid language list."
-        );
-        ensure!(
-            tool.commands.len() <= 32
-                && tool
-                    .commands
-                    .iter()
-                    .all(|c| valid_id(&c.id) && !c.title.trim().is_empty() && c.title.len() <= 120),
-            "Invalid commands."
-        );
-        let unique: std::collections::BTreeSet<_> = tool.commands.iter().map(|c| &c.id).collect();
-        ensure!(
-            unique.len() == tool.commands.len(),
-            "Duplicate command IDs."
-        );
-        ensure!(
-            tool.format || tool.check || !tool.commands.is_empty(),
-            "Declare a formatter, checker or command."
-        );
-        Ok(())
-    }
-}
-fn valid_id(id: &str) -> bool {
-    (3..=80).contains(&id.len())
-        && id.contains('.')
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
-        && !id.starts_with('.')
-        && !id.ends_with('.')
-        && !id.contains("..")
-}
+use rode_extension_api::manifest::valid_id;
+pub use rode_extension_api::manifest::{Manifest, Panel, Tool, ToolCommand};
+pub use rode_extension_api::tool::{API_VERSION, Invocation, Reply};
 
 /// One extension's field-merged preferences.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -257,10 +137,24 @@ pub struct Entry {
     pub description: String,
     /// Human-readable activation condition.
     pub activation: &'static str,
-    /// Bundled capability, absent for installed adapters.
+    /// Included distribution identity and default enablement; independent of runtime.
     pub feature: Option<Feature>,
-    /// Validated installed adapter manifest, absent for bundled features.
+    /// Executable contribution, shared by included and independently installed providers.
     pub manifest: Option<Manifest>,
+}
+impl Entry {
+    /// Panel capability is independent of whether a provider ships with RODE.
+    pub fn panel(&self) -> Option<Panel<'_>> {
+        self.manifest.as_ref().and_then(Manifest::panel)
+    }
+    /// Native controllers and project-tool contributions can invalidate project work.
+    pub fn project_scoped(&self) -> bool {
+        self.manifest.as_ref().is_none_or(Manifest::project_scoped)
+    }
+    /// Distribution affects default enablement and executable discovery only.
+    pub fn included(&self) -> bool {
+        self.feature.is_some()
+    }
 }
 /// Bounded registry of bundled capabilities and desktop-installed adapter manifests.
 #[derive(Default)]
@@ -406,22 +300,31 @@ impl Registry {
                 description: description.into(),
                 activation,
                 feature: Some(feature),
-                manifest: None,
+                manifest: (feature == Feature::Stocks).then(|| serde_json::from_value(serde_json::json!({
+                    "api":1,"id":feature.id(),"name":name,"version":"0.1.0","description":description,
+                    "contributions":[{"kind":"panel","host":"desktop","protocol":2,"icon":"chart","tool":{"program":"rode-stocks","args":["--stdio"]}}]
+                })).expect("bundled manifest is valid")),
             });
         }
         if let Ok(scan) = std::fs::read_dir(directory) {
-            let mut paths: Vec<_> = scan
+            let mut paths = std::collections::BTreeSet::new();
+            let mut truncated = false;
+            for path in scan
                 .filter_map(Result::ok)
-                .map(|e| e.path())
+                .map(|entry| entry.path())
                 .filter(|p| p.extension().is_some_and(|e| e == "json"))
-                .take(MAX_EXTENSIONS + 1)
-                .collect();
-            paths.sort();
-            if paths.len() > MAX_EXTENSIONS {
-                registry
-                    .warnings
-                    .push("Only 64 installed extension manifests are loaded.".into());
-                paths.truncate(MAX_EXTENSIONS);
+            {
+                paths.insert(path);
+                if paths.len() > MAX_EXTENSIONS {
+                    paths.pop_last();
+                    truncated = true;
+                }
+            }
+            if truncated {
+                registry.warnings.push(
+                    "Only the first 64 installed extension manifests in filename order are loaded."
+                        .into(),
+                );
             }
             for path in paths {
                 match read_manifest(&path) {
@@ -430,7 +333,13 @@ impl Registry {
                             id: manifest.id.clone(),
                             name: manifest.name.clone(),
                             description: manifest.description.clone(),
-                            activation: "Explicit command / matching enabled language tool",
+                            activation: if manifest.panel().is_some() && manifest.project_scoped() {
+                                "Desktop panel / project-host tools"
+                            } else if manifest.panel().is_some() {
+                                "Explicit desktop panel / optional background refresh"
+                            } else {
+                                "Explicit command / matching enabled language tool"
+                            },
                             feature: None,
                             manifest: Some(manifest),
                         })
@@ -455,6 +364,12 @@ impl Registry {
                 .unwrap_or(e.feature.is_some_and(|feature| feature != Feature::Mise))
         })
     }
+    /// One contribution inventory for menus, activity buttons and execution.
+    pub fn panels(&self) -> impl Iterator<Item = &Entry> {
+        self.entries
+            .iter()
+            .filter(|e| self.enabled(&e.id) && e.panel().is_some())
+    }
     /// Return whether a bundled capability may activate.
     pub fn feature(&self, feature: Feature) -> bool {
         self.enabled(feature.id())
@@ -462,8 +377,89 @@ impl Registry {
     /// Record an explicit enable/disable edit and advance the activation generation.
     pub fn set_enabled(&mut self, id: &str, enabled: bool) {
         self.preferences.entry(id.into()).or_default().enabled = Some(enabled);
-        self.revision = self.revision.wrapping_add(1);
+        // A desktop-only panel cannot change formatter/checker selection or
+        // invalidate captured project-host work.
+        if self
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .is_none_or(Entry::project_scoped)
+        {
+            self.revision = self.revision.wrapping_add(1);
+        }
         self.pending = true;
+    }
+    /// Publish a bounded settings edit, invalidating only project-scoped work.
+    /// Validation precedes mutation so a rejected edit leaves saved preferences intact.
+    pub fn set_settings(
+        &mut self,
+        id: &str,
+        settings: BTreeMap<String, serde_json::Value>,
+    ) -> Result<bool> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .context("This extension is no longer installed")?;
+        let project_scoped = entry.project_scoped();
+        ensure!(
+            serde_json::to_vec(&settings)?.len() <= rode_extension_api::SETTINGS_LIMIT,
+            "Extension settings exceed 192 KiB"
+        );
+        if self
+            .preferences
+            .get(id)
+            .map_or(settings.is_empty(), |p| p.settings == settings)
+        {
+            return Ok(false);
+        }
+        let mut next = self.preferences.clone();
+        next.entry(id.into()).or_default().settings = settings;
+        preferences(&serde_json::to_string(&next)?)?;
+        self.preferences = next;
+        self.pending = true;
+        if project_scoped {
+            self.revision = self.revision.wrapping_add(1);
+        }
+        Ok(true)
+    }
+    /// Compare the effective ordered project providers/settings before reloading.
+    /// Panel-only changes and manifest display metadata do not invalidate source-tool jobs.
+    pub fn same_project_tools(&self, other: &Self) -> bool {
+        let project_tools = |entry: &Entry| {
+            entry
+                .manifest
+                .as_ref()
+                .and_then(Manifest::project_tool)
+                .is_some()
+        };
+        fn settings(prefs: &Preference) -> Option<&BTreeMap<String, serde_json::Value>> {
+            (!prefs.settings.is_empty()).then_some(&prefs.settings)
+        }
+        // Keep each iterator's references tied to its owning registry.
+        let left = self
+            .entries
+            .iter()
+            .filter(|e| self.enabled(&e.id) && project_tools(e))
+            .map(|e| {
+                (
+                    &e.id,
+                    e.manifest.as_ref().and_then(Manifest::project_tool),
+                    self.preferences.get(&e.id).and_then(settings),
+                )
+            });
+        let right = other
+            .entries
+            .iter()
+            .filter(|e| other.enabled(&e.id) && project_tools(e))
+            .map(|e| {
+                (
+                    &e.id,
+                    e.manifest.as_ref().and_then(Manifest::project_tool),
+                    other.preferences.get(&e.id).and_then(settings),
+                )
+            });
+        left.eq(right)
     }
     /// Find the first enabled adapter matching a language and all requested format/check
     /// capabilities.
@@ -473,9 +469,11 @@ impl Registry {
             .filter(|e| self.enabled(&e.id))
             .filter_map(|e| e.manifest.as_ref())
             .find(|m| {
-                m.tool.languages.iter().any(|l| l == language)
-                    && (!format || m.tool.format)
-                    && (!check || m.tool.check)
+                m.project_tool().is_some_and(|tool| {
+                    tool.languages.iter().any(|l| l == language)
+                        && (!format || tool.format)
+                        && (!check || tool.check)
+                })
             })
     }
     /// Return enabled palette contributions as extension id, command id and display title.
@@ -485,13 +483,26 @@ impl Registry {
             .filter(|e| self.enabled(&e.id))
             .filter_map(|e| e.manifest.as_ref())
             .flat_map(|m| {
-                m.tool.commands.iter().map(move |c| {
-                    (
+                let mut actions: Vec<_> = m
+                    .project_tool()
+                    .into_iter()
+                    .flat_map(|tool| &tool.commands)
+                    .map(move |c| {
+                        (
+                            m.id.clone(),
+                            c.id.clone(),
+                            format!("{}: {}", m.name, c.title),
+                        )
+                    })
+                    .collect();
+                if m.panel().is_some() {
+                    actions.push((
                         m.id.clone(),
-                        c.id.clone(),
-                        format!("{}: {}", m.name, c.title),
-                    )
-                })
+                        "@panel.open".into(),
+                        format!("{}: Open panel", m.name),
+                    ));
+                }
+                actions
             })
             .collect()
     }
@@ -502,12 +513,21 @@ impl Registry {
         operation: String,
         path: Option<String>,
         text: String,
-    ) -> Invocation {
-        Invocation {
+    ) -> Result<Invocation> {
+        let tool = manifest
+            .project_tool()
+            .context("This extension has no project-tool contribution")?;
+        ensure!(
+            (operation == "format" && tool.format)
+                || (operation == "check" && tool.check)
+                || tool.commands.iter().any(|c| c.id == operation),
+            "This project-tool operation is not declared"
+        );
+        Ok(Invocation {
             api: API_VERSION,
             extension: manifest.id.clone(),
-            program: manifest.tool.program.clone(),
-            args: manifest.tool.args.clone(),
+            program: tool.program.clone(),
+            args: tool.args.clone(),
             operation,
             path,
             text,
@@ -516,7 +536,7 @@ impl Registry {
                 .get(&manifest.id)
                 .map(|p| p.settings.clone())
                 .unwrap_or_default(),
-        }
+        })
     }
 }
 /// Resolve the desktop's installed-manifest directory under RODE configuration.
@@ -552,76 +572,6 @@ pub fn install(source: &Path, directory: &Path) -> Result<()> {
     })
 }
 
-/// This is a one-shot request over existing project transport, not a plugin daemon.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Invocation {
-    /// Required adapter protocol version.
-    pub api: u32,
-    /// Owning extension identifier.
-    pub extension: String,
-    /// Project-host executable captured from its validated manifest.
-    pub program: String,
-    /// Literal executable arguments.
-    pub args: Vec<String>,
-    /// Requested format/check/command operation.
-    pub operation: String,
-    /// Optional project-host source path used only as tool context.
-    pub path: Option<String>,
-    /// Unsaved source snapshot for buffer operations.
-    pub text: String,
-    /// Namespaced extension settings captured with this invocation.
-    pub settings: BTreeMap<String, serde_json::Value>,
-}
-/// Bounded API v1 tool result, validated before UI application.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Reply {
-    /// Reply protocol version, which must match the supported API.
-    pub api: u32,
-    /// Optional formatted replacement snapshot; the UI must check the original buffer version.
-    #[serde(default)]
-    pub text: Option<String>,
-    /// Bounded normalized diagnostics for the submitted source.
-    #[serde(default)]
-    pub diagnostics: Vec<crate::project::Diagnostic>,
-    /// Bounded human-readable command output.
-    #[serde(default)]
-    pub output: String,
-}
-impl Reply {
-    /// Validate reply shape, size and operation-specific fields before accepting adapter
-    /// output.
-    pub fn validate(&self, operation: &str) -> Result<()> {
-        ensure!(self.api == API_VERSION, "Unsupported adapter response API.");
-        ensure!(
-            self.text
-                .as_ref()
-                .is_none_or(|s| s.len() <= crate::files::MAX_TOOL_BYTES as usize)
-                && self.output.len() <= 1024 * 1024
-                && self.diagnostics.len() <= 4096,
-            "Adapter response exceeds limits."
-        );
-        ensure!(
-            operation == "format" || self.text.is_none(),
-            "Only format may return replacement text."
-        );
-        ensure!(
-            self.diagnostics.iter().all(|d| d.row > 0
-                && d.column > 0
-                && d.end_row >= d.row
-                && d.end_column > 0
-                && [d.row, d.column, d.end_row, d.end_column]
-                    .iter()
-                    .all(|&n| n <= crate::files::MAX_TOOL_BYTES as usize + 1)
-                && (d.end_row != d.row || d.end_column >= d.column)
-                && d.message.len() <= 8192
-                && d.code.len() <= 128
-                && ["error", "warning", "info"].contains(&d.severity.as_str())),
-            "Invalid adapter diagnostic (positions are 1-based Unicode scalar columns)."
-        );
-        Ok(())
-    }
-}
 /// Execute a blocking one-shot adapter with bounded input/output/time; the caller supplies the
 /// enclosing project sandbox.
 pub fn run(root: &str, invocation: &Invocation) -> Result<Reply> {
@@ -641,7 +591,15 @@ pub fn run_cancellable(
         "Invalid adapter request."
     );
     let root = crate::files::expand_home(root).canonicalize()?;
-    let payload = serde_json::json!({"api": API_VERSION, "extension": invocation.extension, "operation": invocation.operation, "root": root, "path": invocation.path, "text": invocation.text, "settings": invocation.settings});
+    let payload = rode_extension_api::tool::Request {
+        api: API_VERSION,
+        extension: invocation.extension.clone(),
+        operation: invocation.operation.clone(),
+        root: root.to_string_lossy().into_owned(),
+        path: invocation.path.clone(),
+        text: invocation.text.clone(),
+        settings: invocation.settings.clone(),
+    };
     let mut command = Command::new(&invocation.program);
     command.args(&invocation.args).current_dir(&root);
     let output = crate::command::run_controlled(

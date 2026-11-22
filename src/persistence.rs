@@ -78,12 +78,18 @@ pub fn changes(before: &Value, after: &Value) -> Vec<Edit> {
             for (key, value) in next {
                 let mut child = path.clone();
                 child.push(key.clone());
-                visit(
-                    old.and_then(|m| m.get(key)).unwrap_or(&Value::Null),
-                    value,
-                    child,
-                    edits,
-                );
+                let previous = old.and_then(|m| m.get(key));
+                if previous.is_none() && value.is_null() {
+                    // User JSON settings distinguish an absent key from an
+                    // explicit null, including inside newly created objects.
+                    edits.push(Edit {
+                        path: child,
+                        value: Some(Value::Null),
+                        previous: None,
+                    });
+                } else {
+                    visit(previous.unwrap_or(&Value::Null), value, child, edits);
+                }
             }
             if let Some(old) = old {
                 for key in old.keys() {

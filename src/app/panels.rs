@@ -38,8 +38,8 @@ impl EditorApp {
             self.transfers_ui(ui, ctx);
             return;
         }
-        if panel == Panel::Stocks {
-            layout::page(ui, 1740., |ui| self.stocks_ui(ui, ctx));
+        if panel == Panel::Extension {
+            layout::page(ui, 1600., |ui| self.extension_panel_ui(ui, ctx));
             return;
         }
         if panel == Panel::Debug {
@@ -117,7 +117,7 @@ impl EditorApp {
                         Panel::Settings
                         | Panel::Agent
                         | Panel::Debug
-                        | Panel::Stocks
+                        | Panel::Extension
                         | Panel::Transfers => {
                             unreachable!()
                         }

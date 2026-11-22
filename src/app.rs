@@ -42,6 +42,7 @@ mod editor_view;
 mod editor_windows;
 mod execution;
 mod explorer;
+mod extension_panels;
 mod extensions;
 mod file_browser;
 mod frame;
@@ -71,7 +72,6 @@ mod sandbox_presets;
 mod saved_connections;
 mod sessions;
 mod sidebar;
-mod stocks;
 mod terminal_colors;
 mod tool_windows;
 mod tools;
@@ -241,7 +241,7 @@ pub struct EditorApp {
     ui_scale_save_pending: bool,
     themes: theme::Themes,
     terminal_colors: terminal_colors::State,
-    stocks: stocks::State,
+    extension_panels: extension_panels::State,
     transfers: transfers::State,
     shared_folders: transfers::Sharing,
     theme_save_pending: bool,
@@ -372,7 +372,7 @@ impl EditorApp {
             ui_scale,
             ui_scale_save_pending: false,
             terminal_colors: terminal_colors::State::load(storage, &themes),
-            stocks: Default::default(),
+            extension_panels: Default::default(),
             transfers: Default::default(),
             shared_folders: Default::default(),
             themes,
@@ -791,7 +791,6 @@ impl eframe::App for EditorApp {
         self.restore_local_workspace(ctx);
         self.poll_agents(ctx);
         self.poll_debugger(ctx);
-        self.stocks.poll(ctx);
         self.transfer_tick(ctx);
         self.shared_folders_tick(ctx);
         self.poll_notebooks(ctx);

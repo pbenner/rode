@@ -295,7 +295,12 @@ class Components(unittest.TestCase):
             helper.write_bytes(b"static helper fixture")
 
             def check_elf(path, _architecture, static=False):
-                self.assertEqual(path, helper if static else root / "target/release/rode")
+                if static:
+                    self.assertEqual(path, helper)
+                else:
+                    self.assertIn(
+                        path, [root / "target/release/rode", root / "target/release/rode-stocks"]
+                    )
 
             def output(*command):
                 if "metadata" in command:
@@ -316,6 +321,7 @@ class Components(unittest.TestCase):
             ):
                 self.assertEqual((name, version), ("rode", "1.2.3-1"))
                 self.assertFalse(any("codex" in name.lower() for name in files))
+                self.assertEqual(files["usr/bin/rode-stocks"], root / "target/release/rode-stocks")
                 return root / "rode.deb"
 
             with (

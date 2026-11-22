@@ -312,25 +312,8 @@ pub struct KernelSpec {
     /// Declared kernel language.
     pub language: String,
 }
-/// Normalized source diagnostic. Rows and character columns are one-based; end positions are
-/// tool-derived and may equal the start for point diagnostics.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Diagnostic {
-    /// Tool/rule identifier.
-    pub code: String,
-    /// Human-readable issue description.
-    pub message: String,
-    /// One-based start line.
-    pub row: usize,
-    /// One-based start character column after tool-specific normalization.
-    pub column: usize,
-    /// One-based end line.
-    pub end_row: usize,
-    /// One-based end character column.
-    pub end_column: usize,
-    /// Severity label, such as `error` or `warning`.
-    pub severity: String,
-}
+/// Shared normalized source diagnostic; wire-compatible with existing host replies.
+pub use rode_extension_api::tool::Diagnostic;
 /// Result for the exact submitted buffer snapshot; the UI must version-check before applying
 /// it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

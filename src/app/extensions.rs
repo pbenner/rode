@@ -5,6 +5,7 @@
 //! saves.
 use super::*;
 use crate::extensions::{self as api, Feature};
+use std::collections::BTreeMap;
 
 /// Desktop-installed manifest registry, explicit settings editor and cancellable adapter work state.
 pub(super) struct Extensions {
@@ -73,6 +74,9 @@ impl EditorApp {
     }
     /// Allow core panels and only enabled optional feature panels.
     pub(super) fn panel_enabled(&self, panel: Panel) -> bool {
+        if panel == Panel::Extension {
+            return self.extensions.registry.panels().next().is_some();
+        }
         panel.feature().is_none_or(|f| self.feature(f))
     }
     /// Persist explicitly changed extension preferences; retain pending state when storage is absent.
@@ -95,6 +99,23 @@ impl EditorApp {
     /// Change feature enablement, invalidate source-tool epochs and cancel affected owned work
     /// without replacing source buffers or abandoning protected save acknowledgements.
     pub(super) fn set_extension(&mut self, id: &str, enabled: bool) {
+        if self
+            .extensions
+            .registry
+            .entries
+            .iter()
+            .any(|entry| entry.id == id && !entry.project_scoped())
+        {
+            self.extensions.registry.set_enabled(id, enabled);
+            if !enabled {
+                let selected = self.extension_panels.selected == id;
+                self.remove_extension_panel(id);
+                if selected && self.presentation.area == areas::Area::Extension {
+                    self.presentation.enter_area(areas::Area::Projects);
+                }
+            }
+            return;
+        }
         if id == Feature::Transfers.id() && !enabled && self.shared_folders.pending() {
             return;
         }
@@ -104,6 +125,12 @@ impl EditorApp {
         // Invalidates all source-tool results, including jobs queued before disabling.
         self.workbench.invalidate_tools();
         if !enabled {
+            if self.extension_panels.selected == id {
+                self.remove_extension_panel(id);
+                if self.presentation.area == areas::Area::Extension {
+                    self.presentation.enter_area(areas::Area::Projects);
+                }
+            }
             if self
                 .presentation
                 .area
@@ -125,9 +152,6 @@ impl EditorApp {
             if id == Feature::Agents.id() {
                 self.stop_project_agent();
             }
-            if id == Feature::Stocks.id() {
-                self.stocks.invalidate();
-            }
             if id == Feature::Monitor.id() {
                 // Drain an outstanding reply before a re-enabled collector can restart.
                 self.host_tools.stop_monitor();
@@ -139,6 +163,7 @@ impl EditorApp {
             {
                 self.presentation.clear_panel();
             }
+            self.remove_extension_panel(id);
             self.documents.disable_feature(id);
         }
     }
@@ -172,7 +197,7 @@ impl EditorApp {
         layout::heading(
             ui,
             "Extensions",
-            "Bundled native features and project-host tool adapters",
+            "Native features, project tools and desktop panels",
             palette,
         );
         ui.small(format!("Manifests: {}", api::directory().display()));
@@ -208,6 +233,7 @@ impl EditorApp {
         }
         let mut toggle = None;
         let mut settings = None;
+        let mut open_panel = None;
         let scroll = egui::ScrollArea::vertical()
             .id_salt("extension-list")
             .max_height(
@@ -226,6 +252,7 @@ impl EditorApp {
         };
         scroll.show(ui, |ui| {
             for entry in entries {
+                let included = entry.included();
                 ui.push_id(&entry.id, |ui| {
                     layout::card(ui, palette, |ui| {
                         let mut enabled = self.extensions.registry.enabled(&entry.id);
@@ -239,35 +266,40 @@ impl EditorApp {
                             if checkbox.changed() {
                                 toggle = Some((entry.id.clone(), enabled));
                             }
-                            ui.small(if entry.feature.is_some() {
-                                "BUNDLED"
-                            } else {
-                                "INSTALLED TOOL"
-                            });
-                            if (entry.manifest.is_some()
-                                || matches!(
-                                    entry.feature,
-                                    Some(Feature::ProjectBookmarks | Feature::Stocks)
-                                ))
-                                && crate::keyboard::small_button(ui, "Settings").clicked()
+                            ui.small(if included { "INCLUDED" } else { "INSTALLED" });
+                            if entry.panel().is_some()
+                                && enabled
+                                && crate::keyboard::small_button(ui, "Open panel").clicked()
                             {
-                                settings = Some(entry.id.clone());
+                                open_panel = Some(entry.id.clone());
+                            }
+                            if entry.manifest.is_some() || matches!(entry.feature, Some(Feature::ProjectBookmarks)) {
+                                let edit = crate::keyboard::small_button(ui, "Settings");
+                                ui_probe::button(ui, &format!("extension-edit-settings:{}", entry.id), &edit);
+                                if edit.clicked() { settings = Some(entry.id.clone()); }
                             }
                         });
                         ui.label(&entry.description);
                         ui.small(format!("{} · {}", entry.id, entry.activation));
-                        if let Some(manifest) = entry.manifest {
-                            ui.monospace(format!(
-                                "{} {}",
-                                manifest.tool.program,
-                                manifest.tool.args.join(" ")
-                            ));
+                        if let Some(manifest) = &entry.manifest {
+                            if let Some(panel) = manifest.panel() {
+                                ui.small("Desktop · Ordinary access to this computer's files, network and credentials; independent of the project sandbox.");
+                                ui.monospace(format!("{} {}", panel.tool.program, panel.tool.args.join(" ")));
+                            }
+                            if let Some(tool) = manifest.project_tool() {
+                                ui.small("Project host · Runs locally or over SSH with the project's current sandbox and access policy. No automatic upload.");
+                                ui.monospace(format!("{} {}", tool.program, tool.args.join(" ")));
+                            }
                         }
                     });
                     ui.add_space(8.);
                 });
             }
         });
+        if let Some(id) = open_panel {
+            self.set_dialog(Dialog::None);
+            self.open_extension_panel(&id, ctx);
+        }
         if let Some((id, enabled)) = toggle {
             self.request_extension(&id, enabled, ctx);
         }
@@ -289,39 +321,38 @@ impl EditorApp {
                 "{} settings (JSON object)",
                 self.extensions.settings_id
             ));
-            ui.add(crate::keyboard::editor_named(
+            let settings_input = ui.add(crate::keyboard::editor_named(
                 "Extension settings JSON",
                 egui::TextEdit::multiline(&mut self.extensions.settings_text)
                     .code_editor()
                     .desired_rows(4)
                     .char_limit(32 * 1024),
             ));
-            if crate::keyboard::button(ui, "Save extension settings").clicked() {
+            ui_probe::button(ui, "extension-settings-json", &settings_input);
+            ui_probe::value(
+                ui,
+                "extension-settings-json-value",
+                &settings_input,
+                &self.extensions.settings_text,
+            );
+            let save = crate::keyboard::button(ui, "Save extension settings");
+            ui_probe::button(ui, "extension-save-settings", &save);
+            if save.clicked() {
                 match serde_json::from_str::<std::collections::BTreeMap<String, serde_json::Value>>(
                     &self.extensions.settings_text,
                 ) {
                     Ok(settings) => {
-                        self.extensions
-                            .registry
-                            .preferences
-                            .entry(self.extensions.settings_id.clone())
-                            .or_default()
-                            .settings = settings;
-                        self.cancel_extensions();
-                        self.extensions.registry.pending = true;
-                        self.extensions.registry.revision =
-                            self.extensions.registry.revision.wrapping_add(1);
-                        self.workbench.invalidate_tools();
-                        if self.extensions.settings_id == Feature::Stocks.id() {
-                            self.stocks.invalidate();
+                        let id = self.extensions.settings_id.clone();
+                        match self.save_extension_settings(&id, settings) {
+                            Ok(()) => self.extensions.settings_id.clear(),
+                            Err(error) => self.notify(format!("Invalid settings: {error}"), true),
                         }
-                        self.extensions.settings_id.clear();
                     }
                     Err(error) => self.notify(format!("Invalid settings: {error}"), true),
                 }
             }
         }
-        ui.small("Enabling an installed adapter permits it to run on the project host with the project's current sandbox/access. Programs must already be installed there. No automatic upload or tool installation.");
+        ui.small("Review each contribution's execution location and access before enabling it. Executables must already be installed on their declared host.");
         ui.add_space(8.);
         ui.horizontal_wrapped(|ui| {
             ui.add(crate::keyboard::named("Desktop path to extension.json", egui::TextEdit::singleline(&mut self.extensions.install_path).hint_text("Desktop path to extension.json").desired_width(ui.available_width().min(320.))));
@@ -341,14 +372,35 @@ impl EditorApp {
             self.focus_editor(ctx);
         }
     }
-    fn reload_extensions(&mut self) {
-        self.cancel_extensions();
+    /// Desktop settings notify only their running provider. Project contributions
+    /// additionally invalidate captured formatter/command work under the old settings.
+    pub(super) fn save_extension_settings(
+        &mut self,
+        id: &str,
+        settings: BTreeMap<String, serde_json::Value>,
+    ) -> anyhow::Result<()> {
+        let revision = self.extensions.registry.revision;
+        self.extensions.registry.set_settings(id, settings)?;
+        if self.extensions.registry.revision != revision {
+            self.cancel_extensions();
+            self.workbench.invalidate_tools();
+        }
+        Ok(())
+    }
+    pub(super) fn reload_extensions(&mut self) {
+        self.reload_extensions_from(&api::directory());
+    }
+    pub(super) fn reload_extensions_from(&mut self, directory: &std::path::Path) {
         let old = &mut self.extensions.registry;
-        let mut registry = api::Registry::load(&api::directory(), old.preferences.clone());
-        registry.revision = old.revision.wrapping_add(1);
+        let mut registry = api::Registry::load(directory, old.preferences.clone());
+        let changed = !old.same_project_tools(&registry);
+        registry.revision = old.revision.wrapping_add(u64::from(changed));
         registry.pending = old.pending;
         self.extensions.registry = registry;
-        self.workbench.invalidate_tools();
+        if changed {
+            self.cancel_extensions();
+            self.workbench.invalidate_tools();
+        }
     }
     /// Validate and dispatch an explicit installed-adapter command using its captured registry revision.
     pub(super) fn extension_command(
@@ -357,6 +409,10 @@ impl EditorApp {
         command: &str,
         ctx: &egui::Context,
     ) {
+        if command == "@panel.open" {
+            self.open_extension_panel(extension, ctx);
+            return;
+        }
         if self.extensions.busy {
             self.notify("An extension command is still running.", false);
             return;
@@ -371,6 +427,10 @@ impl EditorApp {
             .iter()
             .find(|e| e.id == extension && registry.enabled(extension))
             .and_then(|e| e.manifest.as_ref())
+            .filter(|m| {
+                m.project_tool()
+                    .is_some_and(|tool| tool.commands.iter().any(|c| c.id == command))
+            })
         else {
             return;
         };
@@ -381,6 +441,13 @@ impl EditorApp {
             doc.and_then(|d| d.path.clone()),
             doc.map(|d| d.text.clone()).unwrap_or_default(),
         );
+        let invocation = match invocation {
+            Ok(invocation) => invocation,
+            Err(error) => {
+                self.notify(error.to_string(), true);
+                return;
+            }
+        };
         self.extensions.busy = true;
         self.dispatch_tool(
             crate::project::Request::Extension {

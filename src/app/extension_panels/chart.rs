@@ -1,9 +1,10 @@
 //! Native, theme-aware price/volume plot. The viewport is normalized to trading
 //! observations (closed markets leave no artificial gaps); labels use provider UTC times.
-use super::{
-    data::{Bar, Series},
-    *,
-};
+use super::protocol;
+use crate::app::*;
+use rode_extension_api::panel::Bar;
+#[cfg(test)]
+use rode_extension_api::panel::Series;
 
 /// Keep endpoints and both extrema in a dense line bucket. Sampling just its
 /// final close can erase an entire short price spike from the plotted history.
@@ -58,15 +59,7 @@ impl View {
     }
 }
 
-pub(super) fn price(value: f64) -> String {
-    if value.abs() >= 1e9 || (value != 0. && value.abs() < 0.0001) {
-        format!("{value:.2e}")
-    } else if value != 0. && value.abs() < 0.01 {
-        format!("{value:.6}")
-    } else {
-        format!("{value:.2}")
-    }
-}
+use rode_extension_api::panel::format_price as price;
 pub(super) fn date(at: i64, intraday: bool) -> String {
     let Ok(at) = time::OffsetDateTime::from_unix_timestamp(at) else {
         return String::new();
@@ -83,26 +76,32 @@ pub(super) fn date(at: i64, intraday: bool) -> String {
 /// candles or crosshairs from escaping into controls at fractional UI scales.
 pub(super) fn show(
     ui: &mut egui::Ui,
-    series: &Series,
+    plot: &protocol::Chart,
     view: &mut View,
-    candles: bool,
-    volume: bool,
     palette: theme::Palette,
     height: f32,
 ) {
+    let protocol::Chart {
+        key,
+        title: label,
+        series,
+        candles,
+        volume,
+        ..
+    } = plot;
+    let (candles, volume) = (*candles, *volume);
     let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width().max(1.), height));
     // Search results and watchlist entries change widget counts above this plot.
     // Its focus identity must not depend on those auto-ID allocations.
-    let response = ui.interact(rect, ui.id().with("stocks-chart"), Sense::click_and_drag());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Other,
-            ui.is_enabled(),
-            "Stock price chart",
-        )
-    });
-    keyboard::target(ui, "Stock price chart", &response);
-    ui_probe::button(ui, "stocks-chart", &response);
+    let response = ui.interact(
+        rect,
+        ui.id().with(("extension-chart", key)),
+        Sense::click_and_drag(),
+    );
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), label));
+    keyboard::target(ui, label, &response);
+    ui_probe::button(ui, &format!("extension-chart:{key}"), &response);
     if response.clicked() {
         response.request_focus();
     }
@@ -157,6 +156,7 @@ pub(super) fn show(
         *view = View::default();
     }
     if response.has_focus() {
+        let mut moved = false;
         ui.input_mut(|i| {
             for key in [Key::Plus, Key::Equals] {
                 if i.consume_key(egui::Modifiers::NONE, key) {
@@ -168,15 +168,35 @@ pub(super) fn show(
             }
             if i.consume_key(egui::Modifiers::NONE, Key::ArrowLeft) {
                 view.pan(-0.15);
+                moved = true;
             }
             if i.consume_key(egui::Modifiers::NONE, Key::ArrowRight) {
                 view.pan(0.15);
+                moved = true;
             }
             if i.consume_key(egui::Modifiers::NONE, Key::Home) {
                 *view = View::default();
             }
         });
+        if moved {
+            ui.memory_mut(|memory| {
+                memory.move_focus(egui::FocusDirection::None);
+                memory.request_focus(response.id);
+            });
+        }
     }
+    ui_probe::value(
+        ui,
+        &format!("extension-chart-window:{key}"),
+        &response,
+        &format!("{:.5}:{:.5}", view.start, view.width),
+    );
+    ui_probe::value(
+        ui,
+        &format!("extension-chart-style:{key}"),
+        &response,
+        &format!("{candles}:{volume}"),
+    );
     let (first, end) = view.indices(count);
     let bars = &series.bars[first..end];
     let prices = egui::Rect::from_min_max(
@@ -434,12 +454,27 @@ mod tests {
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         if frame == 0 {
-                            ui.memory_mut(|m| m.request_focus(ui.id().with("stocks-chart")));
+                            ui.memory_mut(|m| {
+                                m.request_focus(ui.id().with(("extension-chart", "test")))
+                            });
                         }
                         for _ in 0..frame {
                             let _ = keyboard::button(ui, "Extra watchlist entry");
                         }
-                        show(ui, &series, &mut view, false, true, palette, 300.);
+                        show(
+                            ui,
+                            &protocol::Chart {
+                                key: "test".into(),
+                                title: "Price chart".into(),
+                                subtitle: String::new(),
+                                series: series.clone(),
+                                candles: false,
+                                volume: true,
+                            },
+                            &mut view,
+                            palette,
+                            300.,
+                        );
                     });
                 },
             );
@@ -450,7 +485,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|button| button["name"] == "stocks-chart")
+                .find(|button| button["name"] == "extension-chart:test")
                 .unwrap();
             assert_eq!(chart["focused"], true);
         }

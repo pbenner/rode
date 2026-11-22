@@ -10,7 +10,7 @@ fn disabling_features_removes_their_activity_menu_and_palette_entries_and_reenab
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     ui_probe::install_at(&ctx, path.clone());
-    app.dialog_input = "Stocks: Market charts and watchlist".into();
+    app.dialog_input = "Stocks: Open panel".into();
     for enabled in [false, true] {
         for feature in [
             Feature::Stocks,
@@ -63,7 +63,7 @@ fn disabling_features_removes_their_activity_menu_and_palette_entries_and_reenab
             "menu-item:Stocks",
             "menu-item:New Jupyter notebook",
             "menu-item:New Marp presentation",
-            "command-match:Stocks: Market charts and watchlist",
+            "command-match:Stocks: Open panel",
             "menu-debug",
             "menu-code",
         ] {

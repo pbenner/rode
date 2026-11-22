@@ -14,7 +14,8 @@ impl EditorApp {
                     && entry
                         .manifest
                         .as_ref()
-                        .is_some_and(|manifest| manifest.tool.format || manifest.tool.check)
+                        .and_then(crate::extensions::Manifest::project_tool)
+                        .is_some_and(|tool| tool.format || tool.check)
             })
     }
 
@@ -140,7 +141,6 @@ mod tests {
         let mut app = EditorApp::new(&cc, Startup::default());
         for (feature, commands) in [
             (Feature::ProjectBookmarks, vec![Command::BookmarkProject]),
-            (Feature::Stocks, vec![Command::Panel(Panel::Stocks)]),
             (Feature::Git, vec![Command::Panel(Panel::Git)]),
             (Feature::Monitor, vec![Command::Panel(Panel::Monitor)]),
             (
