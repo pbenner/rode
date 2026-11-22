@@ -83,6 +83,7 @@ pub(super) struct Sessions {
     confirm: Option<Confirm>,
     rename: Option<(String, String)>,
     persistence_pending: bool,
+    cleanups: Vec<Arc<AtomicBool>>,
     allocation_draft: slurm::Allocation,
     allocation_error: String,
 }
@@ -95,7 +96,12 @@ impl Sessions {
 
     /// Creation and persistence mutations must be acknowledged before leaving this window.
     pub(super) fn lifetime_pending(&self) -> bool {
-        self.starting || self.persistence_pending
+        self.starting
+            || self.persistence_pending
+            || self
+                .cleanups
+                .iter()
+                .any(|alive| alive.load(Ordering::Acquire))
     }
     /// Report whether runtime cleanup still awaits acknowledgement from its background owner.
     pub(super) fn runtime_shutdown_pending(&self) -> bool {
@@ -119,10 +125,6 @@ impl EditorApp {
             self.show_terminal = true;
             Terminal::focus(ctx);
         }
-    }
-    /// Include active and hidden attachments without creating another session owner.
-    pub(super) fn has_live_terminal_views(&self) -> bool {
-        self.sessions.has_live_views(self.terminal.as_ref())
     }
     /// Capture the active project sandbox plan, or the default plan rooted at the current
     /// directory.
@@ -325,6 +327,9 @@ impl EditorApp {
     /// Drain runtime completions, advance waiting exits and refresh visible session/scheduler caches.
     pub(super) fn session_tick(&mut self, ctx: &egui::Context) {
         self.poll_runtimes(ctx);
+        self.sessions
+            .cleanups
+            .retain(|alive| alive.load(Ordering::Acquire));
         if self.advance_exit(ctx) {
             return;
         }

@@ -69,7 +69,7 @@ impl EditorApp {
                 input.events = events;
             });
         }
-        let encrypted_dialog = self.dialog == Dialog::Encrypted;
+        let encrypted_dialog = matches!(self.dialog, Dialog::Encrypted | Dialog::Folder);
         let file_dialog = file_browser::is_file_dialog(&self.dialog);
         let response = egui::Modal::new(egui::Id::new("dialog"))
             .frame(layout::dialog_frame(&ctx.style(), palette))
@@ -145,12 +145,7 @@ impl EditorApp {
             && !(self.dialog == Dialog::TerminalExit && self.exit_pending())
             && !self.vaults.locking()
         {
-            if self.dialog == Dialog::Encrypted && self.vaults.cancel_folder_picker() {
-                self.dialog_focus = true;
-                ctx.request_repaint();
-            } else {
-                self.dialog = Dialog::None;
-            }
+            self.dialog = Dialog::None;
         }
         if file_dialog && !file_browser::is_file_dialog(&self.dialog) {
             self.file_browser.reset();

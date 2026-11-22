@@ -35,12 +35,18 @@ directories within that fixture, so parallel fixtures do not borrow a developer'
 service or contend over a global vault directory.
 
 Encrypted-project lock verification reads each same-account process's mount
-table, ignoring only the current host mount's kernel ID. Keep the ID comparison:
+table. Before unmount it permits the current host mount's kernel ID and copies
+whose parent and child propagation groups and underlying locations prove they
+receive the host unmount. Child propagation alone is insufficient: unmount events
+propagate through the containing mount (see the [kernel documentation](https://www.kernel.org/doc/html/latest/filesystems/sharedsubtree.html)).
+After unmount every remaining named copy blocks locking. Keep the ID comparison:
 path equality does not distinguish cloned namespaces, and reading `ns/mnt`
 symlinks unnecessarily requires ptrace permission on common SSH/service hosts.
-`cargo test -p rode-host-core vault::tests` includes a real non-dumpable process,
-same-path namespace copies, bind mounts and refused mount-table reads. The scan
-ignores procfs's exited-task errors but must preserve actual permission failures.
+The `vault::tests` and `vault::lock_tests` suites include a real non-dumpable
+process, same-path namespace copies, independent bind mounts, translated desktop
+service copies, post-unmount verification and refused mount-table reads. They
+require neither gocryptfs nor FUSE. The scan ignores procfs's exited-task errors
+but must preserve actual permission failures.
 
 `cargo test --test private_tmp` checks automatic writable temporary storage in
 both sandbox modes, including read-only projects nested under the private
@@ -1086,7 +1092,21 @@ Run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x
 
 ## Encrypted-project checks
 
-`cargo test --lib --test vaults` checks mount identity, leases, underlying mountpoint protection, initialization refusal for existing plaintext, buffer/exit protection, deferred cleanup, operation draining and password handling through desktop and headless Rust helpers. Native component tests also check shared view locks without FUSE. With installed gocryptfs it also initializes a real encrypted configuration and rejects an incorrect password. If working FUSE is available, the same test performs real encrypted writes, shared-window refusal, release and locking; `/dev/fuse` is absent in the current development environment, so that mount round trip could not be validated here. CI installs gocryptfs/FUSE tools; actual kernel mount availability still depends on the runner.
+`cargo test --lib --test vaults` checks mount identity, leases, underlying mountpoint protection, initialization refusal for existing plaintext, buffer/exit protection, deferred cleanup, operation draining and password handling through desktop and headless Rust helpers. Native component tests exercise ordinary unmount commands, busy refusal/retry, false-success rejection, sandbox mount copies, transient inherited descriptors and shared view locks using private mount-table fixtures and a fake unmount executable; these require neither gocryptfs nor FUSE. Notebook lifecycle tests hold a real host kernel's shutdown acknowledgement and verify that closing an encrypted project waits, and that a failed shutdown keeps the project open. With installed gocryptfs the integration test also initializes a real encrypted configuration and rejects an incorrect password. If working FUSE is available, the same test performs real encrypted writes, shared-window refusal, release and locking. Missing gocryptfs or unavailable FUSE is reported as a capability skip; it does not disable the fixture coverage. CI installs gocryptfs/FUSE tools; actual kernel mount availability still depends on the runner.
+
+Desktop regressions cover releasing active and hidden temporary shells, retaining
+their cleanup across ordinary project close, and waiting before encrypted lock.
+Debugger streams use their coordinator's shutdown barrier. PDF checks run the
+bundled renderer, stop and join text workers, prevent reader restarts during lock,
+and recover from the retained snapshot after a refused close. These checks need
+neither gocryptfs nor FUSE.
+
+Interrupted-coordinator regressions stop the protocol peer, then exercise Close
+project, lock and Quit through fresh lock-only replies. They cover operation
+draining, busy refusal and retry after the one-shot helper exits, dirty buffers,
+retained storage identity and matching SSH reconnection. A host fixture verifies
+that an existing mount can be managed from mountinfo without statting a dead
+FUSE root; unmounted paths retain their symlink checks.
 
 FUSE access does not guarantee permission to inspect other same-account mount namespaces. In that specific case, the real-mount test requires an explicitly unlocked refusal and readable mounted content, then stops its own lease peers and normally unmounts only its fixture. Other close failures still fail the test, with both protocol replies included in the assertion. The FUSE-independent component check verifies that namespace-verification refusal retains the final view lease and that locking succeeds after the restriction is removed; the application's namespace checks remain required.
 

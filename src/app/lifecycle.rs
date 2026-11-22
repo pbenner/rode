@@ -15,6 +15,7 @@ impl EditorApp {
     }
     /// Cancel actions waiting on failed acknowledgements and retain the error as a visible notice.
     pub(super) fn abort_lifecycle(&mut self, error: String, ctx: &egui::Context) {
+        self.abort_encrypted_lock(&error);
         if self.pending.waiting_for_ack() {
             self.cancel_guarded_action();
             self.focus_editor_in(self.focused_editor(), ctx);
@@ -29,7 +30,7 @@ impl EditorApp {
     /// Runtime views retain ordinary errors locally; a new error must also stop any
     /// ownership transition that is waiting on submitted work or cleanup.
     pub(super) fn report_runtime_failure(&mut self, error: Option<String>, ctx: &egui::Context) {
-        if (self.exit_pending() || self.pending.waiting_for_ack())
+        if (self.exit_pending() || self.pending.waiting_for_ack() || self.vaults.locking())
             && let Some(error) = error
         {
             self.abort_lifecycle(error, ctx);

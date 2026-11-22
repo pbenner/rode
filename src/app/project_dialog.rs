@@ -19,7 +19,9 @@ pub(super) struct State {
     pub error: Option<String>,
     pub policy_path: String,
     pub sandbox: sandbox::Options,
+    pub encrypted: bool,
     selection: navigation::List,
+    filter: String,
 }
 
 /// A browse intent captures policy before later controls in the same frame edit it.
@@ -30,9 +32,26 @@ pub(super) struct Browse {
     pub options: sandbox::Options,
 }
 
+/// Borrow UI drafts from their owners without transferring lifecycle authority.
+struct Form<'a> {
+    host: &'a str,
+    connected: bool,
+    opening: vaults::Opening<'a>,
+    presets: &'a mut sandbox_presets::State,
+    focus: &'a mut bool,
+    show_hidden: &'a mut bool,
+}
+
 enum Intent {
     Browse(Browse),
     Open {
+        path: String,
+        remote: bool,
+        options: sandbox::Options,
+        encrypted: bool,
+    },
+    Host(bool),
+    LockExisting {
         path: String,
         remote: bool,
         options: sandbox::Options,
@@ -133,14 +152,22 @@ impl EditorApp {
             .and_then(|w| w.remote.as_ref())
             .map(|r| r.profile.endpoint())
             .unwrap_or_default();
+        let connected = self
+            .workspace
+            .as_ref()
+            .is_some_and(|w| w.connected && w.remote.is_some());
         let old_hidden = self.show_hidden;
         let intents = self.project_picker.ui(
             ui,
             self.themes.active().palette,
-            &host,
-            &mut self.sandbox_presets,
-            &mut self.dialog_focus,
-            &mut self.show_hidden,
+            Form {
+                host: &host,
+                connected,
+                opening: self.vaults.opening(),
+                presets: &mut self.sandbox_presets,
+                focus: &mut self.dialog_focus,
+                show_hidden: &mut self.show_hidden,
+            },
         );
         if self.show_hidden != old_hidden {
             self.explorer_state.tree_dirty = true;
@@ -152,7 +179,12 @@ impl EditorApp {
                     path,
                     remote,
                     options,
+                    encrypted,
                 } => {
+                    if encrypted {
+                        self.open_encrypted_from_picker(path, remote, options, false, ctx);
+                        continue;
+                    }
                     self.sandbox_defaults = options.clone();
                     self.workbench.preferences_pending = true;
                     self.dialog = Dialog::None;
@@ -165,27 +197,68 @@ impl EditorApp {
                         ctx,
                     );
                 }
-                Intent::Cancel => self.dialog = Dialog::None,
+                Intent::Host(remote) => self.select_project_dialog_host(remote),
+                Intent::LockExisting {
+                    path,
+                    remote,
+                    options,
+                } => self.open_encrypted_from_picker(path, remote, options, true, ctx),
+                Intent::Cancel => {
+                    self.cancel_encrypted_dialog();
+                    self.project_picker.invalidate();
+                    self.dialog = Dialog::None;
+                }
             }
         }
+    }
+    /// Changing hosts invalidates listing authority and clears credentials, while
+    /// retaining the access draft for the user's explicit review.
+    pub(super) fn select_project_dialog_host(&mut self, remote: bool) {
+        if remote
+            && self
+                .workspace
+                .as_ref()
+                .is_none_or(|w| !w.connected || w.remote.is_none())
+        {
+            self.project_picker.error =
+                Some("Connect SSH before browsing folders on that host.".into());
+            return;
+        }
+        let path = if remote {
+            self.workspace.as_ref().unwrap().root.clone()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let encrypted = self.project_picker.encrypted;
+        let options = self.project_picker.sandbox.clone();
+        self.project_picker
+            .open(remote, path, String::new(), options);
+        self.project_picker.encrypted = encrypted;
+        self.vaults.opening().clear_credentials();
+        self.dialog_focus = true;
     }
 }
 
 impl State {
     /// Browse on the selected host and review access before preparing a project.
-    fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        palette: theme::Palette,
-        host: &str,
-        presets: &mut sandbox_presets::State,
-        focus: &mut bool,
-        show_hidden: &mut bool,
-    ) -> Vec<Intent> {
+    fn ui(&mut self, ui: &mut egui::Ui, palette: theme::Palette, form: Form<'_>) -> Vec<Intent> {
+        let Form {
+            host,
+            connected,
+            mut opening,
+            presets,
+            focus,
+            show_hidden,
+        } = form;
         let ctx = ui.ctx().clone();
         let mut intents = Vec::new();
         let top = ui.cursor().min.y;
-        let open_by_key = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Enter));
+        let busy = opening.busy();
+        let open_by_key =
+            !busy && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Enter));
         let title = |ui: &mut egui::Ui| {
             ui.label(
                 RichText::new("Open project")
@@ -227,14 +300,42 @@ impl State {
             title(ui);
             host_label(ui);
         }
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Location");
+                let local = crate::keyboard::selectable_label(ui, !self.remote, "This computer");
+                ui_probe::button(ui, "project-dialog-location-local", &local);
+                if local.clicked() {
+                    intents.push(Intent::Host(false));
+                }
+                let remote = ui.add_enabled(
+                    connected,
+                    crate::keyboard::Button::selectable(self.remote, "SSH host"),
+                );
+                ui_probe::button(ui, "project-dialog-location-ssh", &remote);
+                if remote.clicked() {
+                    intents.push(Intent::Host(true));
+                }
+            });
+        });
         ui.add_space(12.);
-        let (path, browse) = self.project_folder_path(ui, focus);
+        let (path, browse) = ui
+            .add_enabled_ui(!busy, |ui| self.project_folder_path(ui, focus))
+            .inner;
         if let Some(path) = browse {
             intents.push(Intent::Browse(self.begin(path)));
         }
-        if let Some(error) = &self.error {
+        let mut messages = Vec::new();
+        if let Some(error) = self.error.as_deref() {
+            messages.push(error);
+        }
+        if self.encrypted && !opening.message().is_empty() {
+            messages.push(opening.message());
+        }
+        let message = (!messages.is_empty()).then(|| messages.join("\n"));
+        if let Some(error) = &message {
             let mut text = egui::text::LayoutJob::simple(
-                error.clone(),
+                error.to_owned(),
                 egui::TextStyle::Body.resolve(ui.style()),
                 palette.error,
                 ui.available_width(),
@@ -243,13 +344,22 @@ impl State {
             text.wrap.break_anywhere = true;
             let response = ui.add(egui::Label::new(text)).on_hover_text(error);
             ui_probe::button(ui, "project-dialog-error", &response);
+            if self.encrypted && !busy {
+                ui_probe::button(ui, "vault-operation-complete", &response);
+            }
         }
         ui.add_space(12.);
 
         // Reserve the footer before measuring the scrollable body. Neither an
         // expanded rules editor nor a short viewport may hide confirmation.
-        let footer_height =
-            layout::control_height(ui).max(palette.ui.unwrap_or_default().control_height) + 24.;
+        let footer_height = layout::control_height(ui)
+            .max(palette.ui.unwrap_or_default().control_height)
+            + 24.
+            + if self.encrypted && busy {
+                layout::control_height(ui) + ui.spacing().item_spacing.y
+            } else {
+                0.
+            };
         let body_height =
             (ctx.content_rect().height() - 64. - (ui.cursor().min.y - top) - footer_height).max(1.);
         egui::ScrollArea::vertical()
@@ -258,10 +368,18 @@ impl State {
             .min_scrolled_height(body_height)
             .max_height(body_height)
             .show(ui, |ui| {
+                ui.add_enabled_ui(!busy, |ui| {
                 if let Some(path) = self.project_folder_browser(ui, &ctx, palette, show_hidden) {
                     intents.push(Intent::Browse(self.begin(path)));
                 }
                 ui.add_space(12.);
+                let encrypted = crate::keyboard::checkbox(ui, &mut self.encrypted, "Encrypted storage (gocryptfs)");
+                ui_probe::button(ui, "project-dialog-encrypted", &encrypted);
+                if encrypted.changed() { opening.clear_credentials(); }
+                if self.encrypted {
+                    if opening.ui(ui) { intents.push(Intent::LockExisting { path: self.path.clone(), remote: self.remote, options: self.sandbox.clone() }); }
+                    ui.add_space(12.);
+                }
                 ui.horizontal_wrapped(|ui| {
                     workbench::sandbox_backend_ui(ui, &mut self.sandbox);
                 });
@@ -290,9 +408,16 @@ impl State {
                 if options.header_response.clicked() {
                     ui.scroll_to_rect(options.header_response.rect, Some(Align::Min));
                 }
+                });
             });
         if !self.loading && self.error.is_none() && self.path == self.policy_path {
             ui_probe::button(ui, "project-dialog-ready", &path);
+        }
+        if self.encrypted && busy {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Finishing encrypted-project operation…");
+            });
         }
         ui.add_space(8.);
         ui.separator();
@@ -302,8 +427,22 @@ impl State {
                 ui.label(palette.tag("Ctrl+Enter to open"));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let open = palette.primary(ui, "Open project");
+                let label = if self.encrypted {
+                    if opening.create() {
+                        "Create & unlock"
+                    } else {
+                        "Unlock & open"
+                    }
+                } else {
+                    "Open project"
+                };
+                let open = ui
+                    .add_enabled_ui(!busy, |ui| palette.primary(ui, label))
+                    .inner;
                 ui_probe::button(ui, "project-dialog-open", &open);
+                if self.encrypted {
+                    ui_probe::button(ui, "vault-unlock", &open);
+                }
                 if open.clicked() || open_by_key {
                     let options = self.sandbox.clone();
                     if let Err(error) = options.validate() {
@@ -313,11 +452,15 @@ impl State {
                             path: self.path.clone(),
                             remote: self.remote,
                             options,
+                            encrypted: self.encrypted,
                         });
                     }
                 }
                 let cancel = crate::keyboard::button(ui, "Cancel");
                 ui_probe::button(ui, "project-dialog-cancel", &cancel);
+                if self.encrypted {
+                    ui_probe::button(ui, "vault-cancel", &cancel);
+                }
                 if cancel.clicked() {
                     intents.push(Intent::Cancel);
                 }
@@ -363,6 +506,7 @@ impl State {
                     ),
                 );
                 ui_probe::button(ui, "project-dialog-path", &path);
+                ui_probe::value(ui, "project-dialog-path-value", &path, &self.path);
                 let enter = (path.has_focus() || path.lost_focus())
                     && ui.input(|i| i.key_pressed(Key::Enter));
                 let button = ui.add_sized(
@@ -386,8 +530,14 @@ impl State {
         palette: theme::Palette,
         show_hidden: &mut bool,
     ) -> Option<String> {
-        let count = self
+        let query_text = self.filter.to_lowercase();
+        let entries: Vec<_> = self
             .entries
+            .iter()
+            .filter(|entry| entry.name.to_lowercase().contains(&query_text))
+            .cloned()
+            .collect();
+        let count = entries
             .iter()
             .filter(|entry| *show_hidden || !entry.name.starts_with('.'))
             .count();
@@ -411,11 +561,18 @@ impl State {
                         ui_probe::button(ui, "project-dialog-show-hidden", &hidden);
                     });
                 });
+                let filter = ui.add(crate::keyboard::named(
+                    "Filter folders",
+                    egui::TextEdit::singleline(&mut self.filter)
+                        .hint_text("Filter folders…")
+                        .desired_width(f32::INFINITY),
+                ));
+                ui_probe::button(ui, "project-dialog-filter", &filter);
                 ui.add_space(6.);
                 let row_pitch = layout::control_height(ui).max(25.) + 2.;
                 let height = (count as f32 * row_pitch + 4.)
                     .clamp(64., (ctx.content_rect().height() * 0.3).clamp(64., 220.));
-                let query = format!("folder:{}:{}", self.token, *show_hidden);
+                let query = format!("folder:{}:{}:{}", self.token, *show_hidden, self.filter);
                 let listing = ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), height),
                     Layout::top_down(Align::Min),
@@ -423,7 +580,7 @@ impl State {
                         file_browser::rows(
                             ui,
                             "project-folder-browser",
-                            &self.entries,
+                            &entries,
                             *show_hidden,
                             &mut self.selection,
                             &query,

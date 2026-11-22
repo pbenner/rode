@@ -38,7 +38,8 @@ fn control(state: &serde_json::Value, name: &str) -> egui::Rect {
 fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_windows() {
     for theme in ["phosphor", "studio-neutral"] {
         for scale in [1., 1.5] {
-            for remote in [false, true] {
+            for (remote, encrypted) in [(false, false), (true, false), (false, true), (true, true)]
+            {
                 let directory = tempfile::tempdir().unwrap();
                 let state = directory.path().join("ui.json");
                 let ctx = egui::Context::default();
@@ -58,6 +59,7 @@ fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_window
                         .set_fixture(Some(crate::app::tests::remote_workspace()));
                 }
                 app.set_dialog(Dialog::Folder);
+                app.project_picker.encrypted = encrypted;
                 app.project_picker.needs_load = false;
                 app.project_picker.loading = false;
                 app.project_picker.sandbox.enabled = true;

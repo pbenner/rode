@@ -88,6 +88,12 @@ impl Terminal {
         self.alive.load(Ordering::Acquire)
     }
 
+    /// Shell transports own an attachment/process; debugger streams are stopped
+    /// through their coordinator and must not block project cleanup as shells.
+    pub(crate) fn owns_shell(&self) -> bool {
+        matches!(self.backend, Backend::Pty { .. } | Backend::Native { .. })
+    }
+
     /// Retain bounded parsed output without retaining the PTY, input writer or
     /// process ownership. Late reader output remains visible after the original
     /// terminal is dropped, so an SSH exit cannot race away its final error.

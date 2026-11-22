@@ -238,6 +238,16 @@ impl images::PreviewCache for Source {
     }
 }
 impl Source {
+    /// Release the retained interpreter while keeping the immutable snapshot
+    /// and cached pages usable after a refused project close. Call on a worker.
+    pub fn close_renderer(&self) {
+        let renderer = self
+            .renderer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        drop(renderer);
+    }
     /// Open a private text reader on a background thread. No host tools or files are consulted.
     pub fn text_reader(&self, cancel: &AtomicBool) -> Result<TextReader> {
         ensure!(
@@ -376,6 +386,29 @@ fn limit_process(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn closing_a_renderer_retains_cached_pages_and_can_restart_from_the_snapshot() {
+        let budget = Arc::new(images::Budget::default());
+        let loaded = load_bytes(
+            include_bytes!("../tests/fixtures/pages.pdf").to_vec(),
+            1,
+            &budget,
+            128,
+        )
+        .unwrap();
+        assert!(loaded.source.renderer.lock().unwrap().is_some());
+        loaded.source.close_renderer();
+        assert!(loaded.source.renderer.lock().unwrap().is_none());
+        assert!(Arc::ptr_eq(
+            &loaded.pixels.pixels,
+            &loaded.source.cached(1, 128).unwrap().pixels
+        ));
+        loaded
+            .source
+            .render(2, &budget, 128, &AtomicBool::new(false))
+            .unwrap();
+        assert!(loaded.source.renderer.lock().unwrap().is_some());
+    }
     #[test]
     fn memory_pressure_evicts_page_caches_without_invalidating_displayed_pixels() {
         let budget = Arc::new(images::Budget::default());

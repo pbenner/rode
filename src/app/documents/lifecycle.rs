@@ -69,6 +69,30 @@ impl Documents {
         }
     }
 
+    /// Keep page snapshots for recovery, but retire all standalone and embedded
+    /// interpreters before locking their source project.
+    pub(in crate::app) fn close_readers(&mut self) -> Vec<crate::app::pdf_view::ReaderCleanup> {
+        let mut jobs = Vec::new();
+        for doc in &mut self.items {
+            if let Some(view) = doc.pdf_mut() {
+                jobs.push(view.close_readers());
+            }
+            if let Some(view) = doc.marp_mut().and_then(|view| view.pdf.as_mut()) {
+                jobs.push(view.close_readers());
+            }
+        }
+        jobs
+    }
+    pub(in crate::app) fn resume_readers(&mut self) {
+        for doc in &mut self.items {
+            if let Some(view) = doc.pdf_mut() {
+                view.resume_readers();
+            }
+            if let Some(view) = doc.marp_mut().and_then(|view| view.pdf.as_mut()) {
+                view.resume_readers();
+            }
+        }
+    }
     /// Vault locking invalidates derived jobs without clearing pending saves.
     pub(in crate::app) fn invalidate_previews(&mut self) {
         for doc in &mut self.items {

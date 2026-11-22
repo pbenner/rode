@@ -7,8 +7,13 @@ use super::*;
 use crate::vault::{self, Client};
 use std::sync::atomic::AtomicUsize;
 
-mod picker;
+#[cfg(test)]
+mod opening_tests;
+#[cfg(test)]
+mod recovery_tests;
+
 mod view;
+pub(super) use view::Opening;
 
 /// RAII count of captured operations that may still use the decrypted mount;
 /// dropping the last guard allows the lock sequence to proceed.
@@ -90,6 +95,7 @@ pub(super) struct State {
     needs_lock: bool,
     locking: bool,
     lock_sent: bool,
+    close_views: bool,
     after_lock: AfterLock,
     lost: bool,
     released: bool,
@@ -101,7 +107,6 @@ pub(super) struct State {
     remote: bool,
     options: sandbox::Options,
     message: String,
-    picker: picker::Picker,
 }
 impl State {
     /// Keep lock controls reachable without exposing lease lifecycle mutations
@@ -169,15 +174,20 @@ impl State {
     pub(super) fn set_locking_fixture(&mut self, locking: bool) {
         self.locking = locking;
     }
+    #[cfg(test)]
+    /// Inspect whether host unmount has been requested in lifecycle regressions.
+    pub(super) fn lock_sent_fixture(&self) -> bool {
+        self.lock_sent
+    }
     /// Project the next quit action from active, lost and cleanup lease state. Unacknowledged
     /// cleanup cannot be reported as a closed mount.
     pub(super) fn quit_policy(&self) -> QuitPolicy {
-        if self.active.is_some() && self.lost && self.released {
+        if self.pending.is_some() || self.staged.is_some() || self.cleanup_pending() {
+            QuitPolicy::RecoveryRequired
+        } else if self.active.is_some() && self.lost && self.released {
             QuitPolicy::ClearLostProject
         } else if self.active.is_some() {
             QuitPolicy::Lock
-        } else if self.pending.is_some() || self.staged.is_some() || self.cleanup_pending() {
-            QuitPolicy::RecoveryRequired
         } else {
             QuitPolicy::Close
         }
@@ -189,6 +199,50 @@ impl State {
     /// Whether an active lease was lost with its connection and requires explicit unlock recovery.
     pub(super) fn recovery_required(&self) -> bool {
         self.lost && self.active.is_some()
+    }
+    /// Recover mount management from retained storage identity without reopening
+    /// decrypted files or accepting a different host from the project picker.
+    fn recovery_lock_request(
+        &self,
+        workspace: Option<&Workspace>,
+    ) -> anyhow::Result<(vault::Open, Option<Remote>)> {
+        let client = self.active.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("No encrypted project is available for lock verification.")
+        })?;
+        let info = client.info.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("The encrypted project's storage identity is unavailable.")
+        })?;
+        let remote = if let Some(previous) = &client.remote {
+            Some(
+                workspace
+                    .filter(|workspace| workspace.connected)
+                    .and_then(|workspace| workspace.remote.as_ref())
+                    .filter(|remote| {
+                        workspace::ConnectionId::for_profile(&remote.profile)
+                            == workspace::ConnectionId::for_profile(&previous.profile)
+                    })
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Reconnect SSH to {} before verifying and locking this encrypted project. Unlocking it again is not required.",
+                            previous.profile.endpoint()
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        let mut settings = self.settings.clone();
+        settings.cipherdir = info.cipherdir.clone();
+        Ok((
+            vault::Open {
+                settings,
+                password: String::new(),
+                create: false,
+                lock_only: true,
+            },
+            remote,
+        ))
     }
     /// Move the active lease into an opaque handoff before project-view teardown. The caller must
     /// return it to this owner afterward.
@@ -308,60 +362,109 @@ impl State {
     }
 }
 impl EditorApp {
+    /// A failed project-tool shutdown must not advance a pending host unmount.
+    pub(super) fn abort_encrypted_lock(&mut self, error: &str) {
+        if self.vaults.locking && !self.vaults.lock_sent {
+            self.vaults.locking = false;
+            self.vaults.after_lock = AfterLock::Project;
+            self.vaults.message = format!("Still UNLOCKED. Project cleanup failed: {error}");
+        }
+    }
     /// Cancel the current unlock/create presentation and release any unfinished staged client.
     pub(super) fn cancel_encrypted_dialog(&mut self) {
-        self.vaults.cancel_folder_picker();
         self.vaults.password.clear();
         self.vaults.confirmation.clear();
         if let Some(client) = self.vaults.pending.take() {
             self.vaults.release(client);
         }
     }
-    /// Open encrypted-project controls without implicitly creating or unlocking a filesystem.
+    /// The encrypted-open command selects encryption in the standard picker.
+    /// Active and interrupted mounts retain their separate management controls.
     pub(super) fn encrypted_dialog(&mut self) {
-        self.vaults.cancel_folder_picker();
-        if !self.vaults.needs_lock {
-            self.vaults.remote = self
-                .vaults
-                .active
-                .as_ref()
-                .filter(|_| self.vaults.lost)
-                .map_or_else(
-                    || self.workspace.as_ref().is_some_and(|w| w.remote.is_some()),
-                    |client| client.remote.is_some(),
-                );
+        if self.vaults.active.is_some() || self.vaults.cleanup_pending() {
+            self.set_dialog(Dialog::Encrypted);
+            return;
         }
-        self.vaults.options = self.project_picker.sandbox.clone();
+        self.encrypted_open_dialog();
+    }
+    /// Reopening file access is an explicit recovery action, separate from
+    /// verifying an interrupted mount for Close project or Quit.
+    fn encrypted_open_dialog(&mut self) {
+        let remote = self
+            .vaults
+            .active
+            .as_ref()
+            .filter(|_| self.vaults.lost)
+            .map_or_else(
+                || self.workspace.as_ref().is_some_and(|w| w.remote.is_some()),
+                |client| client.remote.is_some(),
+            );
+        let path = self
+            .vaults
+            .active
+            .as_ref()
+            .filter(|_| self.vaults.lost)
+            .and_then(|client| client.info.as_ref())
+            .map(|info| info.cipherdir.clone())
+            .unwrap_or_else(|| self.vaults.settings.cipherdir.clone());
+        self.set_dialog(Dialog::Folder);
+        self.project_picker.encrypted = true;
+        self.project_picker.remote = remote;
+        if !path.is_empty() {
+            self.project_picker.path = path;
+            self.project_picker.policy_path.clear();
+            if let Some(options) = self.saved_sandbox_for(&self.project_picker.path, remote) {
+                self.project_picker.sandbox = options;
+            }
+        }
         self.vaults.password.clear();
         self.vaults.confirmation.clear();
-        self.set_dialog(Dialog::Encrypted);
     }
-    /// Explorer selects encrypted storage on its own host. Opening the form is
-    /// inert; creation and unlocking still require explicit confirmation.
+    /// Explorer preselection remains inert until the shared form is submitted.
     pub(super) fn encrypted_dialog_at(&mut self, path: String) {
         self.encrypted_dialog();
-        if self.vaults.active.is_none()
+        if self.dialog == Dialog::Folder
             && self.vaults.pending.is_none()
             && self.vaults.staged.is_none()
             && !self.vaults.cleanup_pending()
         {
-            self.vaults.settings.cipherdir = path;
+            self.project_picker.path = path;
+            self.project_picker.policy_path.clear();
             self.vaults.create = false;
             self.vaults.message.clear();
         }
     }
+    /// Snapshot the shared folder/host/access draft only at explicit submission.
+    pub(super) fn open_encrypted_from_picker(
+        &mut self,
+        path: String,
+        remote: bool,
+        options: sandbox::Options,
+        lock_only: bool,
+        ctx: &egui::Context,
+    ) {
+        if !lock_only || !self.vaults.needs_lock {
+            self.vaults.settings.cipherdir = path;
+            self.vaults.remote = remote;
+            self.vaults.options = options;
+        }
+        self.open_encrypted(lock_only, ctx);
+    }
     fn open_encrypted(&mut self, lock_only: bool, ctx: &egui::Context) {
+        if lock_only && self.vaults.active.is_some() {
+            self.guarded(Action::LockEncrypted, ctx);
+            return;
+        }
         if self.vaults.pending.is_some() || self.vaults.staged.is_some() {
             return;
         }
         if !self.vaults.closing.is_empty() || (self.vaults.needs_lock && !lock_only) {
-            self.notify("Finish locking the previous encrypted mount before opening another project. Use Lock existing mount.", true);
+            self.encrypted_open_failed("Finish locking the previous encrypted mount before opening another project. Use Lock existing mount.".into());
             return;
         }
         if self.vaults.active.is_some() && !self.vaults.lost {
-            self.notify(
-                "Lock the current encrypted project before opening another one.",
-                false,
+            self.encrypted_open_failed(
+                "Lock the current encrypted project before opening another one.".into(),
             );
             return;
         }
@@ -371,11 +474,11 @@ impl EditorApp {
             .validate()
             .and_then(|_| self.vaults.options.validate())
         {
-            self.notify(error.to_string(), true);
+            self.encrypted_open_failed(error.to_string());
             return;
         }
         if !lock_only && self.vaults.create && self.vaults.password != self.vaults.confirmation {
-            self.notify("The new encrypted-project passwords do not match.", true);
+            self.encrypted_open_failed("The new encrypted-project passwords do not match.".into());
             return;
         }
         let remote = if self.vaults.remote {
@@ -385,9 +488,8 @@ impl EditorApp {
                 .filter(|w| w.connected)
                 .and_then(|w| w.remote.clone())
             else {
-                self.notify(
-                    "Connect SSH before unlocking a remote encrypted project.",
-                    true,
+                self.encrypted_open_failed(
+                    "Connect SSH before unlocking a remote encrypted project.".into(),
                 );
                 return;
             };
@@ -409,8 +511,14 @@ impl EditorApp {
                 self.vaults.message =
                     "Contacting encrypted filesystem on the selected host…".into();
             }
-            Err(error) => self.notify(format!("{error:#}"), true),
+            Err(error) => self.encrypted_open_failed(format!("{error:#}")),
         }
+    }
+    /// The shared form owns foreground feedback; background notices alone can
+    /// be hidden behind it and must not swallow immediate validation failures.
+    fn encrypted_open_failed(&mut self, message: String) {
+        self.vaults.message = message.clone();
+        self.notify(message, true);
     }
     /// Begin guarded locking only after owned jobs/views can stop. The captured
     /// continuation runs after verified cleanup; refusal keeps the window recoverable.
@@ -418,13 +526,20 @@ impl EditorApp {
         if self.vaults.active.is_none() {
             return;
         }
-        if self.vaults.lost {
-            self.encrypted_dialog();
-            self.notify("The encrypted project's lock state is unknown. Reconnect and unlock it again before locking or exiting.", true);
+        if self.vaults.pending.is_some()
+            || self.vaults.staged.is_some()
+            || self.vaults.cleanup_pending()
+        {
+            self.set_dialog(Dialog::Encrypted);
+            self.notify("Finish the other encrypted-project operation and its cleanup before locking this project or exiting.", true);
             return;
         }
-        if self.runtime_work_pending() || self.has_live_terminal_views() {
-            self.notify("Stop terminal sessions with Sessions → End before locking this encrypted project or exiting RODE. Detached/shared jobs must be stopped too.", true);
+        if self.vaults.lost
+            && let Err(error) = self.vaults.recovery_lock_request(self.workspace.as_ref())
+        {
+            self.vaults.message = error.to_string();
+            self.set_dialog(Dialog::Encrypted);
+            self.notify(error.to_string(), true);
             return;
         }
         if self.agents.chat.persistent() && (self.agents.chat.connected() || self.agents.chat.busy)
@@ -440,41 +555,87 @@ impl EditorApp {
         self.stop_latex();
         self.cancel_extensions();
         self.documents.invalidate_previews();
+        self.close_project_readers(ctx);
         self.vaults.locking = true;
         self.vaults.lock_sent = false;
+        self.vaults.close_views = true;
         self.vaults.after_lock = after;
         self.vaults.message = "Waiting for project operations to finish before locking…".into();
         self.set_dialog(Dialog::Encrypted);
         ctx.request_repaint();
     }
+    /// A lost coordinator is replaced with a one-shot lock-only client. Normal
+    /// leases retain their existing command protocol and shared-view policy.
+    fn send_encrypted_lock(
+        &mut self,
+        start: impl FnOnce(vault::Open, Option<Remote>) -> anyhow::Result<Client>,
+    ) -> anyhow::Result<()> {
+        if self.vaults.lost {
+            let (request, remote) = self.vaults.recovery_lock_request(self.workspace.as_ref())?;
+            if let Some(previous) = &self.vaults.active
+                && !previous.session.is_finished()
+            {
+                // Its own lingering lease must not be mistaken for another
+                // window's responsibility when Quit checks shared ownership.
+                previous.session.stop();
+                self.vaults.message =
+                    "Waiting for the interrupted encrypted-project helper to finish…".into();
+                return Ok(());
+            }
+            let info = self
+                .vaults
+                .active
+                .as_ref()
+                .and_then(|client| client.info.clone());
+            let mut client = start(request, remote)?;
+            client.info = info;
+            self.vaults.active = Some(client);
+        } else if let Some(client) = &self.vaults.active {
+            client.session.send(&serde_json::json!({
+                "action": if self.vaults.after_lock == AfterLock::Quit { "close" } else { "lock" }
+            }))?;
+        }
+        self.vaults.lock_sent = true;
+        self.vaults.message = "Verifying and locking encrypted filesystem…".into();
+        Ok(())
+    }
     /// Advance unlock/lease/unmount acknowledgements, waiting for tracked work and
     /// controller cleanup before sending lock; failures never publish a locked state.
     pub(super) fn poll_vaults(&mut self, ctx: &egui::Context) {
+        if self.vaults.locking && !self.vaults.lock_sent && self.vaults.close_views {
+            match self.sessions.close_for_lock(&mut self.terminal) {
+                Ok(closed) => self.vaults.close_views = !closed,
+                Err(error) => {
+                    self.abort_encrypted_lock(&error);
+                    self.notify(error, true);
+                }
+            }
+        }
+        if self.vaults.locking
+            && !self.vaults.lock_sent
+            && !self.vaults.close_views
+            && !self.runtime_work_pending()
+            && !self.agent_installation_pending()
+            && self.vaults.work.load(Ordering::Acquire) == 0
+            && self.vaults.active.is_some()
+        {
+            let wake = ctx.clone();
+            if let Err(error) = self.send_encrypted_lock(|request, remote| {
+                Client::start(request, remote, Arc::new(move || wake.request_repaint()))
+            }) {
+                self.vaults.locking = false;
+                self.vaults.message = error.to_string();
+                self.notify(error.to_string(), true);
+            }
+        }
         // A disconnected lease can outlive its project. Its late events must not suspend or
         // discard the local CWD and new buffers installed after the SSH transport was released.
+        // Recovery may have replaced the old SSH transport with its authenticated successor.
         let active_project = self.vaults.active.as_ref().is_some_and(|client| {
             self.workspace
                 .as_ref()
                 .is_some_and(|w| client.matches(&w.root, w.remote.as_ref()))
         });
-        if self.vaults.locking
-            && !self.vaults.lock_sent
-            && !self.debugger_stopping()
-            && !self.agent_installation_pending()
-            && self.vaults.work.load(Ordering::Acquire) == 0
-            && let Some(client) = &self.vaults.active
-        {
-            match client.session.send(&serde_json::json!({"action": if self.vaults.after_lock == AfterLock::Quit { "close" } else { "lock" }})) {
-                Ok(()) => {
-                    self.vaults.lock_sent = true;
-                    self.vaults.message = "Locking encrypted filesystem…".into();
-                }
-                Err(error) => {
-                    self.vaults.locking = false;
-                    self.notify(error.to_string(), true);
-                }
-            }
-        }
         let mut open = None;
         let mut closed = None;
         let mut errors = vec![];
@@ -524,6 +685,10 @@ impl EditorApp {
                                 message,
                             }) => {
                                 if self.vaults.locking && self.vaults.lock_sent {
+                                    if self.vaults.lost {
+                                        // Lock-only recovery returns once, including on refusal.
+                                        client.finished = true;
+                                    }
                                     closed = Some((info, locked, message, true));
                                 } else {
                                     self.vaults.lost = true;
@@ -543,17 +708,23 @@ impl EditorApp {
                         }
                     }
                     crate::process::Event::Error(error) => {
+                        let retiring =
+                            self.vaults.lost && self.vaults.locking && !self.vaults.lock_sent;
                         self.vaults.lost = true;
                         if active_project {
                             self.workspace.suspend_project();
                         }
-                        errors.push(error);
+                        if !retiring {
+                            errors.push(error);
+                        }
                     }
                     crate::process::Event::Exited(_) => {
+                        let expected = client.finished
+                            || (self.vaults.lost && self.vaults.locking && !self.vaults.lock_sent);
                         client.finished = true;
-                        if closed.is_none() {
+                        if closed.is_none() && !expected {
                             self.vaults.lost = true;
-                            errors.push("Encrypted-project connection ended; its lock state is unknown. Reconnect and unlock explicitly before accessing files.".into());
+                            errors.push("Encrypted-project connection ended; its lock state is unknown. Reconnect SSH if needed, then verify and lock the mount or unlock it to restore file access.".into());
                             if active_project {
                                 self.workspace.suspend_project();
                             }
@@ -707,6 +878,9 @@ impl EditorApp {
         {
             self.vaults.release(client);
         }
+        if !self.vaults.locking && self.vaults.work.load(Ordering::Acquire) == 0 {
+            self.documents.resume_readers();
+        }
         if self.vaults.locking || !self.vaults.closing.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -727,12 +901,12 @@ fn password_field(ui: &mut egui::Ui, value: &mut String, id: &str, label: &str) 
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::app) mod tests {
     use super::*;
     fn active(locked: bool) -> (EditorApp, egui::Context) {
         active_reply(locked, "Stop jobs first")
     }
-    fn active_reply(locked: bool, message: &str) -> (EditorApp, egui::Context) {
+    pub(in crate::app) fn active_reply(locked: bool, message: &str) -> (EditorApp, egui::Context) {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
@@ -769,7 +943,7 @@ mod tests {
         app.documents[0].set_dirty_fixture(false);
         (app, ctx)
     }
-    fn fixture_client(code: String) -> Client {
+    pub(super) fn fixture_client(code: String) -> Client {
         let session = crate::process::Session::start(
             crate::process::Launch {
                 native_debug: false,
@@ -794,6 +968,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn close_releases_temporary_shells_and_waits_for_process_cleanup() {
+        for hidden in [false, true] {
+            let (mut app, ctx) = active(true);
+            let (terminal, stream) =
+                Terminal::fixture_native(&ctx, "Automatic project shell".into());
+            app.add_terminal_view(terminal, "project-shell".into(), "Project shell".into());
+            let _other = if hidden {
+                let (terminal, stream) = Terminal::stream(&ctx, "Debugger output".into(), |_| {});
+                app.add_terminal_view(terminal, "debug-output".into(), "Debugger output".into());
+                Some(stream)
+            } else {
+                None
+            };
+            app.guarded(Action::CloseProject, &ctx);
+            assert!(app.vaults.locking);
+            app.poll_vaults(&ctx);
+            assert!(app.terminal.is_none());
+            assert!(app.sessions.lifetime_pending());
+            assert!(!app.vaults.lock_sent);
+            assert!(!app.documents.is_empty());
+            // The actual terminal waiter publishes this only after reaping.
+            stream.end();
+            let until = Instant::now() + Duration::from_secs(5);
+            while app.vaults.has_active() {
+                app.poll_vaults(&ctx);
+                assert!(Instant::now() < until);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(app.documents.is_empty());
+        }
+    }
+    #[test]
+    fn persistent_shells_still_require_explicit_end_without_dropping_the_view() {
+        let (mut app, ctx) = active(true);
+        let (terminal, _stream) =
+            Terminal::fixture_native_with_persistence(&ctx, "Persistent shell".into(), true);
+        app.add_terminal_view(
+            terminal,
+            "persistent-shell".into(),
+            "Persistent shell".into(),
+        );
+        app.guarded(Action::CloseProject, &ctx);
+        app.poll_vaults(&ctx);
+        assert!(!app.vaults.locking && !app.vaults.lock_sent);
+        assert!(app.terminal.as_ref().unwrap().is_alive());
+        assert!(!app.documents.is_empty());
+        assert!(app.vaults.message.contains("persistent terminal"));
+    }
     #[test]
     fn close_and_disconnect_wait_for_verified_encrypted_unmount() {
         for disconnect in [false, true] {
@@ -885,9 +1108,11 @@ mod tests {
                 }),
                 "{text}"
             );
+            assert!(app.dialog == Dialog::Encrypted);
             assert!(text.contains(&format!("{expected} · /cipher")), "{text}");
             if lost {
                 assert!(!text.contains("UNLOCKED"), "{text}");
+                assert!(text.contains("Verify & lock"), "{text}");
             }
         }
     }
@@ -1038,6 +1263,10 @@ mod tests {
                 );
             }
             assert!(app.dialog == Dialog::Encrypted);
+            app.encrypted_open_dialog();
+            assert!(app.dialog == Dialog::Folder && app.project_picker.encrypted);
+            assert_eq!(app.project_picker.path, "/cipher");
+            assert_eq!(app.project_picker.remote, remote);
         }
     }
     #[test]
@@ -1311,7 +1540,9 @@ mod tests {
         let (mut app, ctx) = active(true);
         app.vaults.lost = true;
         app.lock_encrypted(AfterLock::Quit, &ctx);
-        assert!(!app.exit.closing() && !app.vaults.locking);
+        assert!(!app.exit.closing() && app.vaults.locking);
+        assert!(app.dialog == Dialog::Encrypted);
+        assert!(!app.vaults.lock_sent);
         assert!(!app.documents.is_empty());
     }
     #[test]
@@ -1361,7 +1592,9 @@ mod tests {
         assert!(app.documents[0].path.is_none());
         assert_eq!(app.documents[0].text, "unsaved encrypted source");
         app.encrypted_dialog();
-        assert!(app.vaults.remote);
+        assert!(app.dialog == Dialog::Encrypted);
+        app.encrypted_open_dialog();
+        assert!(app.project_picker.remote);
         app.lock_encrypted(AfterLock::Quit, &ctx);
         assert!(!app.exit.closing() && !app.vaults.locking);
         app.restore_local_workspace(&ctx);
