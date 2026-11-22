@@ -33,6 +33,16 @@ pub(super) fn contents<R>(
         .inner
 }
 
+/// Menus stretch action rows to their full width. Reading text needs its own
+/// left-aligned layout so wrapping long paths cannot spread letters or words
+/// across the row. Keep native text selection and the menu's width/scroll bounds.
+pub(super) fn description(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+        ui.add(egui::Label::new(text).wrap().selectable(true))
+    })
+    .inner
+}
+
 fn top(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
     let response = ui
         .scope(|ui| {

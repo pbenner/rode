@@ -304,11 +304,7 @@ impl EditorApp {
                             ui.label(palette.tag("PROJECT ACCESS"));
                             ui.strong(mode);
                             ui.separator();
-                            ui.add(
-                                egui::Label::new(&summary.mode_details)
-                                    .wrap()
-                                    .selectable(true),
-                            );
+                            menus::description(ui, &summary.mode_details);
                         })
                     })
                     .0
@@ -336,11 +332,7 @@ impl EditorApp {
     ) {
         let palette = self.themes.active().palette;
         ui.label(palette.tag("CONNECTION"));
-        ui.add(
-            egui::Label::new(RichText::new(&summary.host_label).strong())
-                .wrap()
-                .selectable(true),
-        );
+        menus::description(ui, RichText::new(&summary.host_label).strong());
         ui.separator();
         let remote = summary.connection != Connection::Local;
         if remote || self.workspace.reconnect_profile().is_some() {
@@ -390,11 +382,7 @@ impl EditorApp {
                 .id_salt("project-folder-preview")
                 .max_height((ctx.content_rect().height() - 260.).clamp(24., 140.))
                 .show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(RichText::new(path).monospace())
-                            .wrap()
-                            .selectable(true),
-                    );
+                    menus::description(ui, RichText::new(path).monospace());
                 });
             ui.separator();
             let copy = ui.add(IconButton::new(Icon::Copy, "Copy path"));
@@ -441,7 +429,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn project_popup_bounds_long_paths_keeps_actions_visible_and_copies_the_full_path() {
+    fn footer_popups_keep_text_left_aligned_and_long_paths_and_actions_accessible() {
         for (size, scale) in [(egui::vec2(850., 560.), 1.), (egui::vec2(480., 360.), 1.5)] {
             let ctx = egui::Context::default();
             let mut app = EditorApp::new(
@@ -500,12 +488,34 @@ mod tests {
                     },
                 ]
             };
+            let aligned = |output: &egui::FullOutput, label: &str| {
+                let galley = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(&text.galley)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("Missing popup text at {size}/{scale}: {label}"));
+                assert!(
+                    !galley.job.justify,
+                    "Popup stretched text at {size}/{scale}: {label}"
+                );
+                assert_eq!(
+                    galley.job.halign,
+                    Align::Min,
+                    "Popup text is not left aligned"
+                );
+            };
             let point = rect("status-project").center();
             frame(&mut app, events(point, true));
             frame(&mut app, events(point, false));
             for _ in 0..3 {
                 frame(&mut app, vec![]);
             }
+            aligned(&frame(&mut app, vec![]), &folder);
             let copy = rect("status-copy-project");
             let open = rect("status-open-project");
             for control in [copy, open] {
@@ -528,6 +538,26 @@ mod tests {
                     .iter()
                     .any(|c| matches!(c, egui::OutputCommand::CopyText(text) if text == &folder))
             );
+            let plan = &mut app.workspace.as_mut().unwrap().plan;
+            plan.active = true;
+            plan.backend = sandbox::Backend::Landlock;
+            let summary = Summary::new(&app);
+            for (name, text) in [
+                ("status-access", &summary.mode_details),
+                ("status-connection", &summary.host_label),
+            ] {
+                for _ in 0..3 {
+                    frame(&mut app, vec![]);
+                }
+                let point = rect(name).center();
+                frame(&mut app, events(point, true));
+                frame(&mut app, events(point, false));
+                for _ in 0..3 {
+                    frame(&mut app, vec![]);
+                }
+                aligned(&frame(&mut app, vec![]), text);
+                egui::Popup::close_all(&ctx);
+            }
         }
     }
 
