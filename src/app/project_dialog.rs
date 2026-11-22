@@ -368,6 +368,12 @@ impl State {
             .min_scrolled_height(body_height)
             .max_height(body_height)
             .show(ui, |ui| {
+                // Keep fractional pixel rounding inside the viewport. ScrollArea
+                // otherwise expands to rounded child bounds and a centred modal
+                // can alternate between two widths/positions on every frame.
+                let scale = ui.ctx().pixels_per_point();
+                let width = ((ui.available_width() * scale).floor() - 1.).max(1.) / scale;
+                ui.set_max_width(width);
                 ui.add_enabled_ui(!busy, |ui| {
                 if let Some(path) = self.project_folder_browser(ui, &ctx, palette, show_hidden) {
                     intents.push(Intent::Browse(self.begin(path)));

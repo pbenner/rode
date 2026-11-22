@@ -106,7 +106,7 @@ impl EditorApp {
             .insert(response.path, response.entries);
         self.explorer_state.tree_dirty = true;
         self.load_project_tools(ctx, false);
-        self.status = "Local project · NORMAL MODE".into();
+        self.status.clear();
     }
 
     /// Capture document versions so a late candidate cannot discard edits made during
@@ -270,11 +270,8 @@ impl EditorApp {
         if let Some(draft) = settings_draft {
             self.restore_settings_draft(draft);
         }
-        self.status = format!(
-            "{} project · {}",
-            if remote { "SSH" } else { "Local" },
-            plan.label()
-        );
+        // Dedicated footer controls already show the project host and access mode.
+        self.status.clear();
         if plan.requested && !plan.active {
             self.notify(plan.reason.clone(), false);
         }

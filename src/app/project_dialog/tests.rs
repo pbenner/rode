@@ -35,6 +35,144 @@ fn control(state: &serde_json::Value, name: &str) -> egui::Rect {
 }
 
 #[test]
+fn expanded_access_rules_keep_help_wrapping_and_dialog_geometry_stable() {
+    for theme in ["sumie-light", "carbon"] {
+        for scale in [1., 1.25, 1.5, 1.75, 2.] {
+            let directory = tempfile::tempdir().unwrap();
+            let state = directory.path().join("ui.json");
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(
+                &cc,
+                Startup {
+                    theme: Some(theme.into()),
+                    ..Default::default()
+                },
+            );
+            ctx.set_zoom_factor(scale);
+            ctx.style_mut(|style| style.animation_time = 0.);
+            ui_probe::install_at(&ctx, state.clone());
+            app.set_dialog(Dialog::Folder);
+            app.project_picker.needs_load = false;
+            app.project_picker.loading = false;
+            app.project_picker.sandbox.enabled = true;
+            app.project_picker.path = "/project".into();
+            app.project_picker.policy_path = "/project".into();
+            app.project_picker.entries = (0..50)
+                .map(|index| Entry {
+                    path: format!("/project/child-{index}"),
+                    name: format!("child-{index}"),
+                    dir: true,
+                })
+                .collect();
+            let initial = egui::vec2(1380., 900.);
+            for _ in 0..5 {
+                frame(&mut app, &ctx, &state, initial, vec![]);
+            }
+            let snapshot = frame(&mut app, &ctx, &state, initial, vec![]);
+            let point = control(&snapshot, "project-dialog-options").center();
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    &ctx,
+                    &state,
+                    initial,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            for size in [
+                initial,
+                egui::vec2(850., 560.),
+                egui::vec2(650., 480.),
+                egui::vec2(520., 720.),
+                egui::vec2(420., 720.),
+                egui::vec2(1920., 1800.),
+            ] {
+                for _ in 0..5 {
+                    frame(&mut app, &ctx, &state, size, vec![]);
+                }
+                let snapshot = frame(&mut app, &ctx, &state, size, vec![]);
+                let open = control(&snapshot, "project-dialog-open");
+                let point = egui::pos2(size.x / 2., open.top() - 60.);
+                frame(
+                    &mut app,
+                    &ctx,
+                    &state,
+                    size,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0., -10000.),
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+                // Let scrolling settle, then keep rendering without input. The
+                // regression alternated positions on every frame at 175% scale.
+                let mut positions = Vec::new();
+                for index in 0..80 {
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            app.dialogs(ctx);
+                        },
+                    );
+                    if index < 60 {
+                        continue;
+                    }
+                    let snapshot: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+                    let help = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && text.galley.text().starts_with("Add any custom shell setup")
+                            {
+                                return Some((
+                                    text.pos,
+                                    text.galley.size(),
+                                    text.galley
+                                        .rows
+                                        .iter()
+                                        .map(|row| row.glyphs.len())
+                                        .collect::<Vec<_>>(),
+                                ));
+                            }
+                            None
+                        })
+                        .unwrap_or_else(|| panic!("Help not visible: {theme} {scale} {size:?}"));
+                    positions.push((
+                        control(&snapshot, "project-dialog-path"),
+                        control(&snapshot, "project-dialog-open"),
+                        help,
+                        ctx.memory(|memory| memory.area_rect(egui::Id::new("dialog"))),
+                    ));
+                }
+                for pair in positions.windows(2) {
+                    assert_eq!(
+                        pair[0], pair[1],
+                        "{theme}, scale {scale}, viewport {size:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_windows() {
     for theme in ["phosphor", "studio-neutral"] {
         for scale in [1., 1.5] {
