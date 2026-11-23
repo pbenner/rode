@@ -271,7 +271,7 @@ fn validate_panel(tool: &Tool, protocol: u32, icon: &str) -> Result<()> {
         tool.args.len() < 64,
         "Panel executables accept at most 63 arguments"
     );
-    ensure!(matches!(protocol, 1 | 2), "Unsupported panel protocol");
+    ensure!(matches!(protocol, 1..=3), "Unsupported panel protocol");
     ensure!(
         ["", "chart", "monitor", "folder"].contains(&icon)
             || (icon.len() <= 4096

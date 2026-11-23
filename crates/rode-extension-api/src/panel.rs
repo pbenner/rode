@@ -1,4 +1,4 @@
-//! Panel protocols 1 and 2 contain data only. Providers cannot send markup, executable
+//! Panel protocols 1, 2 and 3 contain data only. Providers cannot send markup, executable
 //! UI code, paths to load into the editor, or commands for the host to execute.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -13,7 +13,12 @@ pub fn lifecycle_action(action: &str) -> bool {
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct View {
+    /// Protocol 3: complete ordered layout, referencing controls by stable key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content: Vec<Content>,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<PanelLayout>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<Section>,
     #[serde(default)]
@@ -39,20 +44,72 @@ pub struct View {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
 }
-/// Ordered, native content sections reference existing controls. Unplaced inputs
-/// remain in Settings/the toolbar; unplaced actions and tables keep their layout.
+/// Declarative preferences; the host adapts columns to available width and
+/// owns fonts, colors, spacing, accessibility and equal-height metric cards.
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelLayout {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric_columns: Option<u8>,
+    #[serde(default, skip_serializing_if = "MetricDensity::is_auto")]
+    pub metric_density: MetricDensity,
+}
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricDensity {
+    /// Let the host choose density for the available content.
+    #[default]
+    Auto,
+    Comfortable,
+    Compact,
+}
+impl MetricDensity {
+    fn is_auto(&self) -> bool {
+        *self == Self::Auto
+    }
+}
+/// Native section in one of two mutually exclusive layout modes:
+/// ordered layouts use `content`; automatic layouts use the legacy reference
+/// lists. Only automatic layouts implicitly place unreferenced controls.
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Section {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content: Vec<Content>,
+    /// Stable identity required for collapsible sections, independent of ordering.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collapsible: bool,
+    /// Initial state only; subsequent user toggles are owned by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_open: Option<bool>,
     pub title: String,
     #[serde(default)]
     pub description: String,
+    /// Legacy automatic layout: field keys, rendered after tables.
     #[serde(default)]
     pub fields: Vec<String>,
+    /// Legacy automatic layout only: table indices. Ordered content uses keys.
     #[serde(default)]
     pub tables: Vec<usize>,
+    /// Legacy automatic layout: action IDs, rendered after inputs.
     #[serde(default)]
     pub actions: Vec<String>,
+}
+/// Protocol 3 native composition. Groups retain host-owned responsive layout.
+/// Sections may appear only at the root; no recursive widget trees are accepted.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Content {
+    Metrics { keys: Vec<String> },
+    Fields { keys: Vec<String> },
+    Actions { keys: Vec<String> },
+    Table { key: String },
+    Chart { key: String },
+    Link { key: String },
+    ActionGroup { key: String },
+    Section { key: String },
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -75,7 +132,8 @@ pub struct Field {
     pub choices: Vec<Choice>,
     #[serde(default)]
     pub multiline: bool,
-    /// Inline inputs remain visible when the settings section is collapsed.
+    /// Automatic layout only: keep this input outside the Settings disclosure.
+    /// Ordered layouts express placement through `content` and reject `true`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inline: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +148,8 @@ pub struct Choice {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Metric {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
     pub label: String,
     pub value: String,
     #[serde(default)]
@@ -98,6 +158,8 @@ pub struct Metric {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Table {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
     pub title: String,
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
@@ -120,11 +182,27 @@ impl View {
     /// Reject capabilities unavailable in the negotiated protocol, rather than
     /// accidentally accepting version-2 controls from a version-1 provider.
     pub fn validate_version(&self, api: u32) -> anyhow::Result<()> {
-        anyhow::ensure!(matches!(api, 1 | 2), "Unsupported panel protocol");
+        anyhow::ensure!(matches!(api, 1..=3), "Unsupported panel protocol");
         self.validate()?;
+        if api < 3 {
+            anyhow::ensure!(
+                self.content.is_empty()
+                    && self.layout.is_none()
+                    && self.sections.iter().all(|s| s.content.is_empty()
+                        && s.key.is_empty()
+                        && !s.collapsible
+                        && s.default_open.is_none())
+                    && self.metrics.iter().all(|x| x.key.is_empty())
+                    && self.tables.iter().all(|x| x.key.is_empty())
+                    && self.links.iter().all(|x| x.key.is_empty())
+                    && self.action_groups.iter().all(|x| x.key.is_empty()),
+                "Panel protocol 3 required for composition and layout preferences"
+            );
+        }
         if api == 1 {
             anyhow::ensure!(
-                self.sections.is_empty()
+                self.layout.is_none()
+                    && self.sections.is_empty()
                     && self.action_groups.is_empty()
                     && self.charts.is_empty()
                     && self.links.is_empty()
@@ -133,6 +211,87 @@ impl View {
                 "Panel protocol 1 cannot use protocol-2 controls"
             );
         }
+        Ok(())
+    }
+    fn validate_content(&self) -> anyhow::Result<()> {
+        use anyhow::ensure;
+        if self.content.is_empty() {
+            ensure!(
+                self.sections.iter().all(|s| s.content.is_empty()),
+                "Ordered sections require a root content layout"
+            );
+            return Ok(());
+        }
+        ensure!(
+            self.fields.iter().all(|field| !field.inline),
+            "Ordered layouts use content for placement; field.inline requires automatic layout"
+        );
+        ensure!(
+            self.sections.iter().all(|s| valid_key(&s.key)
+                && s.fields.is_empty()
+                && s.tables.is_empty()
+                && s.actions.is_empty()),
+            "Ordered layout requires keyed sections without legacy references"
+        );
+        let mut expected = std::collections::BTreeSet::new();
+        for (kind, keys) in [
+            (
+                "metric",
+                self.metrics.iter().map(|x| &x.key).collect::<Vec<_>>(),
+            ),
+            ("field", self.fields.iter().map(|x| &x.key).collect()),
+            ("action", self.actions.iter().map(|x| &x.id).collect()),
+            ("table", self.tables.iter().map(|x| &x.key).collect()),
+            ("chart", self.charts.iter().map(|x| &x.key).collect()),
+            ("link", self.links.iter().map(|x| &x.key).collect()),
+            (
+                "action_group",
+                self.action_groups.iter().map(|x| &x.key).collect(),
+            ),
+            ("section", self.sections.iter().map(|x| &x.key).collect()),
+        ] {
+            for key in keys {
+                ensure!(
+                    valid_key(key) && expected.insert((kind, key.as_str())),
+                    "Ordered layout requires unique stable control keys"
+                );
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (items, root) in std::iter::once((&self.content, true))
+            .chain(self.sections.iter().map(|s| (&s.content, false)))
+        {
+            ensure!(items.len() <= 256, "Too many layout blocks");
+            for item in items {
+                let (kind, keys) = match item {
+                    Content::Metrics { keys } => ("metric", keys.clone()),
+                    Content::Fields { keys } => ("field", keys.clone()),
+                    Content::Actions { keys } => ("action", keys.clone()),
+                    Content::Table { key } => ("table", vec![key.clone()]),
+                    Content::Chart { key } => ("chart", vec![key.clone()]),
+                    Content::Link { key } => ("link", vec![key.clone()]),
+                    Content::ActionGroup { key } => ("action_group", vec![key.clone()]),
+                    Content::Section { key } => {
+                        ensure!(root, "Nested sections are not supported");
+                        ("section", vec![key.clone()])
+                    }
+                };
+                ensure!(
+                    !keys.is_empty() && keys.len() <= 128,
+                    "Invalid layout group size"
+                );
+                for key in keys {
+                    ensure!(
+                        expected.contains(&(kind, key.as_str())) && seen.insert((kind, key)),
+                        "Unknown or repeated layout reference"
+                    );
+                }
+            }
+        }
+        ensure!(
+            seen.len() == expected.len(),
+            "Ordered layout must place every control exactly once"
+        );
         Ok(())
     }
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -152,6 +311,11 @@ impl View {
                 && self.charts.len() <= 4
                 && self.links.len() <= 8,
             "Panel has too many controls"
+        );
+        ensure!(
+            self.layout
+                .is_none_or(|layout| layout.metric_columns.is_none_or(|n| (1..=4).contains(&n))),
+            "Metric columns must be between 1 and 4"
         );
         let mut keys = std::collections::BTreeSet::new();
         for f in &self.fields {
@@ -190,10 +354,39 @@ impl View {
                 "Input names an undeclared submit action"
             );
         }
+        for keys in [
+            self.metrics.iter().map(|x| &x.key).collect::<Vec<_>>(),
+            self.tables.iter().map(|x| &x.key).collect(),
+            self.links.iter().map(|x| &x.key).collect(),
+            self.action_groups.iter().map(|x| &x.key).collect(),
+        ] {
+            let mut unique = std::collections::BTreeSet::new();
+            ensure!(
+                keys.into_iter()
+                    .filter(|k| !k.is_empty())
+                    .all(|k| valid_key(k) && unique.insert(k)),
+                "Invalid or repeated control key"
+            );
+        }
+        self.validate_content()?;
         let mut placed_fields = std::collections::BTreeSet::new();
         let mut placed_tables = std::collections::BTreeSet::new();
         let mut placed_actions = std::collections::BTreeSet::new();
+        let mut section_keys = std::collections::BTreeSet::new();
         for section in &self.sections {
+            ensure!(
+                !section.collapsible || !section.key.is_empty(),
+                "Collapsible sections require a stable key"
+            );
+            ensure!(
+                section.key.is_empty()
+                    || (valid_key(&section.key) && section_keys.insert(&section.key)),
+                "Invalid or repeated section key"
+            );
+            ensure!(
+                section.collapsible || section.default_open.is_none(),
+                "Section initial state requires a collapsible section"
+            );
             ensure!(
                 text(&section.title)
                     && text(&section.description)
@@ -282,12 +475,16 @@ fn valid_key(s: &str) -> bool {
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActionGroup {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
     pub title: String,
     pub actions: Vec<Action>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Link {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
     pub label: String,
     pub url: String,
 }
@@ -391,7 +588,7 @@ impl Request {
     /// budget. Invalid lifecycle requests cannot accidentally submit a draft.
     pub fn validate(&self) -> anyhow::Result<()> {
         use anyhow::ensure;
-        ensure!(matches!(self.api, 1 | 2), "Unsupported panel protocol");
+        ensure!(matches!(self.api, 1..=3), "Unsupported panel protocol");
         ensure!(valid_key(&self.action), "Invalid panel action");
         ensure!(
             self.api >= 2 || self.action != "settings",
@@ -410,7 +607,7 @@ impl Request {
             "Lifecycle requests cannot submit input values"
         );
         ensure!(
-            self.api == 2 || self.settings.is_empty(),
+            self.api >= 2 || self.settings.is_empty(),
             "Protocol 1 cannot receive host settings"
         );
         ensure!(
@@ -434,7 +631,7 @@ impl Reply {
         );
         self.view.validate_version(api)?;
         if let Some(settings) = &self.settings {
-            anyhow::ensure!(api == 2, "Protocol 1 cannot write host settings");
+            anyhow::ensure!(api >= 2, "Protocol 1 cannot write host settings");
             anyhow::ensure!(
                 serde_json::to_vec(settings)?.len() <= SETTINGS_LIMIT,
                 "Extension settings exceed their limit"
@@ -470,6 +667,135 @@ pub fn format_price(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn composed_view() -> View {
+        serde_json::from_value(serde_json::json!({
+            "title":"Service overview",
+            "fields":[{"key":"region","label":"Region","value":"EU"}],
+            "metrics":[{"key":"uptime","label":"Uptime","value":"99.9%"}],
+            "tables":[{"key":"events","title":"Events","columns":["Event"],"rows":[]}],
+            "actions":[{"id":"refresh-data","label":"Refresh","enabled":true}],
+            "links":[{"key":"docs","label":"Documentation","url":"https://example.com"}],
+            "action_groups":[{"key":"ranges","title":"Range","actions":[{"id":"day","label":"Day","enabled":true}]}],
+            "charts":[{"key":"latency","title":"Latency","series":{"name":"Latency","currency":"ms","exchange":"local","bars":[{"at":0,"open":1,"high":1,"low":1,"close":1,"volume":0}]}}],
+            "sections":[{"key":"details","title":"Details","content":[{"kind":"fields","keys":["region"]},{"kind":"chart","key":"latency"},{"kind":"table","key":"events"},{"kind":"actions","keys":["refresh-data"]}]}],
+            "content":[{"kind":"metrics","keys":["uptime"]},{"kind":"section","key":"details"},{"kind":"action_group","key":"ranges"},{"kind":"link","key":"docs"}]
+        })).unwrap()
+    }
+    #[test]
+    fn composed_layout_is_complete_keyed_and_protocol_three_only() {
+        let view = composed_view();
+        view.validate_version(3).unwrap();
+        assert!(view.validate_version(2).is_err());
+        for invalid in 0..8 {
+            let mut view = view.clone();
+            match invalid {
+                0 => view.content.push(Content::Table {
+                    key: "events".into(),
+                }),
+                1 => view.sections[0].content.push(Content::Table {
+                    key: "unknown".into(),
+                }),
+                2 => {
+                    view.content.pop();
+                }
+                3 => view.sections[0].content.push(Content::Section {
+                    key: "details".into(),
+                }),
+                4 => view.tables[0].key.clear(),
+                5 => view.sections[0].tables.push(0),
+                6 => view.fields[0].inline = true,
+                _ => view.content.push(Content::Actions { keys: vec![] }),
+            }
+            assert!(view.validate().is_err(), "case {invalid}");
+        }
+        // Display titles and storage order do not define identity.
+        let mut renamed = view.clone();
+        renamed.tables[0].title = "Renamed events".into();
+        renamed.tables.insert(
+            0,
+            Table {
+                key: "other".into(),
+                title: "Events".into(),
+                columns: vec!["Event".into()],
+                rows: vec![],
+            },
+        );
+        renamed.content.push(Content::Table {
+            key: "other".into(),
+        });
+        renamed.validate_version(3).unwrap();
+    }
+    #[test]
+    fn automatic_layout_retains_legacy_controls_without_ordered_content() {
+        let view: View = serde_json::from_value(serde_json::json!({
+            "title":"Legacy settings", "fields":[{"key":"region","label":"Region","value":"EU","inline":true}],
+            "tables":[{"title":"Events","columns":["Event"],"rows":[]}],
+            "sections":[{"title":"Details","tables":[0]}]
+        })).unwrap();
+        view.validate_version(2).unwrap();
+        view.validate_version(3).unwrap();
+        assert!(view.validate_version(1).is_err());
+    }
+    #[test]
+    fn protocol_three_retains_settings_and_rejects_unknown_versions() {
+        let request = Request {
+            api: 3,
+            id: 1,
+            action: "open".into(),
+            values: Default::default(),
+            settings: BTreeMap::from([("region".into(), serde_json::json!("EU"))]),
+        };
+        request.validate().unwrap();
+        let reply = Reply {
+            api: 3,
+            id: 1,
+            view: composed_view(),
+            settings: Some(request.settings.clone()),
+        };
+        reply.validate(3, 1).unwrap();
+        assert!(reply.validate(2, 1).is_err());
+        let mut bad = request;
+        bad.api = 4;
+        assert!(bad.validate().is_err());
+    }
+    #[test]
+    fn layout_preferences_require_protocol_three() {
+        let original = serde_json::json!({"title":"Legacy"});
+        let legacy: View = serde_json::from_value(original).unwrap();
+        legacy.validate_version(1).unwrap();
+        assert!(
+            serde_json::to_value(legacy)
+                .unwrap()
+                .get("layout")
+                .is_none()
+        );
+        for density in ["auto", "compact", "comfortable"] {
+            let value = serde_json::json!({"title":"Dashboard", "layout":{"metric_columns":4,"metric_density":density},
+                "sections":[{"key":"details","title":"Details","collapsible":true,"default_open":false}]});
+            let view: View = serde_json::from_value(value).unwrap();
+            view.validate_version(3).unwrap();
+            assert!(view.validate_version(2).is_err());
+            assert!(view.validate_version(1).is_err());
+            let mut duplicate = view.clone();
+            duplicate.sections.push(view.sections[0].clone());
+            assert!(duplicate.validate().is_err());
+        }
+        for columns in [0, 5] {
+            let view: View = serde_json::from_value(
+                serde_json::json!({"title":"Invalid","layout":{"metric_columns":columns}}),
+            )
+            .unwrap();
+            assert!(view.validate().is_err());
+        }
+        assert!(
+            serde_json::from_value::<View>(
+                serde_json::json!({"title":"Invalid","layout":{"metric_density":"pixel-perfect"}})
+            )
+            .is_err()
+        );
+        let view: View = serde_json::from_value(serde_json::json!({"title":"Invalid","sections":[{"title":"Details","collapsible":true}]})).unwrap();
+        assert!(view.validate().is_err());
+    }
     #[test]
     fn sections_validate_unique_references_and_require_protocol_two() {
         let value = serde_json::json!({"title":"Dashboard",
@@ -542,6 +868,7 @@ mod tests {
         let mut view:View=serde_json::from_value(serde_json::json!({"title":"Test","fields":[{"key":"query","label":"Query","value":"","submit":"search"}],"actions":[{"id":"search","label":"Search","enabled":true}]})).unwrap();
         view.validate().unwrap();
         view.action_groups.push(ActionGroup {
+            key: String::new(),
             title: "Results".into(),
             actions: vec![Action::new("search", "Ambiguous action", true)],
         });

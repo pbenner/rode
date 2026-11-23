@@ -118,6 +118,7 @@ mod admission_tests {
                             true,
                         )),
                         _ => reply.view.links.push(crate::panel::Link {
+                            key: String::new(),
                             label: "V2 only".into(),
                             url: "https://example.org".into(),
                         }),
@@ -136,7 +137,7 @@ mod wire_shape_tests {
     use super::*;
     #[test]
     fn empty_settings_are_explicit_in_v2_and_absent_in_v1() {
-        for api in [1, 2] {
+        for api in [1, 2, 3] {
             let request = Request {
                 api,
                 id: 1,
@@ -146,7 +147,7 @@ mod wire_shape_tests {
             };
             request.validate().unwrap();
             let wire = serde_json::to_value(&request).unwrap();
-            assert_eq!(wire.get("settings").is_some(), api == 2);
+            assert_eq!(wire.get("settings").is_some(), api >= 2);
             assert!(wire["values"].is_object());
         }
     }

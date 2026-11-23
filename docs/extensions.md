@@ -271,7 +271,7 @@ LaTeX tools (`rode.latex`) add explicit project-host builds and compiler diagnos
 ## Desktop panels
 
 An installed executable can supply a native application panel through panel
-protocol **1 or 2**. Existing providers default to protocol 1; add
+protocol **1, 2 or 3**. Existing providers default to protocol 1; add
 `"panel_version": 2` for the shared settings and chart capabilities. Add `"panel": true` to its API-1 manifest and supply `tool.program`
 and `tool.args`. The panel executable itself cannot also declare project-host
 capabilities. An extension that needs both declares a separate `project-tool`
@@ -413,14 +413,89 @@ Protocol 2 adds these native view contributions:
   inconsistent OHLC bounds and negative volume are rejected. Wheel, drag,
   keyboard, reset and density aggregation all run in the shared renderer without
   further provider requests. Zoom is kept separately for each chart identity.
-- `sections`: up to twelve ordered native cards, each with `title`, `description`,
-  `tables` (indices in the view's table list), `fields` (field keys), and `actions`
-  (IDs in the view's action list). Cards appear below overview metrics. Referenced
-  controls appear only in their section, in table/input/action order. Unplaced
-  controls retain the standard toolbar, Settings and table layout. References
-  must exist and must not be repeated across sections. This requires a host
-  with section support; providers still send data, not markup or UI code.
+- `sections`: protocol 2 supports up to twelve cards with `title`, `description`,
+  table indices, field keys and action IDs. Legacy rendering keeps its fixed
+  table/input/action order. Protocols 1 and 2 retain their original wire shapes.
 - `links`: up to eight user-activated HTTP(S) links with `label` and `url`.
+
+### Protocol 3: ordered native layouts
+
+Declare `panel_version: 3` (or `protocol: 3` in an explicit desktop contribution)
+when using composition, layout preferences or collapsible sections. Older hosts
+reject this manifest as unsupported rather than starting a provider whose replies
+they cannot understand. There is no automatic version negotiation. A provider
+supporting older hosts can generate a protocol-1 or protocol-2 manifest and omit
+all protocol-3 properties in those replies. The SDK validates this boundary.
+Settings, request identities, confirmations and lifecycle actions retain protocol-2
+behavior. Existing providers continue to work on updated hosts.
+
+A nonempty view `content` supplies the complete display order. Every top-level
+control and section must appear exactly once, either in root content or section
+content. No implicit placement is added. This avoids controls unexpectedly moving
+into Settings or a toolbar when the provider omits a reference.
+
+Blocks use `kind` and either `keys` for a group or `key` for a single control:
+
+| Kind | Reference | Native presentation |
+| --- | --- | --- |
+| `metrics` | Array of metric keys | Responsive row of equal-height cards |
+| `fields` | Array of field keys | Ordered labeled inputs |
+| `actions` | Array of action IDs | Wrapping button row |
+| `table` | Table key | Scrollable data table |
+| `chart` | Chart key | Interactive chart with native controls |
+| `link` | Link key | User-activated HTTP(S) link |
+| `action_group` | Action-group key | Selectable action row |
+| `section` | Section key | Native card, optionally collapsible |
+
+Keys are stable identities, independent of array position or visible text. Fields
+use `key`, actions use `id`; other controls use `key`. Chart keyboard focus and
+viewport state follow its key when it moves between sections. Provider IDs isolate
+identical control keys in different panels. Keys must be unique within
+each control type. Actions inside action groups retain their existing globally
+unique IDs and are placed through their group. Unknown, repeated or unplaced
+references are rejected. Sections cannot contain other sections, and ordered
+sections cannot also use nonempty legacy `fields`, `tables` or `actions` lists.
+`Field.inline` must be false or omitted in ordered layouts: placement comes only
+from `content`. Automatic layouts (an omitted or empty root `content`) retain
+`inline` and the legacy section lists, including under protocol 3. These two
+modes are validated separately; no placement hints are silently ignored.
+Blocks are bounded to 256 per container; existing control and frame budgets apply.
+
+Sections can mix charts, metrics, fields, tables, links and actions in any order.
+A section can set `collapsible: true` and `default_open: false`; expansion state
+belongs to the host and survives replies and title changes. `default_open` applies
+only on first display and defaults to true. Closing a section retains input drafts.
+
+`layout.metric_columns` requests a maximum of 1–4 metric columns; RODE reduces it
+for narrow panels. `layout.metric_density` is `auto`, `comfortable` or `compact`.
+These are preferences: RODE owns fonts, theme colors, accessibility, wrapping and
+card alignment. These metric preferences are panel-wide and apply to every
+metric group; groups independently wrap to their available width. Protocol 3 may
+omit `content` to use the legacy automatic layout,
+but section content requires an explicit root layout.
+
+For example, a complete minimal protocol-3 view:
+
+```json
+{
+  "title": "Service overview",
+  "layout": { "metric_columns": 2, "metric_density": "compact" },
+  "metrics": [{ "key": "uptime", "label": "Uptime", "value": "99.9%" }],
+  "tables": [{ "key": "events", "title": "Events", "columns": ["Event"], "rows": [] }],
+  "sections": [{
+    "key": "details", "title": "Details", "collapsible": true,
+    "default_open": false,
+    "content": [{ "kind": "table", "key": "events" }]
+  }],
+  "content": [
+    { "kind": "metrics", "keys": ["uptime"] },
+    { "kind": "section", "key": "details" }
+  ]
+}
+```
+
+This deliberately bounded composition model supports native forms and dashboards;
+it does not expose arbitrary CSS, executable widgets or recursive UI trees.
 
 Optional panel `icon` values are `chart`, `monitor` and `folder`, painted with
 RODE's active theme, or an absolute path to a local PNG image, for example

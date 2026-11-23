@@ -23,7 +23,7 @@ fn line_indices(bars: &[Bar]) -> [usize; 4] {
     indices
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct View {
     start: f64,
     width: f64,

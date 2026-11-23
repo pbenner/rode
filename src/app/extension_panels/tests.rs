@@ -173,6 +173,7 @@ fn panel_schema_rejects_ambiguous_controls_and_invalid_tables() {
     view.actions.pop();
     assert!(view.validate().is_ok());
     view.tables.push(protocol::Table {
+        key: String::new(),
         title: "Bad".into(),
         columns: vec!["One".into()],
         rows: vec![vec!["one".into(), "two".into()]],
@@ -679,5 +680,35 @@ fn reload_and_project_metadata_changes_preserve_an_unchanged_panel_process() {
         app.extension_panels.instances["test.panel"]
             .session
             .is_some()
+    );
+}
+
+#[test]
+fn protocol_three_providers_publish_ordered_views_and_update_settings() {
+    let code = r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ assert r['api']==3 and 'settings' in r
+ print(json.dumps({'api':3,'id':r['id'],'settings':{'region':'EU'},'view':{'title':'Service','fields':[{'key':'region','label':'Region','value':'EU'}],'content':[{'kind':'fields','keys':['region']}]}}),flush=True)
+"#;
+    let (mut app, ctx) = fixture(code);
+    app.extensions
+        .registry
+        .entries
+        .last_mut()
+        .unwrap()
+        .manifest
+        .as_mut()
+        .unwrap()
+        .panel_version = 3;
+    app.set_extension("test.panel", true);
+    app.open_extension_panel("test.panel", &ctx);
+    ready(&mut app, &ctx);
+    let state = &app.extension_panels.instances["test.panel"];
+    assert_eq!(state.version, 3);
+    state.view.validate_version(3).unwrap();
+    assert_eq!(
+        app.extensions.registry.preferences["test.panel"].settings["region"],
+        "EU"
     );
 }

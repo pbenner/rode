@@ -280,6 +280,7 @@ impl Provider {
         }
         if !self.results.is_empty() {
             view.action_groups.push(ActionGroup {
+                key: String::new(),
                 title: "Search results".into(),
                 actions: self
                     .results
@@ -297,6 +298,7 @@ impl Provider {
         let watchlist = self.watchlist();
         if !watchlist.is_empty() {
             view.action_groups.push(ActionGroup {
+                key: String::new(),
                 title: "Watchlist".into(),
                 actions: watchlist
                     .iter()
@@ -309,6 +311,7 @@ impl Provider {
             });
         }
         view.action_groups.push(ActionGroup {
+            key: String::new(),
             title: "Range".into(),
             actions: Range::ALL
                 .iter()
@@ -334,12 +337,14 @@ impl Provider {
             let series = &loaded.series;
             if let Some(last) = series.bars.last() {
                 view.metrics.push(Metric {
+                    key: String::new(),
                     label: format!("{} · {}", self.symbol, series.currency),
                     value: format_price(last.close),
                     progress: None,
                 });
                 if let Some(change) = series.change_percent() {
                     view.metrics.push(Metric {
+                        key: String::new(),
                         label: "Selected range".into(),
                         value: format!("{change:+.2}%"),
                         progress: None,
@@ -371,6 +376,7 @@ impl Provider {
             };
         }
         view.links.push(Link {
+            key: String::new(),
             label: "View source".into(),
             url: format!(
                 "https://finance.yahoo.com/quote/{}/",
