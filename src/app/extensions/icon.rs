@@ -33,23 +33,32 @@ pub(super) fn load(path: &Path) -> Result<egui::ColorImage> {
     limits.max_image_height = Some(2048);
     limits.max_alloc = Some(32 * 1024 * 1024);
     reader.limits(limits);
-    let image = reader.decode()?;
+    // Filter premultiplied pixels, as the renderer does. Averaging straight
+    // RGB against transparent black creates dark edges and turns white theme
+    // masks gray. Use egui's conversion to preserve its color/alpha semantics.
+    let mut image = reader.decode()?.to_rgba8();
+    for pixel in image.pixels_mut() {
+        let [r, g, b, a] = pixel.0;
+        pixel.0 = egui::Color32::from_rgba_unmultiplied(r, g, b, a).to_array();
+    }
     let image = if image.width() > 256 || image.height() > 256 {
-        image.thumbnail(256, 256)
+        image::DynamicImage::ImageRgba8(image)
+            .thumbnail(256, 256)
+            .to_rgba8()
     } else {
         image
-    }
-    .to_rgba8();
+    };
     // Preserve non-square artwork inside the rail's square image slot.
     let edge = image.width().max(image.height());
     let mut square = image::RgbaImage::new(edge, edge);
-    image::imageops::overlay(
+    // Copy rather than alpha-blend: the source is already premultiplied.
+    image::imageops::replace(
         &mut square,
         &image,
         i64::from((edge - image.width()) / 2),
         i64::from((edge - image.height()) / 2),
     );
-    Ok(egui::ColorImage::from_rgba_unmultiplied(
+    Ok(egui::ColorImage::from_rgba_premultiplied(
         [edge as usize, edge as usize],
         square.as_raw(),
     ))
@@ -83,6 +92,39 @@ mod tests {
         let empty = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 0]);
         assert!(!is_theme_mask(&empty));
     }
+
+    #[test]
+    fn downsampling_keeps_masks_themeable_and_colored_edges_free_of_dark_fringes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("icon.png");
+        for color in [[255, 255, 255], [255, 0, 0]] {
+            // The odd dimensions and diagonal produce partially covered pixels
+            // when reduced. Transparent black is common in exported PNG artwork.
+            image::RgbaImage::from_fn(513, 257, |x, y| {
+                if x < y {
+                    image::Rgba([color[0], color[1], color[2], 255])
+                } else {
+                    image::Rgba([0, 0, 0, 0])
+                }
+            })
+            .save(&path)
+            .unwrap();
+            let icon = load(&path).unwrap();
+            assert_eq!(icon.size, [256, 256]);
+            assert!(icon.pixels.iter().any(|p| p.a() > 0 && p.a() < 255));
+            assert_eq!(is_theme_mask(&icon), color == [255, 255, 255]);
+            for pixel in &icon.pixels {
+                assert_eq!(pixel.r(), pixel.a(), "Dark fringe: {pixel:?}");
+                assert_eq!(pixel.g(), if color[1] == 255 { pixel.a() } else { 0 });
+                assert_eq!(pixel.b(), if color[2] == 255 { pixel.a() } else { 0 });
+            }
+            // Centering non-square artwork must copy the premultiplied pixels
+            // unchanged and leave the padding transparent.
+            assert!(icon.pixels[..256].iter().all(|p| p.a() == 0));
+            assert!(icon.pixels[255 * 256..].iter().all(|p| p.a() == 0));
+        }
+    }
+
     #[test]
     fn png_artwork_preserves_transparency_and_rejects_bad_inputs() {
         let dir = tempfile::tempdir().unwrap();

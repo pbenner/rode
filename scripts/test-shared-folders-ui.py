@@ -73,6 +73,9 @@ def project_ready(ui, directory):
 
 def restored(ui, recipes, fuse, ids):
     """Require every saved recipe to start without a manual Mount click."""
+    # A bookmark can become ready in a frame that still reports the old tabs.
+    # Acknowledge a fresh native layout before deciding whether to open tools.
+    ui.control("workspace-sidebar", hovered=True)
     # The palette command toggles the panel off if it is already selected.
     ui.click("workspace-tab:Shared folders")
     ui.control("share-add")
