@@ -15,9 +15,18 @@ from ui_harness import (
     fixture_environment,
     focus_window,
     key,
+    mouse_button,
     screenshot,
     wait_for_effect,
 )
+
+
+def column_width(state):
+    rect = next(
+        b["rect"] for b in state["buttons"] if b["name"] == "extension-table-column:test.panel:0:0"
+    )
+    return rect[2] - rect[0]
+
 
 with fixture_directory(prefix="rode-panels-") as base:
     env = fixture_environment(base)
@@ -68,6 +77,28 @@ with fixture_directory(prefix="rode-panels-") as base:
         assert calls()[0]["settings"] == {"configured": True}, (
             "Host JSON settings did not reach the provider"
         )
+        # Real header dragging, with frame acknowledgements rather than delays.
+        initial_width = column_width(ui.layout())
+        grip = "extension-table-column-resize:test.panel:0:0"
+        start = ui.control(grip, hovered=True)
+        scale = ui.layout()["pixels_per_point"]
+        end = (round(start[0] + 120 * scale), start[1])
+        mouse_button(*start, 1, True)
+        try:
+            ui.move_pointer(round(start[0] + 60 * scale), start[1])
+            ui.move_pointer(*end)
+        finally:
+            mouse_button(*end, 1, False)
+        ui.layout(
+            lambda state: abs(column_width(state) - initial_width - 120) <= 2,
+            "Dragging the column edge did not resize it",
+        )
+        ui.control(grip, focused=True)
+        key("Left")
+        ui.layout(
+            lambda state: abs(column_width(state) - initial_width - 100) <= 2,
+            "Focused column divider did not resize with the keyboard",
+        )
         ui.click("extension-table:test.panel:0")
         ui.control("extension-table:test.panel:0", focused=True)
         key("End")
@@ -81,6 +112,16 @@ with fixture_directory(prefix="rode-panels-") as base:
         wait_for_effect(
             lambda: any(call.get("filter") == "keyboard input" for call in calls()),
             "Native field edits were not delivered",
+        )
+        ui.layout(
+            lambda state: abs(column_width(state) - initial_width - 100) <= 2,
+            "Provider refresh lost the column width",
+        )
+        ui.click(grip)
+        key("Home")
+        ui.layout(
+            lambda state: abs(column_width(state) - initial_width) <= 2,
+            "Home did not restore automatic column sizing",
         )
         ui.click("extension-settings")
         ui.click("extension-action:start")
@@ -134,5 +175,5 @@ with fixture_directory(prefix="rode-panels-") as base:
         ui.absent("extension-panel:test.panel")
         ui.absent("extension-action:refresh")
     print(
-        "Installed panels: opt-in desktop execution, monitoring, confirmation, detaching and disablement passed."
+        "Installed panels: resizable tables, opt-in desktop execution, monitoring, confirmation, detaching and disablement passed."
     )

@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 mod chart;
 mod protocol;
 mod runtime;
+mod table;
 #[cfg(test)]
 mod tests;
 mod view;

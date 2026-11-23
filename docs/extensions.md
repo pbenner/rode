@@ -362,14 +362,19 @@ queued. The provider should keep monitoring off until explicitly started.
 One request runs at a time per provider. Input is bounded to 1 MiB, output frames to 4 MiB,
 individual text values to 8 KiB, fields to 128, actions to 32, metrics to 24 and
 tables to 12 (16 columns and 4096 rows each). Replies must have unique field and
-action IDs, valid table widths and finite progress in 0–1. Invalid replies,
+action IDs, matching row/column counts and finite progress in 0–1. Invalid replies,
 transport loss or a request exceeding 180 seconds stop that provider. The SDK
 server and host validate request/reply identities and protocol capabilities;
 version-1 providers cannot emit version-2 controls or host settings. Failed sends
 retain pending configuration and request snapshots. Read-only lifecycle requests
 remain independent of the size of an unsent draft. Large tables scroll and render
 only their visible rows. Focus a table with Tab, keyboard hints or a click, then
-use the arrow keys, Page Up/Down and Home/End to scroll it. Replies
+use the arrow keys, Page Up/Down and Home/End to scroll it.
+Columns start with content-based widths. Drag a header's right edge to resize
+that column, or focus its divider with Tab/keyboard hints and use Left/Right.
+Double-click the divider or press Home while it is focused to restore automatic
+sizing. Widths are remembered across refreshes and restarts for each provider,
+table and column schema; wide tables scroll horizontally. Replies
 cannot overwrite edits made after the request was sent. Runtime restarts are
 explicit and preserve the current input draft, settings disclosure, chart views
 and detached-window ownership. Reopening sends empty input values and never
