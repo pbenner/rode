@@ -34,6 +34,17 @@ transport tests. Its remote shell shares private session/vault coordination
 directories within that fixture, so parallel fixtures do not borrow a developer's
 service or contend over a global vault directory.
 
+The default Rust runner asks Cargo to collect every test invocation, then runs
+independent executables concurrently (up to four jobs, bounded by CPU affinity).
+Cargo still supplies each command's arguments, crate working directory and
+runtime library paths; the collected environments stay in memory and are never
+included in logs. Actual test exits determine success. Set `RODE_TEST_JOBS=1`
+for serial execution or choose another limit up to 64. With multiple binaries,
+libtest threads are also bounded to the available CPU budget, up to eight per
+binary; an explicit `RUST_TEST_THREADS` takes precedence. Ordinary lease-expiry
+tests retain their real production deadlines. Focused Cargo invocations keep
+their original runner/filter semantics.
+
 Encrypted-project lock verification reads each same-account process's mount
 table. Before unmount it permits the current host mount's kernel ID and copies
 whose parent and child propagation groups and underlying locations prove they
@@ -587,6 +598,33 @@ explicit installed-tool overrides documented below. `--preflight` reports
 availability, not proof of exercised coverage. `--phases ui --suite documents`
 runs a focused prepared-build check; omitting `build` deliberately uses existing
 binaries. Ordinary full runs always build before using those binaries.
+
+Independent UI suites run concurrently, up to four jobs by default. `--jobs 1`
+retains serial scheduling; `--jobs N` bounds concurrency in both the UI and
+ordinary Rust phases. Cases within a suite share its display and remain serial,
+and repeat iterations finish before the next iteration starts. Per-suite result
+directories and private homes remain separate. Interruptions cancel active
+commands and stop pending launches; a later pass never replaces an earlier failure.
+The report records the concurrency limit and elapsed wall time.
+
+Native fixture text is queued as ordered X11 key events rather than waiting
+80 ms for each character. Once an owning process's native probe is observed,
+keys, text, clicks and wheel gestures await monotonic input receipts instead of
+fixed pacing. Receipts count actual key releases, pointer presses/releases and
+wheel events after accepted layout; they contain no key names or text and do
+not change application state. Repaints and discarded layout retries cannot
+acknowledge missing input. Child viewports keep independent counters, and closed
+children retain their last receipts through a focus handoff. Input is sent once.
+These receipts confirm delivery; dependent actions still wait for observed
+focus, complete values, hover, edit revisions or backend replies. Deliberate GUI
+pauses defer receipt waits until the owned process resumes. Supplied older
+binaries without receipts retain pacing; explicitly paced text remains covered.
+Drag motion and held buttons also acknowledge native position/press state rather
+than sleeping. Idle CPU measurements retain their observation intervals. Targeted
+readiness cases exercise both paced and batched text with deliberately delayed
+GUI frames. Both SSH and runtime lanes retain the complete transport bundle:
+general round trips include optional debugger and notebook branches that need
+the runtime lane's tools.
 
 Results live under a fresh `target/ci-results/validation-*/` directory. Its
 `summary.json` distinguishes command success from capability availability,

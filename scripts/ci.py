@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -86,6 +87,8 @@ CONTEXT_ENV = (
     "RODE_TEST_REQUIRED_CAPABILITIES",
     "RODE_TEST_AWKWARD_PATHS",
     "RODE_TEST_SLOW_UI",
+    "RODE_TEST_JOBS",
+    "RUST_TEST_THREADS",
     "RODE_PPTX_UI_CASE",
     "RODE_DOCX_UI_CASE",
 )
@@ -408,8 +411,23 @@ def results_root():
     return Path(os.environ.get("RODE_CI_RESULTS_DIR", ROOT / "target/ci-results"))
 
 
-def measure(label, command, env=None, timeout=300, group="commands", *, umask=None):
+def measure(
+    label,
+    command,
+    env=None,
+    timeout=300,
+    group="commands",
+    *,
+    umask=None,
+    cancel=None,
+    console_file=None,
+    cwd=None,
+):
     """Retain failure logs and timings, and stop a timed-out command's children."""
+
+    def emit(*args, **kwargs):
+        print(*args, file=console_file, **kwargs)
+
     directory = results_root() / group
     directory.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ if env is None else env)
@@ -422,7 +440,7 @@ def measure(label, command, env=None, timeout=300, group="commands", *, umask=No
     logfile = directory / f"{label}.log"
     invocation = shlex.join(command)
     title = invocation.replace("\r", r"\r").replace("\n", r"\n")
-    print(f"::group::{label}: {title}", flush=True)
+    emit(f"::group::{label}: {title}", flush=True)
     start = time.monotonic()
     code = 1
     state = "failed"
@@ -430,7 +448,7 @@ def measure(label, command, env=None, timeout=300, group="commands", *, umask=No
         try:
             process = subprocess.Popen(
                 command,
-                cwd=ROOT,
+                cwd=cwd or ROOT,
                 env=environment,
                 stdout=output,
                 stderr=subprocess.STDOUT,
@@ -445,9 +463,26 @@ def measure(label, command, env=None, timeout=300, group="commands", *, umask=No
             def terminate(_signum, _frame):
                 raise KeyboardInterrupt
 
-            previous = signal.signal(signal.SIGTERM, terminate)
+            main_thread = threading.current_thread() is threading.main_thread()
+            previous = signal.signal(signal.SIGTERM, terminate) if main_thread else None
             try:
-                code = process.wait(timeout=timeout)
+                if cancel is None:
+                    code = process.wait(timeout=timeout)
+                else:
+                    # The scheduler owns signals on the main thread. Workers
+                    # observe its cancellation without installing signal handlers.
+                    deadline = time.monotonic() + timeout
+                    while True:
+                        if cancel.is_set():
+                            raise KeyboardInterrupt
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, timeout)
+                        try:
+                            code = process.wait(timeout=min(0.1, remaining))
+                            break
+                        except subprocess.TimeoutExpired:
+                            pass
                 state = "passed" if code == 0 else "failed"
             except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
                 state = "timeout" if isinstance(error, subprocess.TimeoutExpired) else "interrupted"
@@ -467,7 +502,8 @@ def measure(label, command, env=None, timeout=300, group="commands", *, umask=No
                 process.wait()
                 code = 124 if state == "timeout" else 130
             finally:
-                signal.signal(signal.SIGTERM, previous)
+                if main_thread:
+                    signal.signal(signal.SIGTERM, previous)
     elapsed = round(time.monotonic() - start, 2)
     with logfile.open("rb") as output:
         start_output = output.read(12000)
@@ -483,13 +519,13 @@ def measure(label, command, env=None, timeout=300, group="commands", *, umask=No
         # Replaying child group markers hides its traceback in another collapsed
         # heading on Actions. Preserve the raw artifact, flatten console output.
         console = (start_output + rest).decode(errors="replace")
-        print(console.replace("::group::", "").replace("::endgroup::", ""), flush=True)
+        emit(console.replace("::group::", "").replace("::endgroup::", ""), flush=True)
     skipped, metadata_errors = [], []
     for path, record, error in read_skip_records(skip_directory.glob("*.json")):
         if error:
             metadata_errors.append(dict(report=str(path), error=error))
             message = f"Invalid coverage metadata in {path}: {error}\n"
-            print(message, end="", flush=True)
+            emit(message, end="", flush=True)
             with logfile.open("a") as output:
                 output.write(message)
         else:
@@ -499,21 +535,21 @@ def measure(label, command, env=None, timeout=300, group="commands", *, umask=No
     if not code and skipped:
         state = "passed-with-skips"
         for omitted in skipped:
-            print(
+            emit(
                 f"Skipped coverage: {omitted['test']} [{omitted['capability']}]: {omitted['reason']}"
             )
-    print(
+    emit(
         f"{label}: {state} in {elapsed}s; exit {code}; deadline {timeout}s (log: {logfile})",
         flush=True,
     )
-    print("::endgroup::", flush=True)
+    emit("::endgroup::", flush=True)
     record = dict(
         name=label,
         status=state,
         seconds=elapsed,
         command=command,
         invocation=invocation,
-        cwd=str(ROOT),
+        cwd=str(cwd or ROOT),
         exit_code=code,
         timeout_seconds=timeout,
         python=dict(executable=sys.executable, version=platform.python_version()),

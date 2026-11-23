@@ -22,11 +22,6 @@ impl EditorApp {
         });
         ui.add_space(8.);
         let size = egui::vec2(ui.available_width(), 32.);
-        let folder = ui.add_sized(size, IconButton::new(Icon::Folder, "Open project…"));
-        ui_probe::button(ui, "connections-open-project", &folder);
-        if folder.clicked() {
-            self.set_dialog(Dialog::Folder);
-        }
         let connection = ui.add_sized(size, IconButton::new(Icon::Remote, "Connect SSH…"));
         ui_probe::button(ui, "connections-new-ssh", &connection);
         if connection.clicked() {

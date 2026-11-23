@@ -867,7 +867,6 @@ fn connections_sidebar_orders_actions_and_host_bound_lists_without_replacing_the
         let pane = button("pane-Connections");
         let mut bottom = 0.;
         for name in [
-            "connections-open-project",
             "connections-new-ssh",
             "connections-new-tunnel",
             "saved-connection-0",

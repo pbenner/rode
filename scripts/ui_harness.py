@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fixture_support import (
@@ -70,6 +71,139 @@ assert display, (
 )
 
 
+@dataclass
+class InputTarget:
+    """Read native delivery receipts; effects still require the scenario's assertions.
+
+    Every viewport keeps its own monotonic counters. Retain the latest counters
+    from closed children and sum them once, so a focus handoff cannot lose the
+    release which completes an input. No key names, text or commands are stored.
+    """
+
+    process: object
+    log_path: object
+    path: Path
+    viewports: dict = field(default_factory=dict)
+    pending: dict = field(default_factory=dict)
+
+    def counts(self):
+        for path in [self.path, *self.path.parent.glob(self.path.name + ".*.json")]:
+            try:
+                state = json.loads(path.read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                continue
+            if state.get("pid") != self.process.pid or not isinstance(state.get("input"), dict):
+                continue
+            receipt = state["input"]
+            if not all(
+                type(receipt.get(key)) is int and receipt[key] >= 0
+                for key in ("keys", "buttons", "wheels", "presses")
+            ):
+                raise AssertionError(f"Invalid native input receipt: {path}")
+            viewport = state["viewport"]
+            previous = self.viewports.get(viewport, dict.fromkeys(receipt, 0))
+            self.viewports[viewport] = {
+                key: max(previous.get(key, 0), receipt[key])
+                for key in ("keys", "buttons", "wheels", "presses")
+            }
+        return {
+            key: sum(view[key] for view in self.viewports.values())
+            for key in ("keys", "buttons", "wheels", "presses")
+        }
+
+    def wait(self, expected, timeout=20):
+        deadline = time.monotonic() + timeout
+        while True:
+            actual = self.counts()
+            if all(actual[key] >= value for key, value in expected.items()):
+                return
+            assert_running(self.process, self.log_path)
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"Native input was not delivered within {timeout}s: expected {expected}, observed {actual}. Log: {self.log_path}"
+                )
+            time.sleep(0.01)
+
+
+_input_targets = {}
+_window_owners = {}
+_delayed_inputs = {}
+_FOCUSED_INPUT = object()
+
+
+def observe_input_target(process, log_path, path, state, window=None):
+    """Bind receipts only after observing this process's opt-in native snapshot."""
+    if state.get("pid") != process.pid or "input" not in state:
+        return
+    path = Path(path)
+    viewport = state["viewport"]
+    suffix = f".{viewport}.json"
+    if viewport != "ffffffffffffffff" and path.name.endswith(suffix):
+        path = path.with_name(path.name.removesuffix(suffix))
+    current = _input_targets.get(process.pid)
+    if current is None or current.process is not process:
+        _input_targets[process.pid] = InputTarget(process, log_path, path)
+    if window is not None:
+        _window_owners[window] = process.pid
+
+
+def input_target(window=None):
+    """Resolve an observed window, never an arbitrary process or a stale child."""
+    if not _input_targets:
+        return None
+    if window is None:
+        focused, revert = c.c_ulong(), c.c_int()
+        x11.XGetInputFocus(display, c.byref(focused), c.byref(revert))
+        window = focused.value
+    target = _input_targets.get(_window_owners.get(window))
+    if target is not None and target.process.poll() is None:
+        return target
+    return None
+
+
+def pointer_input_target():
+    """Resolve the native window below the pointer after the queued motion."""
+    if not _input_targets:
+        return None
+    root, child = c.c_ulong(), c.c_ulong()
+    rx, ry, wx, wy = c.c_int(), c.c_int(), c.c_int(), c.c_int()
+    mask = c.c_uint()
+    if x11.XQueryPointer(
+        display,
+        x11.XDefaultRootWindow(display),
+        c.byref(root),
+        c.byref(child),
+        c.byref(rx),
+        c.byref(ry),
+        c.byref(wx),
+        c.byref(wy),
+        c.byref(mask),
+    ):
+        return input_target(child.value)
+    return None
+
+
+@contextlib.contextmanager
+def delivered_input(kind, count=1, *, target=_FOCUSED_INPUT):
+    """Send once, then await the actual release; an unrelated repaint is insufficient.
+
+    Legacy supplied binaries without receipts retain pacing. Controlled GUI
+    pauses defer receipts until resume, keeping forced input batching covered.
+    """
+    if target is _FOCUSED_INPUT:
+        target = input_target()
+    if target is None:
+        yield False
+        return
+    before = target.counts()[kind]
+    goal = max(before, target.pending.get(kind, 0)) + count
+    yield True
+    if _delayed_inputs.get(target.process.pid):
+        target.pending[kind] = goal
+    else:
+        target.wait({kind: goal})
+
+
 def event(name, pressed):
     """Queue one XTest key transition on the explicitly selected isolated display."""
     code = x11.XKeysymToKeycode(display, x11.XStringToKeysym(name.encode()))
@@ -77,20 +211,32 @@ def event(name, pressed):
     xtest.XTestFakeKeyEvent(display, code, pressed, 0)
 
 
-def key(name, modifiers=()):
-    """Pace physical key transitions; callers must acknowledge focus and effects separately."""
+def _key_events(name, modifiers=()):
+    """Queue physical transitions without introducing a timing-dependent boundary."""
     for modifier in modifiers:
         event(modifier, 1)
     event(name, 1)
     event(name, 0)
     for modifier in reversed(modifiers):
         event(modifier, 0)
-    x11.XFlush(display)
-    time.sleep(0.08)
 
 
-def text(value):
-    """Type supported test text using real key events rather than mutating application buffers."""
+def key(name, modifiers=(), *, paced=False):
+    """Send one shortcut and await native delivery; callers acknowledge effects."""
+    with delivered_input("keys") as acknowledged:
+        _key_events(name, modifiers)
+        x11.XFlush(display)
+        if paced or not acknowledged:
+            time.sleep(0.08)
+
+
+def text(value, *, paced=False):
+    """Deliver real key events in order, flushing the whole text as one batch.
+
+    Callers still acknowledge the complete field/buffer value before dependent
+    actions. ``paced`` exercises per-character delivery in targeted regressions;
+    normal fixtures need not wait 80 ms for every character of a temporary path.
+    """
     specials = {
         " ": ("space", False),
         "\n": ("Return", False),
@@ -123,9 +269,20 @@ def text(value):
         "*": ("8", True),
         "?": ("slash", True),
     }
-    for char in value:
-        name, shift = specials.get(char, (char.lower(), char.isupper()))
-        key(name, ("Shift_L",) if shift else ())
+    if not value:
+        return
+    if paced:
+        for char in value:
+            name, shift = specials.get(char, (char.lower(), char.isupper()))
+            key(name, ("Shift_L",) if shift else (), paced=True)
+        return
+    with delivered_input("keys", len(value)) as acknowledged:
+        for char in value:
+            name, shift = specials.get(char, (char.lower(), char.isupper()))
+            _key_events(name, ("Shift_L",) if shift else ())
+        x11.XFlush(display)
+        if not acknowledged:
+            time.sleep(0.08)
 
 
 def move_pointer(x, y):
@@ -135,12 +292,33 @@ def move_pointer(x, y):
 
 
 def click(x, y, *, button=1):
-    """Click absolute display coordinates; UI tests use a known window size/position."""
+    """Send one native click/wheel gesture, acknowledging delivery in its window."""
     move_pointer(x, y)
-    xtest.XTestFakeButtonEvent(display, button, 1, 0)
-    xtest.XTestFakeButtonEvent(display, button, 0, 0)
-    x11.XFlush(display)
-    time.sleep(0.2)
+    # A click can focus a different application window. Resolve its actual
+    # destination below the pointer rather than borrowing keyboard focus.
+    target = pointer_input_target()
+    with delivered_input(
+        "wheels" if button in (4, 5, 6, 7) else "buttons", target=target
+    ) as acknowledged:
+        xtest.XTestFakeButtonEvent(display, button, 1, 0)
+        xtest.XTestFakeButtonEvent(display, button, 0, 0)
+        x11.XFlush(display)
+        if not acknowledged:
+            time.sleep(0.2)
+
+
+def mouse_button(x, y, button, pressed):
+    """Observe each end of a held native gesture before sending dependent motion."""
+    if button not in (1, 2, 3):
+        raise ValueError("Use click() for wheel gestures")
+    move_pointer(x, y)
+    with delivered_input(
+        "presses" if pressed else "buttons", target=pointer_input_target()
+    ) as acknowledged:
+        xtest.XTestFakeButtonEvent(display, button, int(pressed), 0)
+        x11.XFlush(display)
+        if not acknowledged:
+            time.sleep(0.08)
 
 
 def read_json_lines(path):
@@ -241,6 +419,7 @@ def wait_for_button(
             time.sleep(0.05)
             continue
         last = repr(state)
+        observe_input_target(process, log_path, state_path, state, window)
         if state.get("pid") == process.pid and (after_pass is None or state["pass"] > after_pass):
             for button in state["buttons"]:
                 if button["name"] != name or (button["enabled"] != enabled and not hovered):
@@ -345,6 +524,7 @@ def wait_for_ui_state(process, log_path, state_path, check, description, timeout
             time.sleep(0.05)
             continue
         last = repr(state)
+        observe_input_target(process, log_path, state_path, state)
         if state.get("pid") == process.pid and check(state):
             return state
         time.sleep(0.05)
@@ -564,6 +744,22 @@ class NativeUI:
             f"Window did not render at {width} × {height}",
         )
 
+    def move_pointer(self, x, y):
+        """Wait for the native pointer at a physical position, including during drags."""
+        move_pointer(x, y)
+
+        def arrived(state):
+            pointer = state.get("pointer")
+            if pointer is None:
+                return False
+            origin = window_geometry(self.window)[:2]
+            return all(
+                abs(actual - (offset + logical * state["pixels_per_point"])) <= 1
+                for actual, offset, logical in zip((x, y), origin, pointer)
+            )
+
+        return self.layout(arrived, f"Native pointer did not reach {(x, y)}")
+
     def scroll_to_control(self, name, *, over, timeout=12):
         """Reveal a lower control using wheel input over a visible list child.
 
@@ -775,17 +971,31 @@ def delayed_input(process):
         yield
         return
     descriptor = os.pidfd_open(process.pid)
+    failed = True
     try:
-        signal.pidfd_send_signal(descriptor, signal.SIGSTOP)
+        depth = _delayed_inputs.get(process.pid, 0)
+        if not depth:
+            signal.pidfd_send_signal(descriptor, signal.SIGSTOP)
+        _delayed_inputs[process.pid] = depth + 1
         try:
             yield
+            failed = False
         finally:
-            try:
-                signal.pidfd_send_signal(descriptor, signal.SIGCONT)
-            except ProcessLookupError:
-                pass
+            _delayed_inputs[process.pid] -= 1
+            if not _delayed_inputs[process.pid]:
+                del _delayed_inputs[process.pid]
+                try:
+                    signal.pidfd_send_signal(descriptor, signal.SIGCONT)
+                except ProcessLookupError:
+                    pass
     finally:
         os.close(descriptor)
+        if process.pid not in _delayed_inputs:
+            target = _input_targets.get(process.pid)
+            if target:
+                expected, target.pending = target.pending, {}
+                if not failed and expected:
+                    target.wait(expected)
 
 
 def palette_command(window, process, log_path, state_path, value, timeout=12, *, keyboard=False):
@@ -867,6 +1077,7 @@ def wait_for_window(process, log_path, timeout=20, *, title=None):
             state = re.search(r"Map State:\s*(\w+)", attributes.stdout)
             states[window] = state[1] if state else "unknown"
             if states[window] == "IsViewable":
+                _window_owners[int(window, 16)] = process.pid
                 return int(window, 16)
         time.sleep(0.05)
     raise AssertionError(
@@ -947,6 +1158,19 @@ x11.XSetErrorHandler.argtypes = [c.c_void_p]
 x11.XSetErrorHandler.restype = c.c_void_p
 x11.XSync.argtypes = [c.c_void_p, c.c_int]
 x11.XGetInputFocus.argtypes = [c.c_void_p, c.POINTER(c.c_ulong), c.POINTER(c.c_int)]
+x11.XDefaultRootWindow.argtypes = [c.c_void_p]
+x11.XDefaultRootWindow.restype = c.c_ulong
+x11.XQueryPointer.argtypes = [
+    c.c_void_p,
+    c.c_ulong,
+    c.POINTER(c.c_ulong),
+    c.POINTER(c.c_ulong),
+    c.POINTER(c.c_int),
+    c.POINTER(c.c_int),
+    c.POINTER(c.c_int),
+    c.POINTER(c.c_int),
+    c.POINTER(c.c_uint),
+]
 
 
 def focus_request(window):

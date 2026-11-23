@@ -19,6 +19,7 @@ from ui_harness import (
     fixture_environment,
     focus_window,
     key,
+    mouse_button,
     screenshot,
     stop_process,
     text,
@@ -39,22 +40,16 @@ def wait_for(check, message):
 
 
 def drag(start, end, check=None):
-    xtest.XTestFakeMotionEvent(display, -1, *start, 0)
-    xtest.XTestFakeButtonEvent(display, 1, 1, 0)
-    x11.XFlush(display)
+    mouse_button(*start, 1, True)
     try:
-        time.sleep(0.1)
         for step in range(1, 15):
             x = round(start[0] + (end[0] - start[0]) * step / 14)
             y = round(start[1] + (end[1] - start[1]) * step / 14)
-            xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
-            x11.XFlush(display)
-            time.sleep(0.035)
+            ui.move_pointer(x, y)
         if check is not None:
             check()
     finally:
-        xtest.XTestFakeButtonEvent(display, 1, 0, 0)
-        x11.XFlush(display)
+        mouse_button(*end, 1, False)
 
 
 def explorer_divider(state):

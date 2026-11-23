@@ -90,7 +90,9 @@ def run():
                 before = ui.layout()["pass"]
                 key("End", ("Control_L",))
                 text("first line\nsecond line\n")
-                expected = "initial\nfirst line\nsecond line\n"
+                ui.source("initial\nfirst line\nsecond line\n", changed_after=before)
+                text("paced input\n", paced=True)
+                expected = "initial\nfirst line\nsecond line\npaced input\n"
                 ui.source(expected, changed_after=before)
                 # The final Enter above belongs to the editor, never the new palette.
                 ui.open_file("second.txt")

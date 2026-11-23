@@ -232,6 +232,10 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
             def open_terminal_menu():
                 previous = {info["id"] for info in infos()}
                 click("terminal-new-menu")
+                # The popup's initial sizing layout can advertise disabled
+                # placeholders. Observe the usable host choice before checking
+                # the deliberately unavailable sandbox choice beside it.
+                wait_for_button(window, process, log_path, state_path, "terminal-new-host")
                 state = wait_for_ui_state(
                     process,
                     log_path,

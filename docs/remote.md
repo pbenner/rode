@@ -27,7 +27,7 @@ Every connection can configure:
 
 The left-rail **Connections** button opens a resizable sidebar beside the current
 editor, Welcome screen or application tool. Click it again to hide it. The top
-provides **Open project…**, **Connect SSH…** and **New tunnel…**; below are saved
+provides **Connect SSH…** and **New tunnel…**; below are saved
 projects, SSH connections and saved tunnels in one scrolling list. Right-click a
 saved tunnel and choose **Remove saved tunnel**, then confirm deletion. The menu
 also works for tunnels on other hosts; running tunnels are unaffected. With the

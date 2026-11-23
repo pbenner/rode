@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -85,6 +86,66 @@ class ValidationTests(unittest.TestCase):
         versions = patch.object(validation_report, "toolchain", return_value={})
         versions.start()
         self.addCleanup(versions.stop)
+
+    def test_parallel_suites_overlap_keep_failures_and_finish_before_the_next_repeat(self):
+        with tempfile.TemporaryDirectory() as directory:
+            barrier = threading.Barrier(2)
+            lock = threading.Lock()
+            completed = set()
+
+            def measure(label, command, environment, *_args, **_kwargs):
+                iteration = int(label[:2])
+                with lock:
+                    if iteration == 2:
+                        self.assertTrue({"01-workspace", "01-agents"} <= completed)
+                barrier.wait(timeout=5)  # A serial implementation cannot satisfy this.
+                suite = command[-1]
+                output = Path(environment["RODE_CI_RESULTS_DIR"]) / suite
+                output.mkdir(parents=True)
+                planned = [name for name, *_ in ci.suite_cases(suite)]
+                failed = label == "01-workspace"
+                status = "failed" if failed else "passed"
+                for name in planned:
+                    (output / (name + ".json")).write_text(json.dumps(dict(status=status)))
+                (output / "suite.json").write_text(
+                    json.dumps(dict(suite=suite, status=status, planned=planned, completed=planned))
+                )
+                with lock:
+                    completed.add(label)
+                if failed:
+                    raise SystemExit(7)
+
+            with (
+                patch.object(validate, "ROOT", Path(directory)),
+                patch.object(validate, "inventory", return_value={}),
+                patch.object(validate, "publish_helper"),
+                patch.object(ci, "measure", side_effect=measure),
+                patch.dict(os.environ),
+            ):
+                self.assertEqual(
+                    validate.main(
+                        [
+                            "--phases",
+                            "ui",
+                            "--suite",
+                            "workspace",
+                            "--suite",
+                            "agents",
+                            "--jobs",
+                            "2",
+                            "--repeat",
+                            "2",
+                        ]
+                    ),
+                    1,
+                )
+            report = json.loads(next(Path(directory).rglob("summary.json")).read_text())
+            self.assertTrue(report["finished"])
+            self.assertTrue(report["records_complete"])
+            self.assertEqual(report["jobs"], 2)
+            self.assertCountEqual([r["exit_code"] for r in report["results"]], [7, 0, 0, 0])
+            self.assertEqual(len(completed), 4)
+            self.assertFalse(report["commands_passed"])
 
     def test_helper_publication_preserves_cargo_and_retains_the_previous_snapshot_on_failure(self):
         for fails in (False, True):

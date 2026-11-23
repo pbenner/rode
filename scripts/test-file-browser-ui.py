@@ -130,6 +130,7 @@ def run(remote=False, scenario="all"):
                     # Exercise the browser result rather than exact-path submission.
                     ui.value("file-picker-row", root / name)
                     key("Up")
+                    ui.value("file-picker-selected", root / name)
                     key("Return")
                     ui.absent("file-dialog-path")
                     ui.value("active-document", root / name)
@@ -148,6 +149,9 @@ def run(remote=False, scenario="all"):
                     key("Right")
                     directory(folder)
                     ui.value("file-picker-row", source)
+                    ui.hint("Path or command")
+                    ui.press("file-dialog-path", "Down")
+                    ui.value("file-picker-selected", source)
                     screenshot(window, label + "-subfolder.png")
                     key("Return")
                     ui.absent("file-dialog-path")

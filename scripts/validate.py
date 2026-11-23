@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import ci
+import ci_jobs
 import validation_report
 from test_capabilities import inventory, read_skip_records
 
@@ -79,6 +80,12 @@ def main(arguments=None):
         default=["lint", "build", "rust", "ui"],
     )
     parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=ci_jobs.default_jobs(),
+        help="Maximum independent suites on separate displays (default: up to 4); use 1 for serial runs",
+    )
     parser.add_argument("--stress", action="store_true")
     parser.add_argument(
         "--preflight", action="store_true", help="Print availability without starting tests"
@@ -86,7 +93,12 @@ def main(arguments=None):
     args = parser.parse_args(arguments)
     if not 1 <= args.repeat <= 100:
         parser.error("--repeat must be between 1 and 100")
+    if not 1 <= args.jobs <= 64:
+        parser.error("--jobs must be between 1 and 64")
+    if args.suite and len(set(args.suite)) != len(args.suite):
+        parser.error("Select each suite once; use --repeat for repetitions")
     env = environment()
+    env["RODE_TEST_JOBS"] = str(args.jobs)
     capabilities = inventory(env)
     if args.preflight:
         print(json.dumps(capabilities, indent=2))
@@ -106,6 +118,7 @@ def main(arguments=None):
     (output / "capabilities.json").write_text(json.dumps(capabilities, indent=2) + "\n")
     results = []
     ui_runs = []
+    started = time.monotonic()
 
     def run(label, command, *, overrides=None, timeout=900, mask=None):
         try:
@@ -158,6 +171,8 @@ def main(arguments=None):
             phases=args.phases,
             suites=args.suite or ci.FAST + ci.EXTENDED,
             repeat=args.repeat,
+            jobs=args.jobs,
+            seconds=round(time.monotonic() - started, 2),
             stress=args.stress,
             provenance=dict(
                 source_before=source_before,
@@ -293,6 +308,7 @@ def main(arguments=None):
     if "ui" in args.phases and built:
         artifacts_before = validation_report.artifact_identity(ROOT, env, ci.TEST_BINARIES)
         for iteration in range(1, args.repeat + 1):
+            jobs = []
             for suite in args.suite or ci.FAST + ci.EXTENDED:
                 label = f"{iteration:02d}-{suite}"
                 mask = (0o002, 0o077, 0o022)[(iteration - 1) % 3] if args.stress else None
@@ -308,21 +324,43 @@ def main(arguments=None):
                 overrides = {"RODE_CI_RESULTS_DIR": str(output / label)}
                 if args.stress:
                     overrides.update(RODE_TEST_AWKWARD_PATHS="1", RODE_TEST_SLOW_UI="1")
-                run(
-                    label,
-                    [
-                        sys.executable,
-                        "scripts/ui_display.py",
-                        "--",
-                        sys.executable,
-                        "scripts/ci.py",
-                        "run",
-                        suite,
-                    ],
-                    overrides=overrides,
-                    timeout=3600,
-                    mask=mask,
+                jobs.append(
+                    ci_jobs.Job(
+                        name=label,
+                        command=[
+                            sys.executable,
+                            "scripts/ui_display.py",
+                            "--",
+                            sys.executable,
+                            "scripts/ci.py",
+                            "run",
+                            suite,
+                        ],
+                        env=env | overrides,
+                        timeout=3600,
+                        umask=mask,
+                    )
                 )
+            if args.jobs == 1 or len(jobs) == 1:
+                for job in jobs:
+                    run(
+                        job.name,
+                        job.command,
+                        overrides=job.env,
+                        timeout=job.timeout,
+                        mask=job.umask,
+                    )
+            else:
+
+                def completed(result):
+                    item = dict(name=result.name, exit_code=result.exit_code)
+                    if result.error:
+                        item["error"] = result.error
+                    results.append(item)
+                    write_report()
+
+                write_report()
+                ci_jobs.run(jobs, args.jobs, completed)
         artifacts_after = validation_report.artifact_identity(ROOT, env, ci.TEST_BINARIES)
     source_after = validation_report.source_identity(ROOT)
     tools_after = validation_report.toolchain(env)

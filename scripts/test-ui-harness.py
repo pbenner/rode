@@ -13,6 +13,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
+import ui_harness
 from ui_harness import (
     NativeUI,
     background,
@@ -33,6 +34,212 @@ from ui_harness import (
     wait_for_ui_state,
     wait_for_window,
 )
+
+
+class InputBatchingTests(unittest.TestCase):
+    def test_batching_preserves_repeated_keys_modifiers_and_newlines(self):
+        expected = [
+            call("a", 1),
+            call("a", 0),
+            call("a", 1),
+            call("a", 0),
+            call("Shift_L", 1),
+            call("minus", 1),
+            call("minus", 0),
+            call("Shift_L", 0),
+            call("Shift_L", 1),
+            call("a", 1),
+            call("a", 0),
+            call("Shift_L", 0),
+            call("Shift_L", 1),
+            call("1", 1),
+            call("1", 0),
+            call("Shift_L", 0),
+            call("Return", 1),
+            call("Return", 0),
+        ]
+        for paced in (False, True):
+            with (
+                self.subTest(paced=paced),
+                patch("ui_harness.event") as event,
+                patch("ui_harness.x11.XFlush") as flush,
+                patch("ui_harness.time.sleep") as sleep,
+            ):
+                ui_harness.text("aa_A!\n", paced=paced)
+                self.assertEqual(event.call_args_list, expected)
+                self.assertEqual(flush.call_count, 6 if paced else 1)
+                self.assertEqual(sleep.call_args_list, [call(0.08)] * (6 if paced else 1))
+
+    def test_empty_text_sends_no_input_and_does_not_sleep(self):
+        with (
+            patch("ui_harness.event") as event,
+            patch("ui_harness.x11.XFlush") as flush,
+            patch("ui_harness.time.sleep") as sleep,
+        ):
+            ui_harness.text("")
+            event.assert_not_called()
+            flush.assert_not_called()
+            sleep.assert_not_called()
+
+
+class InputReceiptTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "input.json"
+        self.process = Mock(pid=42)
+        self.process.poll.return_value = None
+        self.target = ui_harness.InputTarget(self.process, "native.log", self.path)
+        for name in ("_input_targets", "_window_owners", "_delayed_inputs"):
+            p = patch.dict(getattr(ui_harness, name), {}, clear=True)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def write(
+        self,
+        path=None,
+        *,
+        viewport="ffffffffffffffff",
+        pid=42,
+        keys=0,
+        buttons=0,
+        wheels=0,
+        presses=0,
+    ):
+        (path or self.path).write_text(
+            json.dumps(
+                dict(
+                    pid=pid,
+                    viewport=viewport,
+                    input=dict(keys=keys, buttons=buttons, wheels=wheels, presses=presses),
+                )
+            )
+        )
+
+    def test_receipts_count_each_viewport_once_and_keep_closed_child_releases(self):
+        child = self.path.with_name(self.path.name + ".child.json")
+        self.write(keys=2)
+        self.write(child, viewport="child", keys=3, buttons=1)
+        self.assertEqual(self.target.counts(), dict(keys=5, buttons=1, wheels=0, presses=0))
+        self.assertEqual(self.target.counts(), dict(keys=5, buttons=1, wheels=0, presses=0))
+        child.unlink()
+        self.write(keys=4)
+        self.assertEqual(self.target.counts(), dict(keys=7, buttons=1, wheels=0, presses=0))
+
+    def test_old_processes_and_partial_snapshots_cannot_acknowledge_input(self):
+        child = self.path.with_name(self.path.name + ".child.json")
+        self.write(keys=2)
+        self.write(child, viewport="child", pid=41, keys=100)
+        self.assertEqual(self.target.counts()["keys"], 2)
+        child.write_text("{")
+        self.assertEqual(self.target.counts()["keys"], 2)
+
+    def test_receipts_wait_for_delivery_not_idle_repaints_and_never_resend(self):
+        with (
+            patch.object(
+                self.target, "counts", side_effect=[dict(keys=1), dict(keys=1), dict(keys=2)]
+            ) as counts,
+            patch("ui_harness.time.sleep") as sleep,
+        ):
+            self.target.wait(dict(keys=2))
+        self.assertEqual(counts.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [call(0.01), call(0.01)])
+
+    def test_missing_delivery_times_out_with_observed_counters(self):
+        with (
+            patch.object(self.target, "counts", return_value=dict(keys=1)),
+            patch("ui_harness.time.monotonic", side_effect=[0, 21]),
+            self.assertRaisesRegex(AssertionError, "expected.*2.*observed.*1"),
+        ):
+            self.target.wait(dict(keys=2))
+
+    def test_key_text_and_click_wait_after_flushing_without_fixed_delays(self):
+        self.write(keys=3, buttons=2)
+        with (
+            patch("ui_harness.input_target", return_value=self.target),
+            patch("ui_harness.pointer_input_target", return_value=self.target),
+            patch("ui_harness.event"),
+            patch("ui_harness.x11.XFlush") as flush,
+            patch("ui_harness.xtest.XTestFakeButtonEvent"),
+            patch("ui_harness.move_pointer"),
+            patch.object(self.target, "wait") as wait,
+            patch("ui_harness.time.sleep") as sleep,
+        ):
+            wait.side_effect = lambda *_: self.assertTrue(flush.called)
+            ui_harness.key("a", ("Control_L",))
+            ui_harness.text("repeat repeat\n")
+            ui_harness.click(100, 120)
+            ui_harness.click(100, 120, button=5)
+            ui_harness.mouse_button(100, 120, 1, True)
+            ui_harness.mouse_button(100, 120, 1, False)
+        self.assertEqual(
+            wait.call_args_list,
+            [
+                call(dict(keys=4)),
+                call(dict(keys=17)),
+                call(dict(buttons=3)),
+                call(dict(wheels=1)),
+                call(dict(presses=1)),
+                call(dict(buttons=3)),
+            ],
+        )
+        sleep.assert_not_called()
+
+    def test_corrupt_receipts_fail_instead_of_acknowledging_input(self):
+        self.write(keys=-1)
+        with self.assertRaisesRegex(AssertionError, "Invalid native input receipt"):
+            self.target.counts()
+
+    def test_pointer_destination_cannot_borrow_another_windows_keyboard_receipts(self):
+        with (
+            patch("ui_harness.input_target", return_value=self.target) as focused,
+            patch("ui_harness.pointer_input_target", return_value=None),
+            patch("ui_harness.move_pointer"),
+            patch("ui_harness.xtest.XTestFakeButtonEvent"),
+            patch("ui_harness.x11.XFlush"),
+            patch("ui_harness.time.sleep") as sleep,
+        ):
+            ui_harness.click(100, 120)
+        focused.assert_not_called()
+        sleep.assert_called_once_with(0.2)
+
+    def test_controlled_pause_defers_every_receipt_until_after_resume(self):
+        self.write(keys=3)
+        ui_harness._input_targets[42] = self.target
+        with (
+            patch.dict(os.environ, RODE_TEST_SLOW_UI="1"),
+            patch("ui_harness.os.pidfd_open", return_value=123),
+            patch("ui_harness.os.close"),
+            patch("ui_harness.signal.pidfd_send_signal") as signal_send,
+            patch("ui_harness.input_target", return_value=self.target),
+            patch("ui_harness.event"),
+            patch("ui_harness.x11.XFlush"),
+            patch.object(self.target, "wait") as wait,
+        ):
+            with delayed_input(self.process):
+                ui_harness.key("a")
+                ui_harness.key("b")
+                wait.assert_not_called()
+            self.assertEqual(signal_send.call_args_list[-1], call(123, ui_harness.signal.SIGCONT))
+            wait.assert_called_once_with(dict(keys=5))
+        self.assertFalse(self.target.pending)
+
+    def test_failure_resumes_the_gui_without_masking_the_original_exception(self):
+        ui_harness._input_targets[42] = self.target
+        with (
+            patch.dict(os.environ, RODE_TEST_SLOW_UI="1"),
+            patch("ui_harness.os.pidfd_open", return_value=123),
+            patch("ui_harness.os.close"),
+            patch("ui_harness.signal.pidfd_send_signal") as send,
+            patch.object(self.target, "wait") as wait,
+            self.assertRaisesRegex(ValueError, "original"),
+        ):
+            with delayed_input(self.process):
+                self.target.pending["keys"] = 9
+                raise ValueError("original")
+        self.assertEqual(send.call_args_list[-1], call(123, ui_harness.signal.SIGCONT))
+        wait.assert_not_called()
+        self.assertFalse(self.target.pending)
 
 
 class PaneOutlineTests(unittest.TestCase):

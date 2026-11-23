@@ -15,6 +15,7 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
+    NativeUI,
     assert_running,
     click,
     click_button,
@@ -24,6 +25,7 @@ from ui_harness import (
     fixture_directory,
     focus_window,
     key,
+    mouse_button,
     palette_command,
     read_json_lines,
     screenshot,
@@ -260,8 +262,7 @@ def submit(root, message, idle=True):
 
 
 def show_tools():
-    key("space", ("Control_L",))
-    key("p")
+    NativeUI(window, process, ARTIFACTS / "chat.log", base / "ui-state.json", root).navigate("p")
     control("agent-composer")
 
 
@@ -400,16 +401,12 @@ def long_composer(root, window, process, state_path, prompt):
 
     # Drag the divider upward; releasing it must return typing to the draft.
     divider_x, divider_y = control("agent-composer-resize", hovered=True)
-    xtest.XTestFakeMotionEvent(display, -1, divider_x, divider_y, 0)
-    xtest.XTestFakeButtonEvent(display, 1, 1, 0)
-    x11.XFlush(display)
+    mouse_button(divider_x, divider_y, 1, True)
     control("agent-composer-resize-active")
+    ui = NativeUI(window, process, ARTIFACTS / "chat.log", state_path, root)
     for step in range(1, 11):
-        xtest.XTestFakeMotionEvent(display, -1, divider_x, divider_y - 20 * step, 0)
-        x11.XFlush(display)
-        time.sleep(0.03)
-    xtest.XTestFakeButtonEvent(display, 1, 0, 0)
-    x11.XFlush(display)
+        ui.move_pointer(divider_x, divider_y - 20 * step)
+    mouse_button(divider_x, divider_y - 200, 1, False)
     wait_for(
         lambda: control("agent-composer-resize")[1] <= divider_y - 180,
         "Dragging did not expand the message input",
@@ -421,12 +418,9 @@ def long_composer(root, window, process, state_path, prompt):
     key("a", ("Control_L",))
     key("c", ("Control_L",))
     copied_text(prompt + " visible-tail", "long-composer-draft-copy")
-    xtest.XTestFakeMotionEvent(display, -1, *control("agent-composer-resize", hovered=True), 0)
+    point = control("agent-composer-resize", hovered=True)
     for _ in range(2):
-        xtest.XTestFakeButtonEvent(display, 1, 1, 0)
-        xtest.XTestFakeButtonEvent(display, 1, 0, 0)
-        x11.XFlush(display)
-        time.sleep(0.05)
+        click(*point)
     wait_for(
         lambda: abs(control("agent-composer-resize")[1] - divider_y) <= 2,
         "Double-click did not reset the message input height",
@@ -442,6 +436,7 @@ def long_composer(root, window, process, state_path, prompt):
     replace_control("file-dialog-path", "composed.txt")
     key("Return")
     wait_for(lambda: (root / "composed.txt").exists(), "Could not inspect the long chat draft")
+    control("source-editor", focused=True)
     text_matches(
         (root / "composed.txt").read_text(), prompt + " visible-tail", "long-composer-save"
     )
@@ -693,6 +688,7 @@ with fixture_directory(prefix="rode-agent-ui-") as base:
             key("Return")
             preserved = root / "preserved.txt"
             wait_for(preserved.exists, "Could not save the preserved user buffer")
+            control("source-editor", focused=True)
             assert "keep my unsaved change" in preserved.read_text()
             assert "written by the agent" not in preserved.read_text()
             # Minimum window keeps the composer and Send button accessible.

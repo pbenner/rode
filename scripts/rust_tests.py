@@ -8,16 +8,134 @@ Toolchain locations remain captured from the invoking environment; application
 preferences, caches, session services and vault leases belong to the test home.
 """
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import ci_jobs
 from fixture_support import fixture_directory, private_directory
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT = ["--locked", "--profile", "ci", "--workspace", "--all-targets", "--no-fail-fast"]
+
+
+def test_commands(output):
+    """Collect Cargo's exact invocations, including runtime env and crate cwd.
+
+    The collector runs instead of each test during Cargo's planning pass. Its
+    environment stays in memory: never publish the raw JSON stream, since
+    inherited variables can contain credentials. Real test outcomes below
+    determine success; a successful planning pass is never a test result.
+    """
+    executables = {}
+    commands = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if not isinstance(record, dict):
+            raise ValueError("Expected a Cargo JSON object")
+        if record.get("rode_test_command") == 1:
+            commands.append(record)
+            continue
+        if record.get("reason") == "compiler-message":
+            rendered = record.get("message", {}).get("rendered")
+            if rendered:
+                print(rendered, end="", file=sys.stderr)
+        if record.get("reason") != "compiler-artifact" or not record.get("profile", {}).get("test"):
+            continue
+        executable = record.get("executable")
+        if not executable:
+            continue
+        target = record["target"]
+        identity = hashlib.sha256(record["package_id"].encode()).hexdigest()[:8]
+        name = f"{target['name']}-{'-'.join(target['kind'])}-{identity}"
+        executables[executable] = (name, target["kind"])
+    if not commands:
+        raise ValueError("Cargo reported no test invocations; refusing empty coverage")
+    for command in commands:
+        argv = command["argv"]
+        if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+            raise ValueError("Invalid Cargo test arguments")
+        if argv[0] not in executables:
+            raise ValueError("Cargo invoked a test outside its current build")
+        command["name"], command["kind"] = executables[argv[0]]
+        if (
+            not isinstance(command["env"], dict)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in command["env"].items())
+            or not Path(command["cwd"]).is_absolute()
+        ):
+            raise ValueError("Incomplete Cargo runtime context")
+    if {command["argv"][0] for command in commands} != set(executables):
+        raise ValueError(
+            "Cargo did not invoke every built test target; refusing incomplete coverage"
+        )
+    return sorted(commands, key=lambda item: (item["kind"] != ["test"], item["name"]))
+
+
+def workspace_tests():
+    """Build once and run independent test targets with separate private homes.
+
+    Test functions still use libtest's own threading; only independent binaries
+    overlap. Real lease timeouts and every default Cargo target remain covered.
+    Focused Cargo commands below retain their exact argument/filter semantics.
+    """
+    version = subprocess.check_output(["rustc", "-vV"], text=True)
+    host = next(
+        line.removeprefix("host: ") for line in version.splitlines() if line.startswith("host: ")
+    )
+    collector = [sys.executable, str(Path(__file__).resolve()), "--collect-command"]
+    build = subprocess.run(
+        [
+            "cargo",
+            "test",
+            "--config",
+            f"target.{host}.runner={json.dumps(collector)}",
+            *DEFAULT,
+            "--message-format=json",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        targets = test_commands(build.stdout)
+    except (ValueError, KeyError, TypeError) as error:
+        print(f"Cannot discover the complete Rust test build: {error}", file=sys.stderr)
+        return build.returncode or 1
+    if build.returncode:
+        return build.returncode
+    jobs = ci_jobs.default_jobs()
+    configured = os.environ.get("RODE_TEST_JOBS")
+    if configured is not None:
+        try:
+            jobs = int(configured)
+        except ValueError:
+            raise SystemExit("RODE_TEST_JOBS must be an integer between 1 and 64") from None
+        if not 1 <= jobs <= 64:
+            raise SystemExit("RODE_TEST_JOBS must be between 1 and 64")
+    commands = [
+        ci_jobs.Job(
+            f"{index:02d}-{target['name']}",
+            [sys.executable, str(Path(__file__).resolve()), "--runner", *target["argv"]],
+            target["env"],
+            timeout=600,
+            group="rust-tests",
+            cwd=target["cwd"],
+        )
+        for index, target in enumerate(targets, 1)
+    ]
+    if jobs > 1:
+        # Avoid multiplying libtest's machine-wide default across every binary.
+        # Explicit caller settings remain authoritative.
+        threads = max(1, min(8, ci_jobs.available_cpus() // jobs))
+        for command in commands:
+            command.env.setdefault("RUST_TEST_THREADS", str(threads))
+    results = ci_jobs.run(commands, jobs)
+    return int(any(result.exit_code for result in results))
 
 
 def isolated(command):
@@ -64,10 +182,21 @@ def isolated(command):
 def main(arguments=None):
     """Install a structured native Cargo runner, or execute its isolated child."""
     arguments = sys.argv[1:] if arguments is None else arguments
+    if arguments[:1] == ["--collect-command"]:
+        if len(arguments) < 2:
+            raise SystemExit("--collect-command requires Cargo's test executable")
+        print(
+            json.dumps(
+                dict(rode_test_command=1, argv=arguments[1:], cwd=os.getcwd(), env=dict(os.environ))
+            )
+        )
+        return 0
     if arguments[:1] == ["--runner"]:
         if len(arguments) == 1:
             raise SystemExit("--runner requires a test executable")
         return isolated(arguments[1:])
+    if not arguments:
+        return workspace_tests()
     version = subprocess.check_output(["rustc", "-vV"], text=True)
     host = next(
         line.removeprefix("host: ") for line in version.splitlines() if line.startswith("host: ")
@@ -79,7 +208,7 @@ def main(arguments=None):
             "test",
             "--config",
             f"target.{host}.runner={json.dumps(runner)}",
-            *(arguments or DEFAULT),
+            *arguments,
         ],
         cwd=ROOT,
     )

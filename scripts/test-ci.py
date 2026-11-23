@@ -6,16 +6,19 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import ci
+import ci_jobs
 
 
 class RequiredChecksTests(unittest.TestCase):
@@ -96,7 +99,124 @@ class ProcessStateTests(unittest.TestCase):
                 process_exited(Path("/proc/123/stat"))
 
 
+class ParallelJobsTests(unittest.TestCase):
+    def test_independent_commands_overlap_and_keep_private_logs_and_main_thread_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jobs = []
+            for name, other in (("first", "second"), ("second", "first")):
+                cwd = root / ("cwd-" + name)
+                cwd.mkdir()
+                source = (
+                    "from pathlib import Path;import time,os;"
+                    f"assert Path.cwd()==Path({str(cwd)!r});"
+                    f"Path({str(root / name)!r}).write_text(os.environ['PRIVATE_VALUE']);"
+                    "deadline=time.monotonic()+5\n"
+                    f"while not Path({str(root / other)!r}).exists():\n"
+                    " assert time.monotonic()<deadline,'Other job did not run concurrently'\n"
+                    " time.sleep(.01)\n"
+                    f"print({name!r})"
+                )
+                jobs.append(
+                    ci_jobs.Job(
+                        name,
+                        [sys.executable, "-c", source],
+                        dict(os.environ, PRIVATE_VALUE=name),
+                        cwd=str(cwd),
+                    )
+                )
+            callbacks = []
+
+            def completed(result):
+                self.assertIs(threading.current_thread(), threading.main_thread())
+                callbacks.append(result.name)
+
+            with patch.dict(os.environ, RODE_CI_RESULTS_DIR=directory):
+                results = ci_jobs.run(jobs, 2, completed)
+            self.assertEqual({r.exit_code for r in results}, {0})
+            self.assertCountEqual(callbacks, ["first", "second"])
+            for name in callbacks:
+                self.assertEqual((root / name).read_text(), name)
+                self.assertEqual((root / "commands" / (name + ".log")).read_text().strip(), name)
+
+    def test_failure_does_not_cancel_other_jobs_or_hide_later_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jobs = [
+                ci_jobs.Job(
+                    "failure", [sys.executable, "-c", "raise SystemExit(7)"], dict(os.environ)
+                ),
+                ci_jobs.Job("following", [sys.executable, "-c", "print('ran')"], dict(os.environ)),
+            ]
+            with patch.dict(os.environ, RODE_CI_RESULTS_DIR=directory):
+                results = ci_jobs.run(jobs, 1)
+            self.assertEqual(
+                [(r.name, r.exit_code) for r in results], [("failure", 7), ("following", 0)]
+            )
+
+    def test_invalid_limits_and_colliding_reports_start_no_commands(self):
+        job = ci_jobs.Job("same", [sys.executable, "-c", "pass"], {})
+        with patch.object(ci, "measure") as measure:
+            for limit in (0, 65):
+                with self.assertRaises(ValueError):
+                    ci_jobs.run([job], limit)
+            with self.assertRaises(ValueError):
+                ci_jobs.run([job, job], 2)
+            measure.assert_not_called()
+
+    def test_sigterm_cancels_active_process_groups_and_never_launches_pending_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            commands = []
+            for index in range(3):
+                source = (
+                    "import subprocess,sys,time;from pathlib import Path;"
+                    "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+                    f"Path({str(root / str(index))!r}).write_text(str(p.pid));time.sleep(60)"
+                )
+                commands.append([sys.executable, "-c", source])
+            code = (
+                f"import sys,os;sys.path.insert(0,{str(ci.ROOT / 'scripts')!r});import ci_jobs;"
+                f"jobs=[ci_jobs.Job(str(i),c,dict(os.environ)) for i,c in enumerate({commands!r})];"
+                "ci_jobs.run(jobs,2)"
+            )
+            env = dict(os.environ, RODE_CI_RESULTS_DIR=directory)
+            process = subprocess.Popen(
+                [sys.executable, "-c", code], env=env, stdout=subprocess.DEVNULL
+            )
+            independent = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
+            try:
+                deadline = time.monotonic() + 5
+                while not all((root / str(i)).exists() for i in range(2)):
+                    self.assertIsNone(process.poll())
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.01)
+                grandchildren = [int((root / str(i)).read_text()) for i in range(2)]
+                process.send_signal(signal.SIGTERM)
+                self.assertEqual(process.wait(timeout=10), 130)
+                self.assertFalse((root / "2").exists())
+                for pid in grandchildren:
+                    self.assertTrue(process_exited(Path(f"/proc/{pid}/stat")))
+                self.assertIsNone(independent.poll())
+                for index in range(2):
+                    record = json.loads((root / f"commands/{index}.json").read_text())
+                    self.assertEqual(record["status"], "interrupted")
+            finally:
+                for child in (process, independent):
+                    if child.poll() is None:
+                        child.kill()
+                    child.wait(timeout=5)
+
+
 class SelectionTests(unittest.TestCase):
+    def test_runtime_lane_keeps_the_complete_transport_bundle_for_optional_tool_branches(self):
+        transports = [
+            overrides
+            for _, overrides, _ in ci.SUITES["runtimes"]
+            if overrides.get("RODE_SSH_RUN_TRANSPORT") == "1"
+        ]
+        self.assertEqual(len(transports), 1)
+        self.assertTrue(all(not env.get("RODE_SSH_TEST_FILTER") for env in transports))
+
     def test_docs_keep_the_fast_lane_without_expensive_viewers(self):
         self.assertEqual(ci.extended_suites(["README.md", "docs/editing.md"]), [])
 

@@ -7,7 +7,6 @@ room for the doubled window; controls use acknowledged native geometry.
 
 import os
 import subprocess
-import time
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/scale-ui")
@@ -16,14 +15,12 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     assert_pane_outline,
-    display,
     fixture_directory,
     fixture_environment,
     key,
+    mouse_button,
     screenshot,
     text,
-    x11,
-    xtest,
 )
 from ui_harness import (
     read_preferences as preferences,
@@ -106,13 +103,9 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
             # A held pointer must not resize the GUI. Apply the preset only
             # after release, so its target never moves during the click.
             point = ui.control("interface-scale-75", hovered=True)
-            xtest.XTestFakeMotionEvent(display, -1, *point, 0)
-            xtest.XTestFakeButtonEvent(display, 1, 1, 0)
-            x11.XFlush(display)
-            time.sleep(0.3)
+            mouse_button(*point, 1, True)
             assert preferences(saved).get("ui_scale", "1") == "1"
-            xtest.XTestFakeButtonEvent(display, 1, 0, 0)
-            x11.XFlush(display)
+            mouse_button(*point, 1, False)
             ui.wait(
                 lambda: preferences(saved).get("ui_scale") == "0.75",
                 "Percentage preset did not apply on release",

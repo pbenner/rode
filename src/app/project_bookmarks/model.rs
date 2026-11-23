@@ -58,11 +58,11 @@ impl Project {
             Self::Ssh { profile } => &profile.root,
         }
     }
-    /// Human-readable local/SSH host label without opening a connection.
+    /// Local label or remote endpoint for bookmark rows, without opening a connection.
     pub fn host(&self) -> String {
         match self {
             Self::Local { .. } => "Local".into(),
-            Self::Ssh { profile } => format!("SSH · {}", profile.endpoint()),
+            Self::Ssh { profile } => profile.endpoint(),
         }
     }
     /// Display labels and requested sandbox settings do not create duplicate locations.

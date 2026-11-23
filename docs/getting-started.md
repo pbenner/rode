@@ -48,7 +48,7 @@ every editor window and returns to Welcome. Local projects return to the startup
 CWD in Normal mode; remote projects keep their SSH connection available for
 opening another folder. **Disconnect** closes the remote project first, including
 verified encrypted unmount, then releases SSH. Failed saves or locks keep the
-project available. Use **File → Open project folder…**, Connections, or
+project available. Use **File → Open project folder…**, a saved project in **Connections**, or
 **Ctrl+Shift+O** to open another folder while a project is already open.
 
 Open **Project tools** in the left activity bar. It opens Chat first, then remembers your selected tab. Available tabs are Chat, Terminal, Git, Problems, Tasks, Shared folders, Debugger and Settings, subject to enabled extensions. Close tools with the same button, or open a file in Explorer, to return to the editor.

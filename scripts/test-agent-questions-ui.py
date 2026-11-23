@@ -16,7 +16,6 @@ from ui_harness import (
     BINARY,
     ROOT,
     assert_running,
-    click,
     click_button,
     close_window,
     fixture_directory,
@@ -27,6 +26,7 @@ from ui_harness import (
     text,
     wait_for_button,
     wait_for_project,
+    wait_for_ui_state,
     wait_for_window,
 )
 
@@ -87,7 +87,7 @@ with fixture_directory(prefix="rode-agent-questions-ui-") as base:
                 )
 
             def ask(message="question"):
-                click(*control("agent-composer"))
+                click_button(window, process, log_path, state_path, "agent-composer")
                 control("agent-composer", focused=True)
                 before = json.loads(state_path.read_text())["pass"]
                 text(message)
@@ -100,7 +100,7 @@ with fixture_directory(prefix="rode-agent-questions-ui-") as base:
 
             def fill_async():
                 click_button(window, process, log_path, state_path, "agent-question-0-option-1")
-                click(*control("agent-question-1-answer"))
+                click_button(window, process, log_path, state_path, "agent-question-1-answer")
                 control("agent-question-1-answer", focused=True)
                 before = json.loads(state_path.read_text())["pass"]
                 text("Keep tool commands offline")
@@ -124,7 +124,7 @@ with fixture_directory(prefix="rode-agent-questions-ui-") as base:
             click_button(window, process, log_path, state_path, "agent-question-0-option-0")
             control("agent-question-send")
             assert not (project / "answers.json").exists(), "Selecting an option submitted it"
-            click(*control("agent-question-0-answer"))
+            click_button(window, process, log_path, state_path, "agent-question-0-answer")
             control("agent-question-0-answer", focused=True)
             before = json.loads(state_path.read_text())["pass"]
             key("a", ("Control_L",))
@@ -189,7 +189,14 @@ with fixture_directory(prefix="rode-agent-questions-ui-") as base:
                     return False
 
             wait(partial_answered, "A selected option could not be sent on its own")
-            click(*control("agent-question-1-answer"))
+            wait_for_ui_state(
+                process,
+                log_path,
+                state_path,
+                lambda state: all(b["name"] != "agent-question-0-answer" for b in state["buttons"]),
+                "The answered question did not leave the form",
+            )
+            click_button(window, process, log_path, state_path, "agent-question-1-answer")
             control("agent-question-1-answer", focused=True)
             before = json.loads(state_path.read_text())["pass"]
             text("Keep tool commands offline")

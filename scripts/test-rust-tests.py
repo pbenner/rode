@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify private Rust test homes, cleanup, argument forwarding and exit codes."""
 
+import io
 import json
 import os
 import subprocess
@@ -10,7 +11,106 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import ci_jobs
 import rust_tests
+
+
+class RustPlanTests(unittest.TestCase):
+    def plan(self):
+        records = []
+        for kind in ("lib", "bin", "test", "bench"):
+            executable = "/compiled/" + kind
+            records.extend(
+                [
+                    dict(
+                        reason="compiler-artifact",
+                        package_id="fixture#1",
+                        profile=dict(test=True),
+                        target=dict(name=kind, kind=[kind]),
+                        executable=executable,
+                    ),
+                    dict(
+                        rode_test_command=1,
+                        argv=[executable, "--test"] if kind == "bench" else [executable],
+                        cwd="/fixture/crate",
+                        env={
+                            "CARGO_MANIFEST_DIR": "/fixture/crate",
+                            "LD_LIBRARY_PATH": "/cargo/library/path",
+                            "PRIVATE_VALUE": "not for logs",
+                        },
+                    ),
+                ]
+            )
+        return records
+
+    def test_cargo_plan_retains_all_target_kinds_arguments_and_runtime_context(self):
+        records = self.plan()
+        records.append(records[0])  # Cargo may repeat artifact metadata.
+        commands = rust_tests.test_commands("\n".join(json.dumps(r) for r in records))
+        self.assertEqual(len(commands), 4)
+        self.assertCountEqual(
+            [c["argv"][0] for c in commands],
+            ["/compiled/" + k for k in ("lib", "bin", "test", "bench")],
+        )
+        for command in commands:
+            self.assertEqual(command["cwd"], "/fixture/crate")
+            self.assertEqual(command["env"]["LD_LIBRARY_PATH"], "/cargo/library/path")
+        self.assertEqual(
+            next(c for c in commands if c["kind"] == ["bench"])["argv"],
+            ["/compiled/bench", "--test"],
+        )
+
+    def test_missing_invocations_stale_executables_and_invalid_streams_fail_closed(self):
+        for records in (
+            [],
+            self.plan()[::2],
+            self.plan()[:-1],
+            [None],
+            [dict(rode_test_command=1, argv=["/stale/test"], cwd="/", env={})],
+        ):
+            with self.assertRaises(ValueError):
+                rust_tests.test_commands("\n".join(json.dumps(r) for r in records))
+        with self.assertRaises(ValueError):
+            rust_tests.test_commands("truncated JSON")
+
+    def test_successful_planning_cannot_hide_a_test_failure_or_publish_private_env(self):
+        plan = "\n".join(json.dumps(r) for r in self.plan())
+        with (
+            patch.object(
+                rust_tests.subprocess, "check_output", return_value="host: fixture-target\n"
+            ),
+            patch.object(
+                rust_tests.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0, stdout=plan, stderr=""),
+            ) as build,
+            patch.object(ci_jobs, "run", return_value=[ci_jobs.Result("failed", 7)]) as run,
+            patch("sys.stdout", new_callable=io.StringIO) as output,
+        ):
+            self.assertEqual(rust_tests.workspace_tests(), 1)
+        self.assertNotIn("not for logs", output.getvalue())
+        self.assertEqual(len(run.call_args.args[0]), 4)
+        job = run.call_args.args[0][0]
+        self.assertEqual(job.cwd, "/fixture/crate")
+        self.assertEqual(job.env["CARGO_MANIFEST_DIR"], "/fixture/crate")
+        self.assertIn("--collect-command", build.call_args.args[0][3])
+
+    def test_failed_build_never_executes_partially_collected_targets(self):
+        with (
+            patch.object(
+                rust_tests.subprocess, "check_output", return_value="host: fixture-target\n"
+            ),
+            patch.object(
+                rust_tests.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    [], 101, stdout="", stderr="compile failed"
+                ),
+            ),
+            patch.object(ci_jobs, "run") as run,
+        ):
+            self.assertEqual(rust_tests.workspace_tests(), 101)
+            run.assert_not_called()
 
 
 class RustFixtureTests(unittest.TestCase):

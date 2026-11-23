@@ -17,18 +17,16 @@ from ui_harness import (
     click,
     close_window,
     delayed_input,
-    display,
     fixture_directory,
     fixture_environment,
     focus_window,
     key,
+    mouse_button,
     screenshot,
     stop_process,
     text,
     wait_for_project,
     wait_for_window,
-    x11,
-    xtest,
 )
 
 FIXTURE = Path(__file__).resolve().parent.parent / "tests/fixtures/pages.pdf"
@@ -44,12 +42,8 @@ def wait_for(check, message):
 
 
 def wheel(up, ticks=1):
-    xtest.XTestFakeMotionEvent(display, -1, 840, 520, 0)
     for _ in range(ticks):
-        xtest.XTestFakeButtonEvent(display, 4 if up else 5, 1, 0)
-        xtest.XTestFakeButtonEvent(display, 4 if up else 5, 0, 0)
-        x11.XFlush(display)
-        time.sleep(0.12)
+        click(840, 520, button=4 if up else 5)
 
 
 def color(window, name, kind):
@@ -127,15 +121,10 @@ def run(remote=False):
                     round((bounds[1] + bounds[3]) * 0.5 * scale),
                 )
                 end = (round((bounds[2] - 1) * scale), start[1])
-                xtest.XTestFakeMotionEvent(display, -1, *start, 0)
-                xtest.XTestFakeButtonEvent(display, 1, 1, 0)
-                x11.XFlush(display)
-                time.sleep(0.08)
-                xtest.XTestFakeMotionEvent(display, -1, *end, 0)
-                x11.XFlush(display)
+                mouse_button(*start, 1, True)
+                ui.move_pointer(*end)
                 ui.value("pdf-selection", "RODE - Page One")
-                xtest.XTestFakeButtonEvent(display, 1, 0, 0)
-                x11.XFlush(display)
+                mouse_button(*end, 1, False)
                 ui.control("image-preview", focused=True)
                 key("c", ("Control_L",))
                 ui.wait(lambda: ui.clipboard() == "RODE - Page One", "PDF text drag/copy failed")

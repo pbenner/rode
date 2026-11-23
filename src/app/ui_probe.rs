@@ -35,6 +35,39 @@ struct Controls {
     notebook: Option<serde_json::Value>,
     debugger: Option<serde_json::Value>,
     project: Option<serde_json::Value>,
+    input: InputReceipt,
+    input_frame: Option<u64>,
+}
+
+/// Counts native input delivered to this viewport, without recording keys or text.
+/// Receipts persist across idle repaints; a layout retry must not count input twice.
+#[derive(Clone, Default, Serialize)]
+struct InputReceipt {
+    keys: u64,
+    presses: u64,
+    buttons: u64,
+    wheels: u64,
+}
+
+impl Controls {
+    fn observe_input(&mut self, ctx: &egui::Context) {
+        let frame = ctx.cumulative_frame_nr();
+        if self.input_frame == Some(frame) {
+            return;
+        }
+        self.input_frame = Some(frame);
+        ctx.input(|input| {
+            for event in &input.events {
+                match event {
+                    egui::Event::Key { pressed: false, .. } => self.input.keys += 1,
+                    egui::Event::PointerButton { pressed: true, .. } => self.input.presses += 1,
+                    egui::Event::PointerButton { pressed: false, .. } => self.input.buttons += 1,
+                    egui::Event::MouseWheel { .. } => self.input.wheels += 1,
+                    _ => {}
+                }
+            }
+        });
+    }
 }
 
 #[derive(Clone, Default)]
@@ -58,6 +91,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
         Arc::new(move |ctx| {
             let mut viewports = begin.0.lock().unwrap();
             let controls = viewports.entry(ctx.viewport_id()).or_default();
+            controls.observe_input(ctx);
             controls.visible.clear();
             controls.session_ids = None;
             controls.ssh_master_socket = None;
@@ -81,6 +115,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             let notebook = controls.notebook.clone();
             let debugger = controls.debugger.clone();
             let project = controls.project.clone();
+            let input = controls.input.clone();
             // Keep revisions across repaints, but discard hidden/closed widgets.
             controls
                 .last_change
@@ -115,6 +150,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
                 "pixels_per_point": ctx.pixels_per_point(),
                 "size": [ctx.content_rect().width(), ctx.content_rect().height()],
                 "pointer": ctx.pointer_hover_pos().map(|pos| [pos.x, pos.y]),
+                "input": input,
                 "buttons": buttons,
                 "keyboard": super::keyboard::snapshot(ctx),
                 "session_ids": session_ids,
@@ -324,6 +360,105 @@ pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_receipts_require_native_releases_and_survive_repaints_without_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let ctx = egui::Context::default();
+        install_at(&ctx, path.clone());
+        let key = |pressed| egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: Some(egui::Key::A),
+            pressed,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        for (events, expected) in [
+            (
+                vec![key(true), egui::Event::Text("private prompt text".into())],
+                0,
+            ),
+            (vec![key(false)], 1),
+            (vec![], 1),
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |_| {},
+            );
+            let raw = std::fs::read_to_string(&path).unwrap();
+            assert!(!raw.contains("private prompt"));
+            let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(value["input"]["keys"], expected);
+        }
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![key(false)],
+                ..Default::default()
+            },
+            |ctx| {
+                if ctx.current_pass_index() == 0 {
+                    ctx.request_discard("Receipt must not count a layout retry twice");
+                }
+            },
+        );
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["input"]["keys"], 2);
+    }
+
+    #[test]
+    fn pointer_and_key_receipts_belong_to_the_viewport_that_received_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let ctx = egui::Context::default();
+        install_at(&ctx, path.clone());
+        let _ = ctx.run(Default::default(), |_| {});
+        let child = egui::ViewportId::from_hash_of("child input");
+        let _ = ctx.run(
+            egui::RawInput {
+                viewport_id: child,
+                viewports: [
+                    (egui::ViewportId::ROOT, Default::default()),
+                    (
+                        child,
+                        egui::ViewportInfo {
+                            parent: Some(egui::ViewportId::ROOT),
+                            ..Default::default()
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                events: vec![
+                    egui::Event::PointerButton {
+                        pos: egui::pos2(10., 10.),
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta: egui::vec2(0., -1.),
+                        modifiers: Default::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |_| {},
+        );
+        let root: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let other: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(viewport_path(&path, child)).unwrap()).unwrap();
+        assert_eq!(root["input"]["buttons"], 0);
+        assert_eq!(root["input"]["wheels"], 0);
+        assert_eq!(other["input"]["buttons"], 1);
+        assert_eq!(other["input"]["wheels"], 1);
+    }
 
     #[test]
     fn ssh_endpoints_follow_reconnections_and_clear_without_assuming_a_directory_layout() {

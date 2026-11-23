@@ -16,11 +16,11 @@ from ui_harness import (
     NativeUI,
     click_button,
     close_window,
-    display,
     fixture_directory,
     fixture_environment,
     focus_window,
     key,
+    mouse_button,
     palette_command,
     screenshot,
     text,
@@ -28,8 +28,6 @@ from ui_harness import (
     wait_for_project,
     wait_for_ui_state,
     wait_for_window,
-    x11,
-    xtest,
 )
 
 
@@ -40,13 +38,6 @@ def wait_for(check, message):
             return
         time.sleep(0.05)
     raise AssertionError(message)
-
-
-def mouse_button(x, y, button, pressed):
-    xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
-    xtest.XTestFakeButtonEvent(display, button, pressed, 0)
-    x11.XFlush(display)
-    time.sleep(0.08)
 
 
 def check_selection(window, root, click_control, command, focus_terminal, ui):
@@ -68,9 +59,7 @@ def check_selection(window, root, click_control, command, focus_terminal, ui):
     start = (round((left + 0.1 * cell) * scale), round((top + bottom) * 0.5 * scale))
     end = (round((left + (len("SELECT_ME") + 0.1) * cell) * scale), start[1])
     mouse_button(*start, 1, True)
-    xtest.XTestFakeMotionEvent(display, -1, *end, 0)
-    x11.XFlush(display)
-    time.sleep(0.08)
+    ui.move_pointer(*end)
     mouse_button(*end, 1, False)
     screenshot(window, "selected-text.png")
 

@@ -170,7 +170,7 @@ The left activity bar groups **Explorer** and **Project tools** directly below *
 Welcome is the initial view, with Explorer hidden. With no local or SSH target, the current working directory opens as the project in **Normal** mode, including when it is your home directory. Saved sandbox settings are preserved but do not apply to this implicit startup; use `--sandbox` to request isolation explicitly. **Projects**, **Explorer** and **Project tools** are always available in the left rail, including while viewing application tools. Clicking the selected **Projects** icon deselects it and returns to Welcome; clicking it again restores the project view. An empty project shows **Start editing**, while Welcome remains a separate screen. Welcome leaves open files, unsaved edits, chats, terminals and detached windows intact. Opening a file or selecting Explorer or Project tools enters the project directly.
 
 **Connections** and **Explorer** use the same left sidebar space. Connections
-keeps **Open project…**, **Connect SSH…** and **New tunnel…** above the saved
+keeps **Connect SSH…** and **New tunnel…** above the saved
 projects, SSH profiles and tunnel setups. All three saved-list sections can be
 collapsed and use full-width rows without vertical guide lines. Switching between
 the two retains the current editor/tool view and each sidebar’s layout. The

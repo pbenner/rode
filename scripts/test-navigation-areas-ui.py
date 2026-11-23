@@ -169,7 +169,22 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
         ]
         assert len(rows) == 4, rows
         assert max(rect[2] for rect in rows) - min(rect[0] for rect in rows) <= 450, rows
-        buttons = ui.layout()["buttons"]
+
+        def tunnel_rows_expanded(state):
+            rows = {b["name"]: b["rect"] for b in state["buttons"]}
+            active = rows.get("connections-manage-tunnels")
+            saved = [rect for name, rect in rows.items() if name.startswith("tunnel-saved-load:")]
+            return (
+                active is not None
+                and len(saved) == 2
+                and all(abs((active[3] - active[1]) - (rect[3] - rect[1])) < 1 for rect in saved)
+            )
+
+        # A reopened section exposes clipped rows while its expansion animates.
+        # Check the final geometry after every row has reached its full height.
+        buttons = ui.layout(tunnel_rows_expanded, "Saved tunnel rows did not finish expanding")[
+            "buttons"
+        ]
         active = next(b["rect"] for b in buttons if b["name"] == "connections-manage-tunnels")
         for saved_row in (b["rect"] for b in buttons if b["name"].startswith("tunnel-saved-load:")):
             assert abs(active[0] - saved_row[0]) < 1 and abs(active[2] - saved_row[2]) < 1
