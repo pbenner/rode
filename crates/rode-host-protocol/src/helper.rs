@@ -49,6 +49,9 @@ pub const CAPABILITIES: &[&str] = &[
     "shared_folders",
     "agent_undo",
     "connection_heartbeats",
+    // Desktop heartbeats must reach the agent bridge even if an intermediate
+    // stdio supervisor survives the original desktop process.
+    "agent_attachment_leases",
     "agent_auto_persist",
     "private_home_tmp",
     // Encrypted mounts must share the desktop's host-scoped private temp root.
@@ -326,6 +329,17 @@ mod tests {
             .validate(std::env::consts::OS, std::env::consts::ARCH, 20)
             .unwrap_err();
         assert!(error.contains("connection_heartbeats"), "{error}");
+    }
+
+    #[test]
+    fn helpers_without_agent_attachment_leases_require_an_upgrade() {
+        let mut info = Info::current("0.1.0", 20);
+        info.capabilities
+            .retain(|cap| cap != "agent_attachment_leases");
+        let error = info
+            .validate(std::env::consts::OS, std::env::consts::ARCH, 20)
+            .unwrap_err();
+        assert!(error.contains("agent_attachment_leases"), "{error}");
     }
 
     #[test]

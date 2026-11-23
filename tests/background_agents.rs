@@ -145,7 +145,7 @@ impl Fixture {
         if heartbeat {
             command.arg("--process");
         } else {
-            command.args(["attach-agent", &info.id, &info.policy]);
+            command.args(["attach-agent", "--heartbeat", &info.id, &info.policy]);
         }
         let mut child = command
             .env("RODE_SESSION_DIR", &self.runtime)
@@ -161,7 +161,7 @@ impl Fixture {
                 "environment": {},
                 "root": self.root,
                 "prefix": [],
-                "argv": [env!("CARGO_BIN_EXE_rode-sessiond"), "attach-agent", &info.id, &info.policy],
+                "argv": [env!("CARGO_BIN_EXE_rode-sessiond"), "attach-agent", "--heartbeat", &info.id, &info.policy],
                 "python": "off",
                 "python_program": false
             })).unwrap();
@@ -256,6 +256,94 @@ fn last_prompt_undo_survives_reattachment_and_refuses_later_edits_for_each_backe
             "my later changes\n"
         );
     }
+}
+
+#[test]
+fn orphaned_agent_bridges_expire_without_an_outer_supervisor() {
+    std::thread::scope(|scope| {
+        for (persistent, busy) in [
+            (Persistence::Off, true),
+            (Persistence::Auto, false),
+            (Persistence::Auto, true),
+            (Persistence::On, false),
+        ] {
+            scope.spawn(move || {
+                let fixture = Fixture::new();
+                if !busy {
+                    fs::write(fixture.root.join("continue"), "").unwrap();
+                }
+                let info = fixture.create(Provider::Codex, persistent, "work");
+                // Deliberately keep the raw bridge's pipes open after the
+                // desktop stops supplying input. No --process supervisor is
+                // present to release its controlling socket on our behalf.
+                let mut view = fixture.attach(&info);
+                view.until(|s| s.chat.connected && s.chat.busy == busy);
+                let until = Instant::now()
+                    + rode_host_protocol::framing::CONNECTION_TIMEOUT
+                    + Duration::from_secs(5);
+                while view.child.try_wait().unwrap().is_none() {
+                    assert!(
+                        Instant::now() < until,
+                        "Orphaned {persistent:?} bridge retained its controlling attachment"
+                    );
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+                wait(|| fixture.infos().iter().all(|i| !i.attached));
+                if persistent == Persistence::On || (persistent == Persistence::Auto && busy) {
+                    assert!(fixture.infos().iter().any(|i| i.id == info.id && i.alive));
+                }
+                if persistent == Persistence::Auto && busy {
+                    fs::write(fixture.root.join("continue"), "").unwrap();
+                    wait(|| fixture.root.join("work-done").exists());
+                }
+                if persistent != Persistence::On {
+                    wait(|| fixture.infos().iter().all(|i| i.id != info.id || !i.alive));
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn desktop_heartbeats_keep_idle_auto_attachments_alive_without_submitting_work() {
+    std::thread::scope(|scope| {
+        for supervised in [false, true] {
+            scope.spawn(move || {
+                let fixture = Fixture::new();
+                fs::write(fixture.root.join("continue"), "").unwrap();
+                fs::write(fixture.root.join("record-inputs"), "").unwrap();
+                let info = fixture.create(Provider::Codex, Persistence::Auto, "work");
+                let mut view = fixture.attach_transport(&info, supervised);
+                view.until(|s| s.chat.completed == 1 && !s.chat.busy);
+                let until = Instant::now()
+                    + rode_host_protocol::framing::CONNECTION_TIMEOUT
+                    + Duration::from_secs(2);
+                while Instant::now() < until {
+                    view.send(Action::Heartbeat);
+                    std::thread::sleep(
+                        rode_host_protocol::framing::HEARTBEAT_INTERVAL
+                            .min(until.saturating_duration_since(Instant::now())),
+                    );
+                }
+                assert!(
+                    fixture
+                        .infos()
+                        .iter()
+                        .any(|i| { i.id == info.id && i.alive && i.attached && !i.busy })
+                );
+                assert_eq!(
+                    fs::read_to_string(fixture.root.join("recorded-inputs.jsonl"))
+                        .unwrap()
+                        .lines()
+                        .count(),
+                    1,
+                    "Heartbeats must never start additional model work"
+                );
+                drop(view);
+                wait(|| fixture.infos().iter().all(|i| i.id != info.id || !i.alive));
+            });
+        }
+    });
 }
 
 #[test]

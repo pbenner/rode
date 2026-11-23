@@ -15,14 +15,18 @@ use std::{
 /// Spawn a command-only stdin worker for an already authenticated attachment.
 /// Limits count encoded bytes including the optional trailing newline. Agent
 /// and runtime output decoding and lifetime rules remain with their owners.
+/// Leased inputs expire even if an orphaned supervisor leaves stdin open.
 pub(super) fn forward_commands<T: DeserializeOwned + 'static>(
     mut stream: UnixStream,
     line_limit: usize,
+    leased: bool,
     send: fn(&mut UnixStream, &T) -> Result<()>,
 ) {
     std::thread::spawn(move || {
         if let Ok(mut input) = rode_host_core::connection::Input::stdin() {
-            input.unbounded();
+            if !leased {
+                input.unbounded();
+            }
             let _ = forward(&mut BufReader::new(input), line_limit, |command| {
                 send(&mut stream, &command)
             });

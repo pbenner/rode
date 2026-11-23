@@ -297,6 +297,9 @@ impl Store {
             let _ = writer.shutdown(std::net::Shutdown::Both);
         });
         while let Ok(action) = recv_json::<_, Action>(&mut stream) {
+            if matches!(action, Action::Heartbeat) {
+                continue;
+            }
             if job.input.try_send(Work::Action(Box::new(action))).is_err() {
                 break;
             }
@@ -491,6 +494,9 @@ fn run(
                 changed = true;
                 error.clear();
                 let result = match *action {
+                    // Heartbeats are filtered at attachment admission; they
+                    // never acknowledge work or change conversation state.
+                    Action::Heartbeat => Ok(()),
                     Action::Undo { turn } => {
                         queue.pause();
                         // Every request receives its own acknowledgement, even
@@ -760,8 +766,9 @@ fn configure(
 }
 
 /// Bridge bounded stdio messages through the current service's authenticated
-/// local socket; require the original policy.
-pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
+/// local socket; require the original policy. Only desktops opting into the
+/// heartbeat contract expire, preserving legacy interactive attachment streams.
+pub(super) fn bridge(id: &str, policy: &str, leased: bool) -> Result<()> {
     let mut stream = connect_control(&directory()?)?;
     send_json(
         &mut stream,
@@ -774,7 +781,8 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
     super::attachment::forward_commands::<Action>(
         stream.try_clone()?,
         rode_agent_core::LINE_LIMIT,
-        send_json,
+        leased,
+        forward_command,
     );
     let mut output = std::io::BufWriter::new(rode_host_core::connection::Output::stdout()?);
     loop {
@@ -796,4 +804,33 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Heartbeats belong to the disposable bridge, not the persistent controller.
+/// Filtering them here also lets current bridges attach to an existing service
+/// without requiring it to understand a new controller action.
+fn forward_command(stream: &mut UnixStream, action: &Action) -> Result<()> {
+    if matches!(action, Action::Heartbeat) {
+        return Ok(());
+    }
+    send_json(stream, action)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_heartbeats_never_enter_the_persistent_controller() {
+        let (mut bridge, mut controller) = UnixStream::pair().unwrap();
+        controller
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        forward_command(&mut bridge, &Action::Heartbeat).unwrap();
+        forward_command(&mut bridge, &Action::Cancel).unwrap();
+        assert!(matches!(
+            recv_json::<_, Action>(&mut controller).unwrap(),
+            Action::Cancel
+        ));
+    }
 }

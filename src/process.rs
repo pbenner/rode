@@ -168,6 +168,28 @@ impl Session {
     /// [`Event`] for failures. `wake` runs on worker threads and must not directly mutate GUI
     /// state.
     pub fn start(launch: Launch, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self> {
+        Self::start_inner(launch, None, wake)
+    }
+    /// Renew an attachment from the owning desktop process, independently of UI
+    /// repainting. The payload passes through SSH supervisors to the attachment
+    /// itself, so an orphaned intermediate process cannot keep its lease alive.
+    pub(crate) fn start_with_heartbeat(
+        launch: Launch,
+        heartbeat: Value,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Self> {
+        let heartbeat = encode_request(&heartbeat)?;
+        ensure!(
+            heartbeat.len() <= launch.line_limit,
+            "Heartbeat exceeds its line limit"
+        );
+        Self::start_inner(launch, Some(heartbeat), wake)
+    }
+    fn start_inner(
+        launch: Launch,
+        heartbeat: Option<Vec<u8>>,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Self> {
         launch.validate()?;
         ensure!(
             !launch.plan.root.is_empty(),
@@ -191,6 +213,7 @@ impl Session {
                 output.clone(),
                 run_control.clone(),
                 run_executable,
+                heartbeat,
                 wake.clone(),
             );
             if let Err(error) = result {
@@ -275,6 +298,7 @@ fn run_session(
     output: rode_agent_core::io::EventSender,
     control: Arc<ProcessGroup>,
     executable: Arc<ExecutablePaths>,
+    heartbeat_payload: Option<Vec<u8>>,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<()> {
     if control.cancelled().load(Ordering::Acquire) {
@@ -377,7 +401,7 @@ fn run_session(
     .context("Cannot start process. Check its executable and sandbox access on the project host")?;
     control.started(child.id());
     let mut stdin = child.stdin.take().context("Process stdin is missing")?;
-    let heartbeat = launch.remote.is_some();
+    let heartbeat = launch.remote.is_some() || heartbeat_payload.is_some();
     std::thread::spawn(move || {
         if let Some(bootstrap) = bootstrap
             && stdin.write_all(&bootstrap).is_err()
@@ -388,7 +412,9 @@ fn run_session(
             let data = if heartbeat {
                 match input.recv_timeout(rode_host_protocol::framing::HEARTBEAT_INTERVAL) {
                     Ok(data) => data,
-                    Err(mpsc::RecvTimeoutError::Timeout) => vec![b'\n'],
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        heartbeat_payload.clone().unwrap_or_else(|| vec![b'\n'])
+                    }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             } else {

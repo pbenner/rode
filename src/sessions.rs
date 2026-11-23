@@ -19,8 +19,12 @@ pub fn local(operation: &Operation) -> Result<Reply> {
             .filter(|p| p.is_file())
     });
     if let Some(path) = &standalone {
+        let agents = matches!(operation, Operation::Agents { .. });
         let mut command = std::process::Command::new(path);
         command.arg("protocol");
+        if agents {
+            command.arg("--capabilities");
+        }
         let output = rode_host_core::command::run_controlled_limited(
             command,
             vec![],
@@ -32,8 +36,8 @@ pub fn local(operation: &Operation) -> Result<Reply> {
         )
         .with_context(|| format!("Cannot check session helper {} from RODE_SESSION_HELPER on this computer; correct or unset that override", path.display()))?;
         ensure!(
-            output.success() && output.stdout.trim() == rode_session::PROTOCOL.to_string(),
-            "RODE_SESSION_HELPER uses a different terminal protocol. Rebuild it with cargo xtask build-helper or unset RODE_SESSION_HELPER to use the editor's matching service. Existing jobs were not touched."
+            output.success() && compatible_helper(&output.stdout, agents),
+            "RODE_SESSION_HELPER uses an incompatible protocol or lacks required agent capabilities. Rebuild it with cargo xtask build-helper or unset RODE_SESSION_HELPER to use the editor's matching service. Existing jobs were not touched."
         );
     }
     let launcher = match standalone {
@@ -47,4 +51,44 @@ pub fn local(operation: &Operation) -> Result<Reply> {
         },
     };
     rode_session::workspace::local(operation, launcher)
+}
+
+/// Terminal compatibility uses its established numeric protocol. Agent bridges
+/// additionally require helper capabilities, because new attachment messages
+/// must not be sent to an older override even when its service protocol matches.
+fn compatible_helper(output: &str, agents: bool) -> bool {
+    if !agents {
+        return output.trim() == rode_session::PROTOCOL.to_string();
+    }
+    serde_json::from_str::<rode_host_protocol::helper::Info>(output).is_ok_and(|info| {
+        info.validate(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            rode_session::PROTOCOL,
+        )
+        .is_ok()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matching_service_protocol_does_not_admit_a_helper_without_agent_leases() {
+        let protocol = rode_session::PROTOCOL.to_string();
+        assert!(compatible_helper(&protocol, false));
+        assert!(!compatible_helper(&protocol, true));
+        let mut info = rode_host_protocol::helper::Info::current("fixture", rode_session::PROTOCOL);
+        assert!(compatible_helper(
+            &serde_json::to_string(&info).unwrap(),
+            true
+        ));
+        info.capabilities
+            .retain(|cap| cap != "agent_attachment_leases");
+        assert!(!compatible_helper(
+            &serde_json::to_string(&info).unwrap(),
+            true
+        ));
+    }
 }

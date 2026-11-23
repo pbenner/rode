@@ -1145,6 +1145,15 @@ pub fn cli(args: &[String]) -> Result<()> {
             println!("{PROTOCOL}");
             Ok(())
         }
+        Some("protocol") if args.len() == 2 && args[1] == "--capabilities" => {
+            // Local overrides need the same capability check as SSH helpers,
+            // without hashing the executable or enforcing deployment sizes.
+            serde_json::to_writer(
+                std::io::stdout().lock(),
+                &rode_host_protocol::helper::Info::current(env!("CARGO_PKG_VERSION"), PROTOCOL),
+            )?;
+            Ok(())
+        }
         Some("serve") => serve(),
         Some("request") => {
             let mut bytes = vec![];
@@ -1162,7 +1171,10 @@ pub fn cli(args: &[String]) -> Result<()> {
             Ok(())
         }
         Some("attach-runtime") if args.len() == 3 => runtimes::bridge(&args[1], &args[2]),
-        Some("attach-agent") if args.len() == 3 => agents::bridge(&args[1], &args[2]),
+        Some("attach-agent") if args.len() == 3 => agents::bridge(&args[1], &args[2], false),
+        Some("attach-agent") if args.len() == 4 && args[1] == "--heartbeat" => {
+            agents::bridge(&args[2], &args[3], true)
+        }
         Some("attach") if args.len() == 3 => attach(&args[1], &args[2], false),
         Some("attach") if args.len() == 4 && args[1] == "--framed" => {
             attach(&args[2], &args[3], true)

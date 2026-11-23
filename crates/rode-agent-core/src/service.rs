@@ -251,10 +251,14 @@ impl Update {
         Ok(self.state)
     }
 }
-/// Explicit user actions; permissions and host policy cannot be widened by attachment.
+/// Controller actions and attachment liveness; permissions and host policy cannot
+/// be widened by attachment.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Command {
+    /// Renew the desktop attachment only; consumed by the stdio bridge without
+    /// reaching the model, changing the queue or retaining completed Auto work.
+    Heartbeat,
     /// Reverse the last prompt's recorded file edits, rejecting a stale turn.
     Undo {
         /// Exact completed-turn identity displayed by the controlling view.

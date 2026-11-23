@@ -929,7 +929,12 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
     // govern flow and cancellation after the authenticated handshake.
     stream.set_read_timeout(None)?;
     stream.set_write_timeout(None)?;
-    super::attachment::forward_commands::<Envelope>(stream.try_clone()?, FRAME_LIMIT - 1, send);
+    super::attachment::forward_commands::<Envelope>(
+        stream.try_clone()?,
+        FRAME_LIMIT - 1,
+        false,
+        send,
+    );
     let mut output = std::io::BufWriter::new(rode_host_core::connection::Output::stdout()?);
     loop {
         let value: Value = receive(&mut stream)?;

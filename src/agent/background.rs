@@ -250,14 +250,19 @@ impl Client {
         );
         let mut argv = vec![reply.executable];
         argv.extend(reply.prefix);
-        argv.extend(["attach-agent".into(), info.id, info.policy]);
+        argv.extend([
+            "attach-agent".into(),
+            "--heartbeat".into(),
+            info.id,
+            info.policy,
+        ]);
         let control = crate::sandbox::Plan {
             root: self.launch.plan.root.clone(),
             ..Default::default()
         };
         // The broker connection remains outside the project namespace, like
         // native terminal attachment. The agent itself retains its fixed policy.
-        self.bridge = Some(crate::process::Session::start(
+        self.bridge = Some(crate::process::Session::start_with_heartbeat(
             crate::process::Launch {
                 argv,
                 plan: control,
@@ -267,6 +272,7 @@ impl Client {
                 line_limit: 4 * 1024 * 1024,
                 native_debug: false,
             },
+            serde_json::to_value(Command::Heartbeat)?,
             self.wake.clone(),
         )?);
         if self.ending {
