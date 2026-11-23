@@ -64,7 +64,7 @@ pub struct Manifest {
     /// Panel wire version. Version 1 remains compatible with existing providers.
     #[serde(default = "panel_version", skip_serializing_if = "is_panel_v1")]
     pub panel_version: u32,
-    /// Theme-owned icon name; providers never supply executable UI or raw images.
+    /// Theme-owned icon name or absolute path to a local PNG image.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub icon: String,
     /// Explicit execution-scoped contributions. Mutually exclusive with legacy fields.
@@ -104,7 +104,7 @@ pub struct Panel<'a> {
     pub tool: &'a Tool,
     /// Supported panel wire version, independent of the manifest API.
     pub protocol: u32,
-    /// A theme-owned icon identifier, or the generic extension icon when empty.
+    /// A theme-owned icon identifier or absolute PNG path; empty uses the generic icon.
     pub icon: &'a str,
 }
 impl Manifest {
@@ -273,8 +273,14 @@ fn validate_panel(tool: &Tool, protocol: u32, icon: &str) -> Result<()> {
     );
     ensure!(matches!(protocol, 1 | 2), "Unsupported panel protocol");
     ensure!(
-        ["", "chart", "monitor", "folder"].contains(&icon),
-        "Unknown native extension icon"
+        ["", "chart", "monitor", "folder"].contains(&icon)
+            || (icon.len() <= 4096
+                && !icon.chars().any(char::is_control)
+                && Path::new(icon).is_absolute()
+                && Path::new(icon)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))),
+        "Icon must be chart, monitor, folder, or an absolute path to a PNG file"
     );
     ensure!(
         !tool.format && !tool.check && tool.languages.is_empty() && tool.commands.is_empty(),
@@ -329,6 +335,44 @@ mod tests {
             assert_eq!(manifest.panel().is_some(), panel);
             assert_eq!(manifest.project_tool().is_some(), !panel);
             assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+        }
+    }
+    #[test]
+    fn custom_icons_accept_local_png_paths_in_both_manifest_forms() {
+        let path = std::env::temp_dir()
+            .join("extension icon.png")
+            .to_string_lossy()
+            .into_owned();
+        for icon in ["", "chart", "monitor", "folder", &path] {
+            let mut value = combined();
+            value["contributions"][0]["icon"] = icon.into();
+            serde_json::from_value::<Manifest>(value)
+                .unwrap()
+                .validate()
+                .unwrap();
+            let legacy = json!({"api":1,"id":"test.icon","name":"Icon","version":"1","description":"Fixture",
+                "panel":true,"icon":icon,"tool":{"program":"provider"}});
+            serde_json::from_value::<Manifest>(legacy)
+                .unwrap()
+                .validate()
+                .unwrap();
+        }
+        for icon in [
+            "unknown",
+            "relative.png",
+            "https://example.com/icon.png",
+            "file:///tmp/icon.png",
+            "/tmp/icon.svg",
+            "/tmp/icon.png\n",
+        ] {
+            let mut value = combined();
+            value["contributions"][0]["icon"] = icon.into();
+            assert!(
+                serde_json::from_value::<Manifest>(value)
+                    .unwrap()
+                    .validate()
+                    .is_err()
+            );
         }
     }
     fn combined() -> serde_json::Value {

@@ -6,10 +6,12 @@
 use super::*;
 use crate::extensions::{self as api, Feature};
 use std::collections::BTreeMap;
+mod icon;
 
 /// Desktop-installed manifest registry, explicit settings editor and cancellable adapter work state.
 pub(super) struct Extensions {
     pub registry: api::Registry,
+    icons: BTreeMap<String, Option<egui::TextureHandle>>,
     install_path: String,
     settings_id: String,
     settings_text: String,
@@ -19,6 +21,25 @@ pub(super) struct Extensions {
     pub cancel: Arc<AtomicBool>,
 }
 impl Extensions {
+    /// Cache both successful and failed image loads until manifests are reloaded.
+    pub(super) fn icon(&mut self, path: &str, ctx: &egui::Context) -> Option<egui::TextureId> {
+        if !std::path::Path::new(path).is_absolute() {
+            return None;
+        }
+        self.icons
+            .entry(path.to_owned())
+            .or_insert_with(|| {
+                icon::load(std::path::Path::new(path)).ok().map(|image| {
+                    ctx.load_texture(
+                        format!("extension-icon:{path}"),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    )
+                })
+            })
+            .as_ref()
+            .map(egui::TextureHandle::id)
+    }
     fn cancel_work(&mut self) {
         self.cancel.store(true, Ordering::Release);
         self.cancel = Arc::new(AtomicBool::new(false));
@@ -40,6 +61,7 @@ impl Extensions {
             .unwrap_or_default();
         Self {
             registry: api::Registry::load(&api::directory(), preferences),
+            icons: BTreeMap::new(),
             install_path: String::new(),
             settings_id: String::new(),
             settings_text: String::new(),
@@ -397,6 +419,7 @@ impl EditorApp {
         registry.revision = old.revision.wrapping_add(u64::from(changed));
         registry.pending = old.pending;
         self.extensions.registry = registry;
+        self.extensions.icons.clear();
         if changed {
             self.cancel_extensions();
             self.workbench.invalidate_tools();

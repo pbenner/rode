@@ -36,15 +36,28 @@ impl EditorApp {
         }
         let mut chosen = None;
         ui.horizontal_wrapped(|ui| {
-            render_fields(ui, state, true, &mut chosen);
-            if state.view.fields.iter().any(|f| !f.inline) {
+            render_fields(ui, state, true, &mut chosen, None);
+            if state.view.fields.iter().any(|f| {
+                !f.inline
+                    && !state
+                        .view
+                        .sections
+                        .iter()
+                        .any(|s| s.fields.contains(&f.key))
+            }) {
                 let settings = keyboard::button(ui, "Settings");
                 ui_probe::button(ui, "extension-settings", &settings);
                 if settings.clicked() {
                     state.settings_open = !state.settings_open;
                 }
             }
-            for action in &state.view.actions {
+            for action in state.view.actions.iter().filter(|a| {
+                !state
+                    .view
+                    .sections
+                    .iter()
+                    .any(|s| s.actions.contains(&a.id))
+            }) {
                 action_button(ui, action, state.ready(), palette, &mut chosen);
             }
         });
@@ -68,7 +81,7 @@ impl EditorApp {
                 let content_top = ui.cursor().top();
                 let chart_metrics = !state.view.charts.is_empty();
                 let columns = ((ui.available_width() / 260.).floor() as usize)
-                    .clamp(1, state.view.metrics.len().clamp(1, 3));
+                    .clamp(1, state.view.metrics.len().clamp(1, 4));
                 let width = ((ui.available_width()
                     - ui.spacing().item_spacing.x * (columns - 1) as f32)
                     / columns as f32)
@@ -90,7 +103,7 @@ impl EditorApp {
                                                 );
                                             });
                                         } else {
-                                            ui.set_min_height(92.);
+                                            ui.set_min_height(72.);
                                             ui.weak(&metric.label);
                                             ui.label(
                                                 RichText::new(&metric.value).size(24.).strong(),
@@ -110,7 +123,35 @@ impl EditorApp {
                 if state.settings_open
                     || state.view.metrics.is_empty() && state.view.charts.is_empty()
                 {
-                    render_fields(ui, state, false, &mut chosen);
+                    render_fields(ui, state, false, &mut chosen, None);
+                }
+                for section in state.view.sections.clone() {
+                    ui.add_space(12.);
+                    layout::card_frame(palette).show(ui, |ui| {
+                        ui.set_width((ui.available_width() - 1.).max(0.));
+                        ui.label(RichText::new(&section.title).size(18.).strong());
+                        if !section.description.is_empty() {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&section.description).color(palette.muted),
+                                )
+                                .wrap(),
+                            );
+                        }
+                        for index in &section.tables {
+                            render_table(ui, (&state.id, *index), &state.view.tables[*index]);
+                        }
+                        render_fields(ui, state, false, &mut chosen, Some(&section.fields));
+                        ui.horizontal_wrapped(|ui| {
+                            for id in &section.actions {
+                                if let Some(action) =
+                                    state.view.actions.iter().find(|a| &a.id == id)
+                                {
+                                    action_button(ui, action, state.ready(), palette, &mut chosen);
+                                }
+                            }
+                        });
+                    });
                 }
                 for group in &state.view.action_groups {
                     ui.add_space(6.);
@@ -122,7 +163,14 @@ impl EditorApp {
                     });
                 }
                 for (index, table) in state.view.tables.iter().enumerate() {
-                    render_table(ui, (&state.id, index), table);
+                    if !state
+                        .view
+                        .sections
+                        .iter()
+                        .any(|s| s.tables.contains(&index))
+                    {
+                        render_table(ui, (&state.id, index), table);
+                    }
                 }
                 for plot in &state.view.charts {
                     ui.add_space(12.);
@@ -223,9 +271,21 @@ fn render_fields(
     state: &mut Instance,
     inline: bool,
     chosen: &mut Option<String>,
+    section: Option<&[String]>,
 ) {
     let ready = state.ready() && state.confirm.is_none() && ui.is_enabled();
-    for field in state.view.fields.iter().filter(|f| f.inline == inline) {
+    for field in state.view.fields.iter().filter(|f| {
+        if let Some(keys) = section {
+            keys.contains(&f.key)
+        } else {
+            f.inline == inline
+                && !state
+                    .view
+                    .sections
+                    .iter()
+                    .any(|s| s.fields.contains(&f.key))
+        }
+    }) {
         ui.push_id((&state.id, &field.key), |ui| {
             if !inline {
                 ui.label(&field.label);
@@ -441,6 +501,34 @@ fn render_table(ui: &mut egui::Ui, id: (&str, usize), table: &protocol::Table) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn section_fields_stay_out_of_the_toolbar_and_keep_unsent_edits() {
+        let ctx = egui::Context::default();
+        let mut state = Instance::default();
+        state.view.fields.push(protocol::Field {
+            key: "weight".into(),
+            label: "Research weight".into(),
+            value: "70".into(),
+            inline: true,
+            ..Default::default()
+        });
+        let keys = vec!["weight".to_owned()];
+        state.view.sections.push(protocol::Section {
+            title: "Projects".into(),
+            fields: keys.clone(),
+            ..Default::default()
+        });
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut chosen = None;
+                render_fields(ui, &mut state, true, &mut chosen, None);
+                assert!(!state.values.contains_key("weight"));
+                state.values.insert("weight".into(), "85".into());
+                render_fields(ui, &mut state, false, &mut chosen, Some(&keys));
+                assert_eq!(state.values["weight"], "85");
+            });
+        });
+    }
     #[test]
     fn end_scroll_stays_at_the_last_row_with_large_interface_controls() {
         let ctx = egui::Context::default();

@@ -508,6 +508,7 @@ impl Canvas<'_> {
 /// disabled states keep egui's existing behavior and accessibility metadata.
 pub(super) struct IconButton<'a> {
     icon: Icon,
+    image: Option<egui::TextureId>,
     label: &'a str,
     shortcut: &'a str,
     icon_only: bool,
@@ -523,6 +524,7 @@ impl<'a> IconButton<'a> {
     pub(super) fn new(icon: Icon, label: &'a str) -> Self {
         Self {
             icon,
+            image: None,
             label,
             shortcut: "",
             icon_only: false,
@@ -540,6 +542,11 @@ impl<'a> IconButton<'a> {
             icon_only: true,
             ..Self::new(icon, label)
         }
+    }
+    /// Replace the vector glyph with a cached image while retaining native interaction.
+    pub(super) fn image(mut self, image: Option<egui::TextureId>) -> Self {
+        self.image = image;
+        self
     }
     /// A square toolbar target with room around the glyph and a consistent hover/focus surface.
     pub(super) fn toolbar(icon: Icon, label: &'a str) -> Self {
@@ -651,7 +658,21 @@ impl Widget for IconButton<'_> {
                         ui.visuals().weak_text_color()
                     }
                 });
-                self.icon.paint(ui.painter(), rect, color);
+                if let Some(image) = self.image {
+                    let tint = if ui.is_enabled() {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_white_alpha(100)
+                    };
+                    ui.painter().image(
+                        image,
+                        rect,
+                        Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
+                        tint,
+                    );
+                } else {
+                    self.icon.paint(ui.painter(), rect, color);
+                }
             }
         }
         response.widget_info(|| {

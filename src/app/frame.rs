@@ -250,6 +250,7 @@ impl EditorApp {
                             }
                         }
                         for (id, name, icon) in &installed_panels {
+                            let image = self.extensions.icon(icon, ctx);
                             let selected = self.presentation.area == areas::Area::Extension
                                 && self.extension_panels.selected == *id;
                             let response = ui.add_sized(
@@ -264,6 +265,7 @@ impl EditorApp {
                                     name,
                                 )
                                 .icon_size(23.)
+                                .image(image)
                                 .selected(selected),
                             );
                             keyboard::target(ui, name, &response);

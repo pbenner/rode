@@ -14,6 +14,8 @@ pub fn lifecycle_action(action: &str) -> bool {
 #[serde(deny_unknown_fields)]
 pub struct View {
     pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<Section>,
     #[serde(default)]
     pub status: String,
     #[serde(default)]
@@ -36,6 +38,21 @@ pub struct View {
     pub charts: Vec<Chart>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+}
+/// Ordered, native content sections reference existing controls. Unplaced inputs
+/// remain in Settings/the toolbar; unplaced actions and tables keep their layout.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Section {
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub fields: Vec<String>,
+    #[serde(default)]
+    pub tables: Vec<usize>,
+    #[serde(default)]
+    pub actions: Vec<String>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -107,7 +124,8 @@ impl View {
         self.validate()?;
         if api == 1 {
             anyhow::ensure!(
-                self.action_groups.is_empty()
+                self.sections.is_empty()
+                    && self.action_groups.is_empty()
                     && self.charts.is_empty()
                     && self.links.is_empty()
                     && self.fields.iter().all(|f| !f.inline && f.submit.is_none())
@@ -125,7 +143,8 @@ impl View {
             "Panel text exceeds its limit"
         );
         ensure!(
-            self.fields.len() <= 128
+            self.sections.len() <= 12
+                && self.fields.len() <= 128
                 && self.metrics.len() <= 24
                 && self.tables.len() <= 12
                 && self.actions.len() <= 32
@@ -170,6 +189,37 @@ impl View {
                 field.submit.as_ref().is_none_or(|id| keys.contains(id)),
                 "Input names an undeclared submit action"
             );
+        }
+        let mut placed_fields = std::collections::BTreeSet::new();
+        let mut placed_tables = std::collections::BTreeSet::new();
+        let mut placed_actions = std::collections::BTreeSet::new();
+        for section in &self.sections {
+            ensure!(
+                text(&section.title)
+                    && text(&section.description)
+                    && section.fields.len() <= 128
+                    && section.tables.len() <= 12
+                    && section.actions.len() <= 32,
+                "Invalid panel section"
+            );
+            for key in &section.fields {
+                ensure!(
+                    self.fields.iter().any(|f| &f.key == key) && placed_fields.insert(key),
+                    "Section references an unknown or repeated field"
+                );
+            }
+            for index in &section.tables {
+                ensure!(
+                    *index < self.tables.len() && placed_tables.insert(index),
+                    "Section references an unknown or repeated table"
+                );
+            }
+            for id in &section.actions {
+                ensure!(
+                    self.actions.iter().any(|a| &a.id == id) && placed_actions.insert(id),
+                    "Section references an unknown or repeated action"
+                );
+            }
         }
         for link in &self.links {
             ensure!(
@@ -420,6 +470,35 @@ pub fn format_price(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sections_validate_unique_references_and_require_protocol_two() {
+        let value = serde_json::json!({"title":"Dashboard",
+            "fields":[{"key":"weight","label":"Project weight","value":"70"}],
+            "tables":[{"title":"Projects","columns":["Project"],"rows":[["A"]]}],
+            "actions":[{"id":"preview","label":"Preview","enabled":true}],
+            "sections":[{"title":"Projects","fields":["weight"],"tables":[0],"actions":["preview"]}]});
+        let valid: View = serde_json::from_value(value.clone()).unwrap();
+        valid.validate_version(2).unwrap();
+        assert!(valid.validate_version(1).is_err());
+        for (key, bad) in [
+            ("fields", serde_json::json!(["missing"])),
+            ("tables", serde_json::json!([1])),
+            ("actions", serde_json::json!(["missing"])),
+            ("fields", serde_json::json!(["weight", "weight"])),
+        ] {
+            let mut invalid = value.clone();
+            invalid["sections"][0][key] = bad;
+            assert!(
+                serde_json::from_value::<View>(invalid)
+                    .unwrap()
+                    .validate()
+                    .is_err()
+            );
+        }
+        let mut duplicate = valid.clone();
+        duplicate.sections.push(valid.sections[0].clone());
+        assert!(duplicate.validate().is_err());
+    }
     #[test]
     fn charts_reject_invalid_values_order_ohlc_and_unbounded_histories() {
         let bar = Bar {

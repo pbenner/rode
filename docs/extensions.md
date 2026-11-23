@@ -413,10 +413,24 @@ Protocol 2 adds these native view contributions:
   inconsistent OHLC bounds and negative volume are rejected. Wheel, drag,
   keyboard, reset and density aggregation all run in the shared renderer without
   further provider requests. Zoom is kept separately for each chart identity.
+- `sections`: up to twelve ordered native cards, each with `title`, `description`,
+  `tables` (indices in the view's table list), `fields` (field keys), and `actions`
+  (IDs in the view's action list). Cards appear below overview metrics. Referenced
+  controls appear only in their section, in table/input/action order. Unplaced
+  controls retain the standard toolbar, Settings and table layout. References
+  must exist and must not be repeated across sections. This requires a host
+  with section support; providers still send data, not markup or UI code.
 - `links`: up to eight user-activated HTTP(S) links with `label` and `url`.
 
-Optional panel `icon` values are `chart`, `monitor` and `folder`;
-RODE paints these with the active theme. Providers do not supply executable UI
+Optional panel `icon` values are `chart`, `monitor` and `folder`, painted with
+RODE's active theme, or an absolute path to a local PNG image, for example
+`"icon": "/home/me/.local/share/my-extension/logo.png"`. This works in both
+legacy panel manifests and explicit panel contributions. Custom images retain
+their original colors and transparency. Install the image alongside your extension
+and use a stable path independent of its source checkout. RODE does not fetch
+remote images. PNG files are limited to 2 MiB and 2048 × 2048 pixels, and cached
+until **Reload manifests**. Missing or invalid images use the generic extension
+icon without preventing the panel from opening. Providers do not supply executable UI
 code, alter document buffers or obtain a project host's authority through a
 panel. Monitor and document controllers retain their existing host/document
 services; they have not been forced into this dashboard-only API.
