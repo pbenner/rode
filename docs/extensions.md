@@ -425,8 +425,11 @@ Protocol 2 adds these native view contributions:
 Optional panel `icon` values are `chart`, `monitor` and `folder`, painted with
 RODE's active theme, or an absolute path to a local PNG image, for example
 `"icon": "/home/me/.local/share/my-extension/logo.png"`. This works in both
-legacy panel manifests and explicit panel contributions. Custom images retain
-their original colors and transparency. Install the image alongside your extension
+legacy panel manifests and explicit panel contributions. White PNG icons with
+transparent backgrounds are treated as alpha masks and follow the active theme's
+normal, hover, selected and disabled colors. Color images retain their original
+colors and transparency. Use an outline white mask for sidebar artwork rather
+than a filled branding logo. Install the image alongside your extension
 and use a stable path independent of its source checkout. RODE does not fetch
 remote images. PNG files are limited to 2 MiB and 2048 × 2048 pixels, and cached
 until **Reload manifests**. Missing or invalid images use the generic extension

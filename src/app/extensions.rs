@@ -11,7 +11,7 @@ mod icon;
 /// Desktop-installed manifest registry, explicit settings editor and cancellable adapter work state.
 pub(super) struct Extensions {
     pub registry: api::Registry,
-    icons: BTreeMap<String, Option<egui::TextureHandle>>,
+    icons: BTreeMap<String, Option<(egui::TextureHandle, bool)>>,
     install_path: String,
     settings_id: String,
     settings_text: String,
@@ -22,7 +22,11 @@ pub(super) struct Extensions {
 }
 impl Extensions {
     /// Cache both successful and failed image loads until manifests are reloaded.
-    pub(super) fn icon(&mut self, path: &str, ctx: &egui::Context) -> Option<egui::TextureId> {
+    pub(super) fn icon(
+        &mut self,
+        path: &str,
+        ctx: &egui::Context,
+    ) -> Option<super::icons::ImageIcon> {
         if !std::path::Path::new(path).is_absolute() {
             return None;
         }
@@ -30,15 +34,22 @@ impl Extensions {
             .entry(path.to_owned())
             .or_insert_with(|| {
                 icon::load(std::path::Path::new(path)).ok().map(|image| {
-                    ctx.load_texture(
-                        format!("extension-icon:{path}"),
-                        image,
-                        egui::TextureOptions::LINEAR,
+                    let theme_mask = icon::is_theme_mask(&image);
+                    (
+                        ctx.load_texture(
+                            format!("extension-icon:{path}"),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ),
+                        theme_mask,
                     )
                 })
             })
             .as_ref()
-            .map(egui::TextureHandle::id)
+            .map(|(texture, theme_mask)| super::icons::ImageIcon {
+                texture: texture.id(),
+                theme_mask: *theme_mask,
+            })
     }
     fn cancel_work(&mut self) {
         self.cancel.store(true, Ordering::Release);

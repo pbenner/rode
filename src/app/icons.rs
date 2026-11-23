@@ -504,11 +504,18 @@ impl Canvas<'_> {
     }
 }
 
+/// A cached extension image, optionally using its alpha channel as a theme mask.
+#[derive(Clone, Copy)]
+pub(super) struct ImageIcon {
+    pub texture: egui::TextureId,
+    pub theme_mask: bool,
+}
+
 /// Paint icons inside ordinary egui buttons so focus, menus, shortcuts, and
 /// disabled states keep egui's existing behavior and accessibility metadata.
 pub(super) struct IconButton<'a> {
     icon: Icon,
-    image: Option<egui::TextureId>,
+    image: Option<ImageIcon>,
     label: &'a str,
     shortcut: &'a str,
     icon_only: bool,
@@ -544,7 +551,7 @@ impl<'a> IconButton<'a> {
         }
     }
     /// Replace the vector glyph with a cached image while retaining native interaction.
-    pub(super) fn image(mut self, image: Option<egui::TextureId>) -> Self {
+    pub(super) fn image(mut self, image: Option<ImageIcon>) -> Self {
         self.image = image;
         self
     }
@@ -659,13 +666,19 @@ impl Widget for IconButton<'_> {
                     }
                 });
                 if let Some(image) = self.image {
-                    let tint = if ui.is_enabled() {
+                    let tint = if image.theme_mask {
+                        if ui.is_enabled() {
+                            color
+                        } else {
+                            color.gamma_multiply(0.4)
+                        }
+                    } else if ui.is_enabled() {
                         Color32::WHITE
                     } else {
                         Color32::from_white_alpha(100)
                     };
                     ui.painter().image(
-                        image,
+                        image.texture,
                         rect,
                         Rect::from_min_max(Pos2::ZERO, egui::pos2(1., 1.)),
                         tint,
@@ -750,4 +763,71 @@ pub(super) fn overflow(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) -> Response 
     });
     super::keyboard::target(ui, "All open editors", &response);
     response
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    #[test]
+    fn image_masks_follow_light_dark_and_selected_colors_without_reloading() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "mask-test",
+            egui::ColorImage::new([1, 1], vec![Color32::WHITE]),
+            egui::TextureOptions::LINEAR,
+        );
+        for visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+            ctx.set_visuals(visuals);
+            for theme_mask in [true, false] {
+                for selected in [false, true] {
+                    let mut expected = Color32::WHITE;
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(400., 200.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                if theme_mask {
+                                    expected = if selected {
+                                        ui.visuals().selection.stroke.color
+                                    } else {
+                                        ui.visuals().weak_text_color()
+                                    };
+                                }
+                                ui.add(
+                                    IconButton::icon(Icon::Extensions, "Extension")
+                                        .image(Some(ImageIcon {
+                                            texture: texture.id(),
+                                            theme_mask,
+                                        }))
+                                        .selected(selected),
+                                );
+                            });
+                        },
+                    );
+                    let painted = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id() => {
+                                Some(mesh)
+                            }
+                            _ => None,
+                        })
+                        .expect("Extension image should be painted");
+                    assert!(
+                        painted
+                            .vertices
+                            .iter()
+                            .all(|vertex| vertex.color == expected)
+                    );
+                }
+            }
+        }
+    }
 }

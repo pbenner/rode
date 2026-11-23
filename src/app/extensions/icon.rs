@@ -55,9 +55,34 @@ pub(super) fn load(path: &Path) -> Result<egui::ColorImage> {
     ))
 }
 
+/// White PNG artwork is an alpha mask: it uses the same dynamic tint as native
+/// icons. Premultiplied white channels equal alpha, including antialiased edges.
+/// Colored artwork keeps its original branding colors.
+pub(super) fn is_theme_mask(image: &egui::ColorImage) -> bool {
+    image.pixels.iter().any(|p| p.a() > 0)
+        && image
+            .pixels
+            .iter()
+            .all(|p| p.r() == p.a() && p.g() == p.a() && p.b() == p.a())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn white_alpha_masks_are_themed_but_colored_or_empty_images_are_not() {
+        let mask = egui::ColorImage::from_rgba_unmultiplied(
+            [3, 1],
+            &[255, 255, 255, 255, 255, 255, 255, 127, 0, 0, 0, 0],
+        );
+        assert!(is_theme_mask(&mask));
+        let color = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[10, 100, 200, 255]);
+        assert!(!is_theme_mask(&color));
+        let gray = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[128, 128, 128, 255]);
+        assert!(!is_theme_mask(&gray));
+        let empty = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 0]);
+        assert!(!is_theme_mask(&empty));
+    }
     #[test]
     fn png_artwork_preserves_transparency_and_rejects_bad_inputs() {
         let dir = tempfile::tempdir().unwrap();
