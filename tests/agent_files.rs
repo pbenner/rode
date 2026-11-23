@@ -635,10 +635,7 @@ fn an_oversized_encoded_file_returns_a_tool_error_without_disconnecting() {
 // Separate process: Landlock is irreversible and must not affect test threads.
 #[test]
 fn confined_file_helper_child() {
-    use std::{
-        io::{Read, Write},
-        os::fd::AsRawFd,
-    };
+    use std::{io::Read, os::fd::AsRawFd};
     let Ok(root) = std::env::var("RODE_FILE_CONFINEMENT_ROOT") else {
         return;
     };
@@ -647,8 +644,9 @@ fn confined_file_helper_child() {
     rode_host_core::landlock::confine_agent_files(&directory, false).unwrap();
     fs::write(Path::new(&root).join("allowed"), "allowed").unwrap();
     assert!(std::process::Command::new("/bin/true").status().is_err());
-    println!("CONFINED");
-    std::io::stdout().flush().unwrap();
+    // Libtest writes progress prefixes to stdout when it runs one test thread.
+    // Keep the handshake independent of its human-readable output format.
+    fs::write(Path::new(&root).join("confined-ready"), "").unwrap();
     std::io::stdin().read_exact(&mut [0]).unwrap();
     let redirected = format!("/proc/self/fd/{}/escaped", captured.as_raw_fd());
     assert!(fs::write(redirected, "must stay inside").is_err());
@@ -657,37 +655,50 @@ fn confined_file_helper_child() {
 #[test]
 fn captured_directories_cannot_be_moved_outside_the_helper_boundary() {
     use std::{
-        io::{BufRead, BufReader, Write},
+        io::Write,
         process::{Command, Stdio},
     };
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("project");
     fs::create_dir_all(root.join("moving")).unwrap();
     let mut child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "confined_file_helper_child", "--nocapture"])
+        .args([
+            "--exact",
+            "confined_file_helper_child",
+            "--nocapture",
+            // Always cover the single-thread harness mode used on small CI runners.
+            "--test-threads=1",
+        ])
         .env("RODE_FILE_CONFINEMENT_ROOT", &root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let mut output = BufReader::new(child.stdout.take().unwrap());
-    loop {
-        let mut line = String::new();
-        assert_ne!(
-            output.read_line(&mut line).unwrap(),
-            0,
-            "Confinement child exited before readiness"
-        );
-        if line.trim() == "CONFINED" {
-            break;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !root.join("confined-ready").exists() {
+        if child.try_wait().unwrap().is_some() || Instant::now() >= deadline {
+            let _ = child.kill();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "Confinement child failed to become ready ({}): {}{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
+        std::thread::sleep(Duration::from_millis(10));
     }
     let outside = temporary.path().join("outside");
     fs::rename(root.join("moving"), &outside).unwrap();
     child.stdin.take().unwrap().write_all(b"x").unwrap();
-    // Drain the harness output before waiting, so stdout can never fill its pipe.
-    std::io::copy(&mut output, &mut std::io::sink()).unwrap();
-    assert!(child.wait().unwrap().success());
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(!outside.join("escaped").exists());
     assert_eq!(fs::read_to_string(root.join("allowed")).unwrap(), "allowed");
 }

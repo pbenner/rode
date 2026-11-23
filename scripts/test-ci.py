@@ -21,6 +21,32 @@ import ci
 import ci_jobs
 
 
+class ProgressLog(io.StringIO):
+    """Release a waiting fixture only after the expected progress is published."""
+
+    def __init__(self, release, prefix, detail=""):
+        super().__init__()
+        self.release, self.prefix, self.detail = release, prefix, detail
+
+    def write(self, text):
+        count = super().write(text)
+        if text.startswith(self.prefix) and self.detail in text:
+            self.release.touch()
+        return count
+
+
+def awaiting_progress(release, message=""):
+    """Keep a child alive until its parent acknowledges the progress notification."""
+    return (
+        "import time\nfrom pathlib import Path\n"
+        f"release=Path({str(release)!r})\nprint({message!r},flush=True)\n"
+        "deadline=time.monotonic()+5\n"
+        "while not release.exists():\n"
+        " assert time.monotonic()<deadline,'No progress acknowledgement'\n"
+        " time.sleep(.005)\n"
+    )
+
+
 class RequiredChecksTests(unittest.TestCase):
     def results(self, extended=True):
         return {
@@ -152,6 +178,24 @@ class ParallelJobsTests(unittest.TestCase):
             self.assertEqual(
                 [(r.name, r.exit_code) for r in results], [("failure", 7), ("following", 0)]
             )
+
+    def test_long_jobs_report_active_target_names_and_elapsed_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            release = Path(directory) / "progress-received"
+            job = ci_jobs.Job(
+                "blocked-target",
+                [sys.executable, "-c", awaiting_progress(release)],
+                dict(os.environ),
+            )
+            console = ProgressLog(release, "Active jobs: blocked-target (")
+            with (
+                patch.dict(os.environ, RODE_CI_RESULTS_DIR=directory),
+                patch.object(ci_jobs, "PROGRESS_INTERVAL", 0.02),
+                patch("sys.stdout", console),
+            ):
+                results = ci_jobs.run([job], 1)
+            self.assertEqual(results[0].exit_code, 0)
+            self.assertIn("Active jobs: blocked-target (", console.getvalue())
 
     def test_invalid_limits_and_colliding_reports_start_no_commands(self):
         job = ci_jobs.Job("same", [sys.executable, "-c", "pass"], {})
@@ -464,11 +508,61 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.record()["exit_code"], 124)
         self.assertEqual(self.record()["timeout_seconds"], 0.5)
         pid = child_pid.read_text()
+        snapshot = json.loads(
+            (self.root / "target/ci-results/commands/timeout-processes.json").read_text()
+        )
+        self.assertIn(int(pid), [p["pid"] for p in snapshot["processes"]])
+        self.assertTrue(all("wait_channel" in p for p in snapshot["processes"]))
         status = Path(f"/proc/{pid}/stat")
         deadline = time.monotonic() + 1
         while not process_exited(status):
             self.assertLess(time.monotonic(), deadline, "Timed-out descendant survived")
             time.sleep(0.01)
+
+    def test_long_commands_report_progress_before_they_finish(self):
+        release = self.root / "progress-received"
+        console = ProgressLog(release, "progress: still running", "discovery started")
+        source = awaiting_progress(release, "rust-tests [fixture]: discovery started")
+        with patch.object(ci, "PROGRESS_INTERVAL", 0.02), patch("sys.stdout", console):
+            ci.measure("progress", [sys.executable, "-c", source], timeout=5)
+        heartbeat = [line for line in console.getvalue().splitlines() if "still running" in line]
+        self.assertTrue(any("discovery started" in line for line in heartbeat))
+        self.assertEqual(self.record()["status"], "passed")
+
+    def test_progress_does_not_echo_arbitrary_output_and_reused_labels_remove_old_snapshots(self):
+        logfile = self.root / "log"
+        logfile.write_text("argument-secret\nenvironment-secret\n")
+        self.assertEqual(ci.last_progress(logfile), "")
+        self.assertEqual(ci.last_progress(self.root / "absent-log"), "")
+        snapshot = self.root / "target/ci-results/commands/reused-processes.json"
+        snapshot.parent.mkdir(parents=True)
+        snapshot.write_text("old snapshot")
+        ci.measure("reused", [sys.executable, "-c", "pass"])
+        self.assertFalse(snapshot.exists())
+
+    def test_process_snapshot_includes_nested_sessions_but_no_arguments_or_environment(self):
+        proc = self.root / "proc"
+        proc.mkdir()
+        # Kernel comm fields may contain spaces and parentheses. Children in a
+        # separate session still belong to the timed command's process tree.
+        for pid, parent, session in [(12, 1, 12), (13, 12, 13), (14, 13, 13), (99, 1, 99)]:
+            directory = proc / str(pid)
+            directory.mkdir()
+            fields = ["S", str(parent), str(session), str(session)] + ["0"] * 16
+            fields[11], fields[12], fields[17] = "10", "20", "3"
+            (directory / "stat").write_text(f"{pid} (worker (test)) " + " ".join(fields))
+            (directory / "wchan").write_text("pipe_read\n")
+            (directory / "cmdline").write_text("argument-secret")
+            (directory / "environ").write_text("environment-secret")
+        (proc / "15").mkdir()  # Exited between enumerating proc and reading stat.
+        records = ci.process_snapshot(12, proc)
+        self.assertEqual([p["pid"] for p in records], [12, 13, 14])
+        self.assertEqual(records[0]["name"], "worker (test)")
+        self.assertEqual(records[0]["cpu_ticks"], 30)
+        self.assertEqual(records[0]["threads"], 3)
+        self.assertEqual(records[0]["wait_channel"], "pipe_read")
+        self.assertNotIn("secret", json.dumps(records))
+        self.assertEqual(ci.process_snapshot(12, self.root / "unavailable-proc"), [])
 
     def test_termination_records_interruption_and_reaps_the_owned_command(self):
         child_pid = self.root / "interrupted.pid"

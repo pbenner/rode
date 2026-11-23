@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import ci_jobs
@@ -20,6 +21,12 @@ from fixture_support import fixture_directory, private_directory
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT = ["--locked", "--profile", "ci", "--workspace", "--all-targets", "--no-fail-fast"]
+
+
+def progress(message):
+    """Report safe lifecycle metadata separately from Cargo's private JSON stream."""
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    print(f"rust-tests [{stamp}]: {message}", file=sys.stderr, flush=True)
 
 
 def test_commands(output):
@@ -83,11 +90,13 @@ def workspace_tests():
     overlap. Real lease timeouts and every default Cargo target remain covered.
     Focused Cargo commands below retain their exact argument/filter semantics.
     """
+    progress("resolving Rust host toolchain")
     version = subprocess.check_output(["rustc", "-vV"], text=True)
     host = next(
         line.removeprefix("host: ") for line in version.splitlines() if line.startswith("host: ")
     )
     collector = [sys.executable, str(Path(__file__).resolve()), "--collect-command"]
+    progress("Cargo build and test-command discovery started; tests have not executed yet")
     build = subprocess.run(
         [
             "cargo",
@@ -108,6 +117,7 @@ def workspace_tests():
         return build.returncode or 1
     if build.returncode:
         return build.returncode
+    progress(f"discovery complete: {len(targets)} test executables")
     jobs = ci_jobs.default_jobs()
     configured = os.environ.get("RODE_TEST_JOBS")
     if configured is not None:
@@ -134,12 +144,16 @@ def workspace_tests():
         threads = max(1, min(8, ci_jobs.available_cpus() // jobs))
         for command in commands:
             command.env.setdefault("RUST_TEST_THREADS", str(threads))
+    progress(f"executing tests: {jobs} jobs on {ci_jobs.available_cpus()} available CPUs")
     results = ci_jobs.run(commands, jobs)
+    progress(f"execution complete: {sum(bool(r.exit_code) for r in results)} failed targets")
     return int(any(result.exit_code for result in results))
 
 
 def isolated(command):
     """Execute one test binary without changing the parent process environment."""
+    executable_name = Path(command[0]).name
+    progress(f"preparing private fixture for {executable_name}")
     # Checkout paths can exceed the Unix-domain socket limit before a test has
     # even created its nested SSH agent/control socket. Keep the fixture short
     # independently of the checkout; callers can select an executable tmpfs.
@@ -160,8 +174,8 @@ def isolated(command):
             ("RUSTUP_HOME", original_home / ".rustup"),
         ):
             environment.setdefault(name, str(fallback))
-        for name in (".cache", "config", "data", "run", "t"):
-            private_directory(fixture_home / name)
+        for directory in (".cache", "config", "data", "run", "t"):
+            private_directory(fixture_home / directory)
         environment.update(
             HOME=str(fixture_home),
             XDG_CACHE_HOME=str(fixture_home / ".cache"),
@@ -176,7 +190,13 @@ def isolated(command):
         # Library tests install their own per-context probes. An inherited native
         # window destination would replace those hooks and mix parallel snapshots.
         environment.pop("RODE_UI_TEST_STATE", None)
-        return subprocess.call(command, env=environment)
+        progress(
+            f"executing {executable_name}; RUST_TEST_THREADS={environment.get('RUST_TEST_THREADS', 'auto')}"
+        )
+        status = subprocess.call(command, env=environment)
+        progress(f"{executable_name} exited with {status}; cleaning private fixture")
+    progress(f"fixture cleanup complete for {executable_name}")
+    return status
 
 
 def main(arguments=None):
@@ -185,11 +205,15 @@ def main(arguments=None):
     if arguments[:1] == ["--collect-command"]:
         if len(arguments) < 2:
             raise SystemExit("--collect-command requires Cargo's test executable")
+        name = Path(arguments[1]).name
+        progress(f"collecting invocation for {name}")
         print(
             json.dumps(
                 dict(rode_test_command=1, argv=arguments[1:], cwd=os.getcwd(), env=dict(os.environ))
-            )
+            ),
+            flush=True,
         )
+        progress(f"collected invocation for {name}")
         return 0
     if arguments[:1] == ["--runner"]:
         if len(arguments) == 1:

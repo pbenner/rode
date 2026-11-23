@@ -25,6 +25,7 @@ from fixture_support import (
 from test_capabilities import inventory, read_skip_records
 
 ROOT = Path(__file__).resolve().parent.parent
+PROGRESS_INTERVAL = 30
 FAST = ["workspace", "agents", "terminals", "ssh"]
 EXTENDED = ["tools", "documents", "remote", "runtimes", "sandbox", "landlock"]
 TEST_BINARIES = {
@@ -411,6 +412,73 @@ def results_root():
     return Path(os.environ.get("RODE_CI_RESULTS_DIR", ROOT / "target/ci-results"))
 
 
+def last_progress(logfile):
+    """Surface bounded lifecycle markers while keeping arbitrary child output in its log."""
+    try:
+        with logfile.open("rb") as output:
+            output.seek(0, os.SEEK_END)
+            output.seek(max(0, output.tell() - 16384))
+            lines = output.read(16384).splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if line.startswith((b"rust-tests [", b"Active jobs:")):
+            return line[:1024].decode(errors="replace")
+    return ""
+
+
+def process_snapshot(root_pid, proc=Path("/proc")):
+    """Describe only the owned process tree, without argv, environment or file contents.
+
+    Scan stat files first so children started by worker threads and nested process
+    groups are included. Processes may exit during inspection; diagnostics must
+    never prevent the command's original timeout or cleanup from being reported.
+    """
+    records = {}
+    try:
+        directories = list(proc.iterdir())
+    except OSError:
+        return []
+    for directory in directories:
+        if not directory.name.isdecimal():
+            continue
+        try:
+            stat = (directory / "stat").read_text()
+            begin, end = stat.index("("), stat.rindex(")")
+            fields = stat[end + 2 :].split()
+            records[int(directory.name)] = dict(
+                pid=int(directory.name),
+                name=stat[begin + 1 : end],
+                state=fields[0],
+                parent=int(fields[1]),
+                group=int(fields[2]),
+                session=int(fields[3]),
+                cpu_ticks=int(fields[11]) + int(fields[12]),
+                threads=int(fields[17]),
+            )
+        except (OSError, ValueError, IndexError):
+            continue
+    owned = {root_pid}
+    pending = [root_pid]
+    children = {}
+    for pid, record in records.items():
+        children.setdefault(record["parent"], []).append(pid)
+    while pending and len(owned) < 256:
+        for child in children.get(pending.pop(), []):
+            if child not in owned and len(owned) < 256:
+                owned.add(child)
+                pending.append(child)
+    result = []
+    for pid in sorted(owned & records.keys()):
+        record = records[pid]
+        try:
+            record["wait_channel"] = (proc / str(pid) / "wchan").read_text().strip()
+        except OSError:
+            record["wait_channel"] = "unavailable"
+        result.append(record)
+    return result
+
+
 def measure(
     label,
     command,
@@ -438,6 +506,8 @@ def measure(
     skip_directory.mkdir()
     environment["RODE_TEST_SKIP_DIR"] = str(skip_directory.resolve())
     logfile = directory / f"{label}.log"
+    snapshot_path = directory / f"{label}-processes.json"
+    snapshot_path.unlink(missing_ok=True)
     invocation = shlex.join(command)
     title = invocation.replace("\r", r"\r").replace("\n", r"\n")
     emit(f"::group::{label}: {title}", flush=True)
@@ -466,26 +536,50 @@ def measure(
             main_thread = threading.current_thread() is threading.main_thread()
             previous = signal.signal(signal.SIGTERM, terminate) if main_thread else None
             try:
-                if cancel is None:
-                    code = process.wait(timeout=timeout)
-                else:
+                deadline = time.monotonic() + timeout
+                next_progress = time.monotonic() + PROGRESS_INTERVAL
+                while True:
                     # The scheduler owns signals on the main thread. Workers
                     # observe its cancellation without installing signal handlers.
-                    deadline = time.monotonic() + timeout
-                    while True:
-                        if cancel.is_set():
-                            raise KeyboardInterrupt
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise subprocess.TimeoutExpired(command, timeout)
-                        try:
-                            code = process.wait(timeout=min(0.1, remaining))
-                            break
-                        except subprocess.TimeoutExpired:
-                            pass
+                    if cancel is not None and cancel.is_set():
+                        raise KeyboardInterrupt
+                    now = time.monotonic()
+                    remaining = deadline - now
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    if now >= next_progress:
+                        progress = last_progress(logfile)
+                        emit(
+                            f"{label}: still running after {now - start:.0f}s (pid {process.pid})"
+                            + (f"; {progress}" if progress else ""),
+                            flush=True,
+                        )
+                        next_progress = now + PROGRESS_INTERVAL
+                    interval = min(
+                        0.1 if cancel is not None else PROGRESS_INTERVAL,
+                        remaining,
+                        max(0.01, next_progress - now),
+                    )
+                    try:
+                        code = process.wait(timeout=interval)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
                 state = "passed" if code == 0 else "failed"
             except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
                 state = "timeout" if isinstance(error, subprocess.TimeoutExpired) else "interrupted"
+                # Inspect before signalling: a dead child cannot explain which
+                # process was blocked, or whether Cargo discovery ever finished.
+                snapshot = dict(root_pid=process.pid, processes=process_snapshot(process.pid))
+                try:
+                    snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n")
+                except OSError as snapshot_error:
+                    emit(f"{label}: could not save process snapshot: {snapshot_error}", flush=True)
+                emit(
+                    f"{label}: {state}; process snapshot before cleanup ({snapshot_path}): "
+                    f"{json.dumps(snapshot)}",
+                    flush=True,
+                )
                 try:
                     os.killpg(process.pid, signal.SIGTERM)
                 except ProcessLookupError:

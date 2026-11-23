@@ -112,6 +112,37 @@ class RustPlanTests(unittest.TestCase):
             self.assertEqual(rust_tests.workspace_tests(), 101)
             run.assert_not_called()
 
+    def test_collector_reports_its_phase_without_copying_private_json_to_stderr(self):
+        with (
+            patch.dict(os.environ, PRIVATE_VALUE="fixture-secret"),
+            patch("sys.stdout", new_callable=io.StringIO) as output,
+            patch("sys.stderr", new_callable=io.StringIO) as diagnostics,
+        ):
+            self.assertEqual(rust_tests.main(["--collect-command", "/compiled/persistence"]), 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["env"]["PRIVATE_VALUE"], "fixture-secret")
+        self.assertIn("collecting invocation for persistence", diagnostics.getvalue())
+        self.assertIn("collected invocation for persistence", diagnostics.getvalue())
+        self.assertNotIn("fixture-secret", diagnostics.getvalue())
+
+    def test_discovery_start_is_reported_before_waiting_for_cargo(self):
+        plan = "\n".join(json.dumps(r) for r in self.plan())
+        diagnostics = io.StringIO()
+
+        def discovery(*_args, **_kwargs):
+            self.assertIn("tests have not executed yet", diagnostics.getvalue())
+            return subprocess.CompletedProcess([], 0, stdout=plan)
+
+        with (
+            patch.object(rust_tests.subprocess, "check_output", return_value="host: fixture\n"),
+            patch.object(rust_tests.subprocess, "run", side_effect=discovery),
+            patch.object(ci_jobs, "run", return_value=[]),
+            patch("sys.stderr", diagnostics),
+        ):
+            self.assertEqual(rust_tests.workspace_tests(), 0)
+        self.assertIn("discovery complete: 4 test executables", diagnostics.getvalue())
+        self.assertIn("execution complete", diagnostics.getvalue())
+
 
 class RustFixtureTests(unittest.TestCase):
     def test_tmpdir_and_explicit_override_apply_to_real_child_homes(self):
@@ -232,11 +263,15 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps({
     'argument': sys.argv[2], 'codex_home': os.environ.get('CODEX_HOME')}))
 sys.exit(17)
 """
-            with patch.object(rust_tests, "ROOT", root):
+            diagnostics = io.StringIO()
+            with patch.object(rust_tests, "ROOT", root), patch("sys.stderr", diagnostics):
                 status = rust_tests.isolated(
                     [sys.executable, "-c", code, str(output), "literal ' space"]
                 )
             self.assertEqual(status, 17)
+            name = Path(sys.executable).name
+            self.assertIn(f"executing {name};", diagnostics.getvalue())
+            self.assertIn(f"fixture cleanup complete for {name}", diagnostics.getvalue())
             result = json.loads(output.read_text())
             self.assertTrue(result["private"])
             self.assertEqual(result["argument"], "literal ' space")

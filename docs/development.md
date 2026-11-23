@@ -45,6 +45,23 @@ binary; an explicit `RUST_TEST_THREADS` takes precedence. Ordinary lease-expiry
 tests retain their real production deadlines. Focused Cargo invocations keep
 their original runner/filter semantics.
 
+To diagnose a stalled CI run, look for the timestamped `rust-tests` lifecycle
+messages: Cargo discovery runs first, followed by parallel test execution and
+private-fixture cleanup. Discovery messages identify invocations without logging
+their captured environments. Commands report progress every 30 seconds; the Rust
+scheduler names active targets and their elapsed time. On timeout or interruption,
+the command runner saves `<label>-processes.json` beside the command log before
+terminating it. This snapshot contains the owned process tree, states, CPU ticks,
+thread counts and Linux wait channels, without command arguments or environments.
+For GitHub's build job, download the **ci-build** artifact and inspect
+`commands/rust-tests.log`, `commands/rust-tests-processes.json` and the individual
+logs in `rust-tests/`. Existing test and suite deadlines still apply.
+To reproduce the single-thread setting on a larger workstation, run with
+`RODE_TEST_JOBS=2 RUST_TEST_THREADS=1`. Self-launched libtest helpers should use
+a separate readiness channel, such as a private fixture file: the single-thread
+harness prefixes uncaptured stdout with the test name. Exercise these helpers
+with `--test-threads=1` even when the parent suite uses more threads.
+
 Encrypted-project lock verification reads each same-account process's mount
 table. Before unmount it permits the current host mount's kernel ID and copies
 whose parent and child propagation groups and underlying locations prove they

@@ -10,9 +10,12 @@ import io
 import os
 import signal
 import threading
+import time
 from dataclasses import dataclass
 
 import ci
+
+PROGRESS_INTERVAL = 30
 
 
 def available_cpus():
@@ -91,6 +94,7 @@ def run(jobs, limit, on_result=lambda result: None):
     cancel = threading.Event()
     results = []
     active = {}
+    started = {}
     pending = iter(jobs)
 
     def terminate(_signum, _frame):
@@ -108,6 +112,7 @@ def run(jobs, limit, on_result=lambda result: None):
     previous = signal.signal(signal.SIGTERM, terminate)
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=limit)
     interrupted = False
+    next_progress = time.monotonic() + PROGRESS_INTERVAL
     try:
         while active or not cancel.is_set():
             while len(active) < limit and not cancel.is_set():
@@ -115,6 +120,7 @@ def run(jobs, limit, on_result=lambda result: None):
                 if job is None:
                     break
                 print(f"Starting {job.name}", flush=True)
+                started[job.name] = time.monotonic()
                 active[executor.submit(_execute, job, cancel)] = job
             if not active:
                 break
@@ -126,6 +132,13 @@ def run(jobs, limit, on_result=lambda result: None):
                 if publish(future).exit_code in (130, 143):
                     cancel.set()
                     interrupted = True
+            now = time.monotonic()
+            if active and now >= next_progress:
+                running = ", ".join(
+                    f"{job.name} ({now - started[job.name]:.0f}s)" for job in active.values()
+                )
+                print(f"Active jobs: {running}", flush=True)
+                next_progress = now + PROGRESS_INTERVAL
     except KeyboardInterrupt:
         interrupted = True
     finally:
