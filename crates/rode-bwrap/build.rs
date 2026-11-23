@@ -123,6 +123,9 @@ fn build() -> BuildResult<()> {
         .include("vendor/bubblewrap")
         .include("vendor/libcap/libcap/include")
         .include("vendor/libcap/libcap/include/uapi")
+        // Preserve the pinned source snapshot, including its zero-filled
+        // sockaddr_nl initializers. Other warning classes remain enabled.
+        .flag_if_supported("-Wno-missing-field-initializers")
         .define("main", "rode_bwrap_main");
     for source in [
         "bubblewrap",
@@ -138,7 +141,13 @@ fn build() -> BuildResult<()> {
     let mut cap = compiler;
     cap.include("vendor/libcap/libcap")
         .include("vendor/libcap/libcap/include")
-        .include("vendor/libcap/libcap/include/uapi");
+        .include("vendor/libcap/libcap/include/uapi")
+        // These diagnostics are confined to the unmodified libcap snapshot;
+        // do not weaken warnings for RODE's Rust code or other native builds.
+        .flag_if_supported("-Wno-old-style-declaration")
+        .flag_if_supported("-Wno-sign-compare")
+        .flag_if_supported("-Wno-implicit-fallthrough")
+        .flag_if_supported("-Wno-unused-parameter");
     for source in [
         "alloc", "proc", "extint", "flag", "text", "file", "syscalls",
     ] {
