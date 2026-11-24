@@ -16,7 +16,6 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
-    click,
     close_window,
     fixture_directory,
     fixture_environment,
@@ -103,8 +102,9 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
             window = ui.window
             command = ui.command
             command("Terminal: Allocate Slurm resources")
+            ui.value("slurm-execution-mode", "outside_sandbox")
             screenshot(window, "reserve-form.png")
-            click(660, 662)  # Reserve for notebooks below the Resources card.
+            ui.click("slurm-reserve")
             wait_for(lambda: (state / "job.json").exists(), "Reserve button did not submit")
             wait_for(
                 lambda: json.loads((state / "job.json").read_text())["state"] == "RUNNING",

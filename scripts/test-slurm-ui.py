@@ -18,6 +18,7 @@ from ui_harness import (
     fixture_directory,
     fixture_environment,
     key,
+    read_preferences,
     screenshot,
     text,
     theme,
@@ -90,6 +91,13 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
             ui.terminal_input()
             text("TOKEN=untouched\n")
             ui.click("terminal-allocation")
+            ui.control("slurm-mode-sandbox", enabled=False)
+            ui.value("slurm-execution-mode", "outside_sandbox")
+            ui.resize(850, 560)
+            for name in ("slurm-allocate", "slurm-reserve", "slurm-close"):
+                ui.control(name)
+            screenshot(window, "compact-form.png")
+            ui.resize(1380, 900)
             screenshot(window, "form.png")
             # Request two GPUs through the real number field and form action.
             # Focusing DragValue already opens its numeric text editor.
@@ -105,6 +113,7 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
             )
             info = next(info for info in rpc("list") if info.get("allocation"))
             assert not info["persistent"]
+            assert info["mode"] == "NORMAL MODE", info
             assert any(i["id"] == original["id"] and i["alive"] for i in rpc("list"))
             state = root / "slurm-state"
             wait_for(lambda: (state / "job.json").exists(), "No pending allocation")
@@ -141,6 +150,12 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
             filled("compact-active.png", True)
             close_window(window, process)
             assert any(i["id"] == info["id"] for i in rpc("list"))
+            preferences = read_preferences(base / "data/rode/app.ron")
+            projects = json.loads(preferences["project_preferences"])
+            saved = projects[json.dumps([None, str(root)], separators=(",", ":"))]
+            # Shared storage omits unchanged defaults when merging preferences.
+            assert saved.get("slurm_sandbox", False) is False, saved
+            assert saved.get("terminal_sandbox", True) is True, saved
             launch()
             command("Terminal: Sessions and Slurm allocations")
             screenshot(window, "reattach-list.png")

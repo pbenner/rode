@@ -123,6 +123,7 @@ impl EditorApp {
                         | Dialog::Tunnels
                         | Dialog::NewTunnel
                         | Dialog::Connect
+                        | Dialog::Slurm
                 ) {
                     // These forms own scrolling and keep their actions visible.
                     self.dialog_content(ui, ctx);

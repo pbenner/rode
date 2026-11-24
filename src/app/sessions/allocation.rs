@@ -2,14 +2,32 @@
 //! terminal creation captures the host/policy through the normal session worker.
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 impl EditorApp {
     /// Open the allocation form using this project's saved scheduler defaults.
     pub(in crate::app) fn open_slurm(&mut self, ctx: &egui::Context) {
         self.sessions.allocation_draft = self.workbench.slurm_allocation().clone();
+        self.sessions.allocation_sandbox = self.workbench.slurm_sandbox();
         self.sessions.allocation_error.clear();
         self.sessions.confirm = None;
         self.set_dialog(Dialog::Slurm);
         self.refresh_slurm(None, ctx);
+    }
+
+    /// A sandbox choice must never silently degrade to an unrestricted allocation.
+    /// The returned plan is captured by the same controller used for ordinary terminals.
+    fn slurm_allocation_plan(&self) -> Result<sandbox::Plan, String> {
+        let plan = self.terminal_plan(self.sessions.allocation_sandbox);
+        if self.sessions.allocation_sandbox && !plan.active {
+            return Err(if plan.requested && !plan.reason.is_empty() {
+                format!("Project sandbox unavailable: {}", plan.reason)
+            } else {
+                "Enable the project sandbox in Project settings to use Sandboxed.".into()
+            });
+        }
+        Ok(plan)
     }
     fn current_allocation(&self) -> Option<&slurm::Job> {
         let name = self
@@ -131,17 +149,115 @@ impl EditorApp {
     /// Validate requested resources and queue an explicit allocation on the selected project host.
     pub(in crate::app) fn slurm_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
+        let top = ui.cursor().top();
         layout::heading(
             ui,
-            "Interactive Slurm allocation",
-            "Reserve compute resources and open a terminal on the allocated node",
+            "Slurm allocation",
+            "Choose compute resources for a terminal or notebook.",
             palette,
         );
         let host = self
             .session_remote()
             .map(|r| format!("SSH · {}", r.profile.endpoint()))
             .unwrap_or_else(|| "LOCAL HOST".into());
-        ui.label(palette.tag(host));
+        ui.add(egui::Label::new(palette.tag(&host)).truncate())
+            .on_hover_text(&host);
+        ui.add_space(8.);
+        let ready = self.terminal_creation_ready();
+        let labels = ["Allocate in new terminal", "Reserve for notebooks", "Close"];
+        let spacing = ui.spacing().item_spacing;
+        let stacked = labels
+            .iter()
+            .map(|label| layout::button_width(ui, label))
+            .sum::<f32>()
+            + 2. * spacing.x
+            > ui.available_width();
+        let control_height = layout::control_height(ui);
+        // Reserve the actual action rows before sizing the sole scroll area.
+        // Errors, expanded options and short viewports cannot displace the footer.
+        let footer_height = if stacked {
+            3. * control_height + 2. * spacing.y
+        } else {
+            control_height
+        } + 3. * spacing.y
+            + 8.;
+        let body_height =
+            (ctx.content_rect().height() - 64. - (ui.cursor().top() - top) - footer_height).max(1.);
+        let form = egui::ScrollArea::vertical()
+            .id_salt("allocation-form")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .auto_shrink([false, true])
+            .min_scrolled_height(body_height)
+            .max_height(body_height)
+            .show(ui, |ui| self.slurm_allocation_form(ui, ctx));
+        ui.separator();
+        ui.add_space(8.);
+        let plan = self.slurm_allocation_plan();
+        let action_width = if stacked { ui.available_width() } else { 0. };
+        let action_layout = if stacked {
+            Layout::top_down(Align::Min)
+        } else {
+            Layout::left_to_right(Align::Center)
+        };
+        ui.with_layout(action_layout, |ui| {
+            let interactive = ui.add_enabled(ready && plan.is_ok(),
+                crate::keyboard::Button::new(RichText::new(labels[0]).color(palette.background).strong())
+                    .fill(palette.accent)
+                    .min_size(egui::vec2(action_width, control_height)))
+                .on_hover_text("Wait for resources, then open a login shell on the first allocated node. Your current terminal keeps running. Use Persist to keep the new terminal after closing RODE.");
+            super::super::ui_probe::button(ui, "slurm-allocate", &interactive);
+            let reserve = ui.add_enabled(
+                ready && plan.is_ok(),
+                crate::keyboard::Button::new(labels[1])
+                    .min_size(egui::vec2(action_width, control_height)),
+            ).on_hover_text("Keep a persistent allocation for notebook kernels. This view is a progress log, not a shell. Release the allocation explicitly when finished.");
+            super::super::ui_probe::button(ui, "slurm-reserve", &reserve);
+            if interactive.clicked() || reserve.clicked() {
+                let settings = self.sessions.allocation_draft.clone();
+                match settings.validate() {
+                    Ok(()) => {
+                        let Ok(plan) = plan else {
+                            return;
+                        };
+                        self.workbench.save_slurm_allocation(settings.clone());
+                        self.workbench
+                            .save_slurm_sandbox(self.sessions.allocation_sandbox);
+                        self.create_terminal(
+                            reserve.clicked(),
+                            Some(settings),
+                            reserve.clicked(),
+                            plan,
+                            ctx,
+                        );
+                        if self.sessions.starting {
+                            self.dialog = Dialog::None;
+                        }
+                    }
+                    Err(error) => {
+                        self.sessions.allocation_error = error.to_string();
+                        // Feedback is at the end of the scrollable form. Reveal it
+                        // after a rejected submission, including expanded forms.
+                        let mut state = form.state;
+                        state.offset.y = form.content_size.y;
+                        state.store(ctx, form.id);
+                        ctx.request_repaint();
+                    }
+                }
+            }
+            let close = ui.add(crate::keyboard::Button::new(labels[2])
+                .min_size(egui::vec2(action_width, control_height)));
+            super::super::ui_probe::button(ui, "slurm-close", &close);
+            if close.clicked() {
+                self.dialog = Dialog::None;
+            }
+        });
+    }
+
+    /// Scrollable fields and feedback; all creation actions live in the fixed footer.
+    fn slurm_allocation_form(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let palette = self.themes.active().palette;
+        let project = self.session_plan();
+        let ready = self.terminal_creation_ready();
         if let Some(job) = self.current_allocation().cloned() {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(format!("Job {} · {} · {}", job.id, job.state, job.nodes));
@@ -162,41 +278,112 @@ impl EditorApp {
         }
         self.session_confirmation(ui, ctx);
         if !self.sessions.slurm_error.is_empty() {
-            egui::ScrollArea::vertical()
-                .id_salt("slurm-allocation-error")
-                .max_height(72.)
-                .show(ui, |ui| {
-                    ui.colored_label(palette.error, &self.sessions.slurm_error);
-                });
+            ui.colored_label(palette.error, &self.sessions.slurm_error);
         }
-        ui.label("A new terminal waits for resources, then opens your login shell on the first allocated node. Your current terminal keeps running.");
-        egui::ScrollArea::vertical()
-            .id_salt("allocation-form")
-            .max_height((ctx.content_rect().height() - 320.).clamp(140., 460.))
-            .show(ui, |ui| {
-                layout::section(ui, "Resources", palette, |ui| {
-                    let draft = &mut self.sessions.allocation_draft;
-                    let compact = ui.available_width() < 460.;
-                    egui::Grid::new("slurm-resources")
+        ui.horizontal_wrapped(|ui| {
+            ui.strong("Execution mode");
+            for (sandboxed, title, probe) in [
+                (true, "Sandboxed", "slurm-mode-sandbox"),
+                (false, "Outside sandbox", "slurm-mode-host"),
+            ] {
+                let response = ui
+                    .add_enabled_ui(ready && (!sandboxed || project.active), |ui| {
+                        crate::keyboard::selectable_value(
+                            ui,
+                            &mut self.sessions.allocation_sandbox,
+                            sandboxed,
+                            title,
+                        )
+                    })
+                    .inner;
+                super::super::ui_probe::button(ui, probe, &response);
+                if sandboxed && !project.active {
+                    response.on_disabled_hover_text(
+                        if project.requested && !project.reason.is_empty() {
+                            project.reason.as_str()
+                        } else {
+                            "Enable the project sandbox in Project settings."
+                        },
+                    );
+                }
+            }
+        });
+        let warning = ui.add(egui::Label::new(RichText::new(
+                    if self.sessions.allocation_sandbox {
+                        "GPU tools such as nvidia-smi/CUDA may fail without sandbox access to GPU devices and driver files. Compute nodes must support the same sandbox backend."
+                    } else {
+                        "Outside sandbox: commands have your normal access to host files, devices and network."
+                    }
+                ).small().color(palette.accent)).wrap());
+        super::super::ui_probe::value(
+            ui,
+            "slurm-execution-mode",
+            &warning,
+            if self.sessions.allocation_sandbox {
+                "sandboxed"
+            } else {
+                "outside_sandbox"
+            },
+        );
+        ui.small(
+            "Notebook kernels use the project sandbox independently of this allocation's mode.",
+        );
+        layout::section(ui, "Resources", palette, |ui| {
+            let draft = &mut self.sessions.allocation_draft;
+            let compact = ui.available_width() < 460.;
+            egui::Grid::new("slurm-resources")
+                .num_columns(if compact { 1 } else { 2 })
+                .spacing([12., 6.])
+                .show(ui, |ui| {
+                    layout::field_label(ui, "GPUs (total)", compact);
+                    ui.add(crate::keyboard::named(
+                        "GPUs (total)",
+                        egui::DragValue::new(&mut draft.gpus).range(0..=65536),
+                    ));
+                    ui.end_row();
+                    for (label, value, hint) in [
+                        (
+                            "Time (H or H:MM)",
+                            &mut draft.time,
+                            "2 or 2:30; full Slurm time also accepted",
+                        ),
+                        (
+                            "Memory (GB/node)",
+                            &mut draft.memory,
+                            "80; explicit units such as 80000M also accepted",
+                        ),
+                    ] {
+                        layout::field_label(ui, label, compact);
+                        ui.add(crate::keyboard::named(
+                            label,
+                            egui::TextEdit::singleline(value)
+                                .hint_text(hint)
+                                .char_limit(1024)
+                                .desired_width(ui.available_width().min(300.)),
+                        ));
+                        ui.end_row();
+                    }
+                });
+            let advanced =
+                crate::keyboard::collapsing(ui, "Advanced resources / site settings", |ui| {
+                    egui::Grid::new("slurm-advanced")
                         .num_columns(if compact { 1 } else { 2 })
                         .spacing([12., 6.])
                         .show(ui, |ui| {
-                            layout::field_label(ui, "GPUs (total)", compact);
-                            ui.add(crate::keyboard::named(
-                                "GPUs (total)",
-                                egui::DragValue::new(&mut draft.gpus).range(0..=65536),
-                            ));
-                            ui.end_row();
                             for (label, value, hint) in [
+                                ("Partition", &mut draft.partition, "Site default"),
+                                ("Account", &mut draft.account, "Site default"),
+                                ("QoS", &mut draft.qos, "Site default"),
+                                ("Reservation", &mut draft.reservation, "None"),
                                 (
-                                    "Time (H or H:MM)",
-                                    &mut draft.time,
-                                    "2 or 2:30; full Slurm time also accepted",
+                                    "GRES per node",
+                                    &mut draft.gres,
+                                    "Optional gpu:a100:2; replaces the total GPU field",
                                 ),
                                 (
-                                    "Memory per node (GB)",
-                                    &mut draft.memory,
-                                    "80; explicit units such as 80000M also accepted",
+                                    "Node features",
+                                    &mut draft.constraint,
+                                    "Optional --constraint value",
                                 ),
                             ] {
                                 layout::field_label(ui, label, compact);
@@ -205,112 +392,48 @@ impl EditorApp {
                                     egui::TextEdit::singleline(value)
                                         .hint_text(hint)
                                         .char_limit(1024)
-                                        .desired_width(ui.available_width().min(300.)),
+                                        .desired_width(ui.available_width().min(320.)),
                                 ));
                                 ui.end_row();
                             }
+                            layout::field_label(ui, "Nodes", compact);
+                            ui.add(crate::keyboard::named(
+                                "Nodes",
+                                egui::DragValue::new(&mut draft.nodes).range(1..=4096),
+                            ));
+                            ui.end_row();
+                            layout::field_label(ui, "CPUs per task", compact);
+                            ui.add(crate::keyboard::named(
+                                "CPUs per task",
+                                egui::DragValue::new(&mut draft.cpus).range(1..=65536),
+                            ));
+                            ui.end_row();
                         });
-                    crate::keyboard::collapsing(ui, "Advanced resources / site settings", |ui| {
-                        egui::Grid::new("slurm-advanced")
-                            .num_columns(if compact { 1 } else { 2 })
-                            .spacing([12., 6.])
-                            .show(ui, |ui| {
-                                for (label, value, hint) in [
-                                    ("Partition", &mut draft.partition, "Site default"),
-                                    ("Account", &mut draft.account, "Site default"),
-                                    ("QoS", &mut draft.qos, "Site default"),
-                                    ("Reservation", &mut draft.reservation, "None"),
-                                    (
-                                        "GRES per node",
-                                        &mut draft.gres,
-                                        "Optional gpu:a100:2; replaces the total GPU field",
-                                    ),
-                                    (
-                                        "Node features",
-                                        &mut draft.constraint,
-                                        "Optional --constraint value",
-                                    ),
-                                ] {
-                                    layout::field_label(ui, label, compact);
-                                    ui.add(crate::keyboard::named(
-                                        label,
-                                        egui::TextEdit::singleline(value)
-                                            .hint_text(hint)
-                                            .char_limit(1024)
-                                            .desired_width(ui.available_width().min(320.)),
-                                    ));
-                                    ui.end_row();
-                                }
-                                layout::field_label(ui, "Nodes", compact);
-                                ui.add(crate::keyboard::named(
-                                    "Nodes",
-                                    egui::DragValue::new(&mut draft.nodes).range(1..=4096),
-                                ));
-                                ui.end_row();
-                                layout::field_label(ui, "CPUs per task", compact);
-                                ui.add(crate::keyboard::named(
-                                    "CPUs per task",
-                                    egui::DragValue::new(&mut draft.cpus).range(1..=65536),
-                                ));
-                                ui.end_row();
-                            });
-                        ui.label("Launch executables / site wrappers");
-                        ui.label("salloc");
-                        ui.add(crate::keyboard::named(
-                            "salloc executable",
-                            egui::TextEdit::singleline(&mut draft.allocator),
-                        ));
-                        ui.label("srun");
-                        ui.add(crate::keyboard::named(
-                            "srun executable",
-                            egui::TextEdit::singleline(&mut draft.runner),
-                        ));
-                    });
-                    self.slurm_settings_ui(ui);
+                    ui.label("Launch executables / site wrappers");
+                    ui.label("salloc");
+                    ui.add(crate::keyboard::named(
+                        "salloc executable",
+                        egui::TextEdit::singleline(&mut draft.allocator),
+                    ));
+                    ui.label("srun");
+                    ui.add(crate::keyboard::named(
+                        "srun executable",
+                        egui::TextEdit::singleline(&mut draft.runner),
+                    ));
                 });
-            });
-        ui.label("Interactive terminals use Persist to survive closing RODE. Notebook reservations always start persistent; their view is a progress log, not a shell. Release the allocation explicitly when finished.");
-        if self.session_plan().active {
-            ui.colored_label(palette.muted, "The active sandbox is also applied on the compute node. It must support the same paths and bubblewrap; GPU device access requires explicit grants.");
+            super::super::ui_probe::button(ui, "slurm-advanced", &advanced.header_response);
+            self.slurm_settings_ui(ui);
+        });
+        let lifetime = crate::keyboard::collapsing(ui, "Session lifetime", |ui| {
+            ui.label("Interactive terminals use Persist to survive closing RODE. Notebook reservations always start persistent; their view is a progress log, not a shell. Release the allocation explicitly when finished.");
+        });
+        super::super::ui_probe::button(ui, "slurm-lifetime", &lifetime.header_response);
+        let plan = self.slurm_allocation_plan();
+        if let Err(reason) = &plan {
+            ui.colored_label(palette.error, reason);
         }
         if !self.sessions.allocation_error.is_empty() {
             ui.colored_label(palette.error, &self.sessions.allocation_error);
         }
-        ui.horizontal_wrapped(|ui| {
-            let interactive = ui
-                .add_enabled(
-                    !self.session_busy(),
-                    crate::keyboard::Button::new("Allocate in new terminal"),
-                )
-                .clicked();
-            let reserve = ui
-                .add_enabled(
-                    !self.session_busy(),
-                    crate::keyboard::Button::new("Reserve for notebooks"),
-                )
-                .clicked();
-            if interactive || reserve {
-                let settings = self.sessions.allocation_draft.clone();
-                match settings.validate() {
-                    Ok(()) => {
-                        self.workbench.save_slurm_allocation(settings.clone());
-                        self.create_terminal(
-                            reserve,
-                            Some(settings),
-                            reserve,
-                            self.session_plan(),
-                            ctx,
-                        );
-                        if self.sessions.starting {
-                            self.dialog = Dialog::None;
-                        }
-                    }
-                    Err(error) => self.sessions.allocation_error = error.to_string(),
-                }
-            }
-            if crate::keyboard::button(ui, "Close").clicked() {
-                self.dialog = Dialog::None;
-            }
-        });
     }
 }

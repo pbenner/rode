@@ -85,6 +85,8 @@ pub(super) struct Sessions {
     persistence_pending: bool,
     cleanups: Vec<Arc<AtomicBool>>,
     allocation_draft: slurm::Allocation,
+    /// Execution mode for the next allocation; editing never changes an existing session.
+    allocation_sandbox: bool,
     allocation_error: String,
 }
 impl Sessions {
@@ -149,6 +151,17 @@ impl EditorApp {
         } else {
             execution::outside_sandbox(&project)
         }
+    }
+
+    /// All terminal/allocation creation controls share the same host and lifecycle guards.
+    fn terminal_creation_ready(&self) -> bool {
+        !self.session_busy()
+            && !self.workspace.preparing()
+            && !self.vaults.locking()
+            && self
+                .workspace
+                .as_ref()
+                .is_none_or(|w| w.ready && w.connected)
     }
 
     fn compatible_session(&self, info: &rode_session::Info) -> bool {
@@ -913,13 +926,7 @@ impl EditorApp {
         let mode = self.sessions.active.as_ref().map(|meta| meta.mode.as_str());
         let detail = mode.unwrap_or("No project terminal attached").to_owned();
         let project = self.session_plan();
-        let ready = !self.session_busy()
-            && !self.workspace.preparing()
-            && !self.vaults.locking()
-            && self
-                .workspace
-                .as_ref()
-                .is_none_or(|w| w.ready && w.connected);
+        let ready = self.terminal_creation_ready();
         let height = layout::compact_control_height(ui);
         let palette = self.themes.active().palette;
         ui.add_enabled_ui(ready, |ui| {

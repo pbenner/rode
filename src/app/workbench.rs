@@ -41,6 +41,8 @@ pub(super) struct Preferences {
     git_sandbox: bool,
     /// Default for explicitly opened terminals; existing shells retain their policy.
     terminal_sandbox: bool,
+    /// Slurm defaults to normal host access for GPU/driver compatibility, independently of terminals.
+    slurm_sandbox: bool,
     slurm_queue: String,
     slurm_cancel: String,
     slurm_allocation: crate::slurm::Allocation,
@@ -54,19 +56,22 @@ mod execution_preferences_tests {
     use super::*;
 
     #[test]
-    fn existing_projects_default_to_host_git_and_project_terminals() {
+    fn existing_projects_keep_terminal_defaults_and_start_slurm_outside_the_sandbox() {
         let old: Preferences = serde_json::from_str("{}").unwrap();
         assert!(!old.git_sandbox);
         assert!(old.terminal_sandbox);
+        assert!(!old.slurm_sandbox);
         let chosen = Preferences {
             git_sandbox: true,
             terminal_sandbox: false,
+            slurm_sandbox: true,
             ..old
         };
         let restored: Preferences =
             serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
         assert!(restored.git_sandbox);
         assert!(!restored.terminal_sandbox);
+        assert!(restored.slurm_sandbox);
     }
 }
 impl Default for Preferences {
@@ -83,6 +88,7 @@ impl Default for Preferences {
             sandbox: Default::default(),
             git_sandbox: false,
             terminal_sandbox: true,
+            slurm_sandbox: false,
             slurm_queue: "squeue".into(),
             slurm_cancel: "scancel".into(),
             slurm_allocation: Default::default(),
@@ -204,6 +210,18 @@ impl Workbench {
     pub(super) fn save_terminal_sandbox(&mut self, sandboxed: bool) {
         self.prefs.terminal_sandbox = sandboxed;
         self.draft.terminal_sandbox = sandboxed;
+        self.save_preferences();
+    }
+
+    /// Slurm has its own opt-in sandbox preference; ordinary terminal defaults stay independent.
+    pub(super) fn slurm_sandbox(&self) -> bool {
+        self.prefs.slurm_sandbox
+    }
+
+    /// Remember an explicitly submitted Slurm mode in both applied and draft preferences.
+    pub(super) fn save_slurm_sandbox(&mut self, sandboxed: bool) {
+        self.prefs.slurm_sandbox = sandboxed;
+        self.draft.slurm_sandbox = sandboxed;
         self.save_preferences();
     }
 
