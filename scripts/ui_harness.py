@@ -760,28 +760,35 @@ class NativeUI:
 
         return self.layout(arrived, f"Native pointer did not reach {(x, y)}")
 
-    def scroll_to_control(self, name, *, over, timeout=12):
-        """Reveal a lower control using wheel input over a visible list child.
+    def scroll_to_control(self, name, *, over, direction="down", timeout=12):
+        """Reveal a control using directional wheel input over a visible list child.
 
         The initial anchor supplies a point inside the scroller even after that
         child scrolls away. Recheck the target after every acknowledged wheel
-        event; never click it or assume a row count, screen position or delay.
+        event and wait for reported smooth scrolling to settle; never click it
+        or assume a row count, screen position or delay.
         """
+        if direction not in ("up", "down"):
+            raise ValueError(f"Unknown scroll direction: {direction}")
         deadline = time.monotonic() + timeout
 
         def visible(state):
             return any(button["name"] == name and button["enabled"] for button in state["buttons"])
 
-        state = self.layout()
+        state = self.layout(
+            lambda state: not state.get("scrolling", False),
+            "Previous scrolling did not settle",
+            timeout=max(0.001, deadline - time.monotonic()),
+        )
         if visible(state):
             return
         point = self.control(over, timeout=max(0.001, deadline - time.monotonic()))
         focus_window(self.window)
         while time.monotonic() < deadline:
             before = state["pass"]
-            click(*point, button=5)
+            click(*point, button=4 if direction == "up" else 5)
             state = self.layout(
-                lambda state: state["pass"] > before,
+                lambda state: state["pass"] > before and not state.get("scrolling", False),
                 f"List did not acknowledge scrolling toward {name!r}",
                 timeout=max(0.001, deadline - time.monotonic()),
             )

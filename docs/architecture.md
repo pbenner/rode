@@ -349,7 +349,11 @@ neither layout owns a controller or starts work.
 `host_tools::State` captures the selected SSH connection separately from the
 workspace and owns live monitoring state. `src/app/monitoring.rs` schedules
 explicitly started sampling and renders that application-wide state with its
-chart modules. The desktop ticks it separately from project tools, so project
+chart modules. Presentation uses bounded cubic interpolation within each continuous
+sample segment and a shared frame-paced scrolling axis; it never smooths stored
+measurements or bridges missing data. Gradient fills use one triangle mesh per
+segment, and offscreen plots skip tessellation and animation scheduling.
+The desktop ticks it separately from project tools, so project
 readiness and panel visibility cannot gate collection. Project resets need no monitor
 retention exception. The host reply channel is independent of project-generation invalidation,
 so an in-flight monitor poll cannot lose its busy acknowledgement during a

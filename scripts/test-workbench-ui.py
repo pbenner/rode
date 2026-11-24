@@ -195,7 +195,7 @@ def run(remote=False, scenario="all"):
                     ui.control("monitor-sample")
                     count_names = [
                         "monitor-history-count:" + hashlib.sha256(str(i).encode()).hexdigest()
-                        for i in range(603)
+                        for i in range(604)
                     ]
                     collected = set(count_names[2:])
                     ui.layout(

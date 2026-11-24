@@ -2,6 +2,69 @@
 use super::*;
 
 #[test]
+fn animation_only_runs_for_visible_started_scrolling_charts() {
+    for (active, visible, mode, animated) in [
+        (true, true, timeline::Mode::Scrolling, true),
+        (false, true, timeline::Mode::Scrolling, false),
+        (true, false, timeline::Mode::Scrolling, false),
+        (true, true, timeline::Mode::History, false),
+    ] {
+        let ctx = egui::Context::default();
+        let mut state = State {
+            active,
+            ..Default::default()
+        };
+        let interval = Duration::from_secs(2);
+        let now = Instant::now();
+        state.record(sample(100), now - interval, interval);
+        state.record(sample(200), now, interval);
+        let mut delay = Duration::ZERO;
+        // Drain egui's initial font/layout repaint requests before inspecting
+        // steady-state scheduling from the real dashboard render path.
+        for frame in 0..5 {
+            let output = ctx.run(
+                egui::RawInput {
+                    time: Some(frame as f64 / 60.),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        if !visible {
+                            ui.set_clip_rect(egui::Rect::NOTHING);
+                        }
+                        dashboard::show(
+                            ui,
+                            &state,
+                            interval,
+                            ChartView {
+                                mode,
+                                ..Default::default()
+                            },
+                            theme::Palette::default(),
+                        );
+                    });
+                },
+            );
+            delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        }
+        if animated {
+            assert!(delay <= Duration::from_secs_f64(1. / 60.), "{delay:?}");
+        } else {
+            assert_eq!(
+                delay,
+                Duration::MAX,
+                "Unexpected animation: {mode:?}, active={active}, visible={visible}"
+            );
+        }
+        assert_eq!(state.history.len(), 2, "Rendering collected a sample");
+    }
+}
+
+#[test]
 fn dashboard_reflows_without_stretching_plots_or_misaligning_cards() {
     for palette in [
         theme::Palette::default(),
@@ -189,13 +252,23 @@ fn rates_need_recent_successful_samples_and_history_is_bounded() {
             .back()
             .unwrap()
             .at
-            .duration_since(bounded.history[1].at)
+            .duration_since(bounded.history[2].at)
             <= Duration::from_secs(timeline::MAX_SECONDS)
+    );
+    let boundary = bounded.history.back().unwrap().at - Duration::from_secs(timeline::MAX_SECONDS);
+    assert_eq!(
+        bounded
+            .history
+            .iter()
+            .take_while(|r| r.at < boundary)
+            .count(),
+        2,
+        "Left-edge curve tangents need both preceding samples"
     );
     // At slower sample rates, retention still follows elapsed time rather
     // than retaining hours of data in the same number of sample slots.
     bounded.record(sample(100_000), now + Duration::from_secs(3600), interval);
-    assert_eq!(bounded.history.len(), 2);
+    assert_eq!(bounded.history.len(), 3);
     assert!(bounded.history.back().unwrap().cpu.is_none());
 }
 

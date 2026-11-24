@@ -94,9 +94,13 @@ impl Fixture {
     }
 
     fn geometry(&mut self, column: usize, grip: bool) -> egui::Rect {
-        let state = self.render(vec![]);
         let kind = if grip { "column-resize" } else { "column" };
         let name = format!("extension-table-{kind}:test:{}:{column}", self.index);
+        self.control_rect(&name)
+    }
+
+    fn control_rect(&mut self, name: &str) -> egui::Rect {
+        let state = self.render(vec![]);
         let rect = &state["buttons"]
             .as_array()
             .unwrap()
@@ -114,6 +118,89 @@ impl Fixture {
             ),
         )
     }
+}
+
+#[test]
+fn nested_tables_keep_their_height_after_content_near_the_bottom_of_the_page() {
+    let f = Fixture::new();
+    let mut allocated = 0.;
+    for frame in 0..2 {
+        let _ = f.ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000., 600.),
+                )),
+                time: Some(frame as f64 * 0.1),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.add_space(500.);
+                        let top = ui.next_widget_position().y;
+                        render_table(ui, ("test", 0), &f.table);
+                        allocated = ui.next_widget_position().y - top;
+                    });
+                });
+            },
+        );
+    }
+    assert!(
+        allocated > 390.,
+        "Table collapsed to remaining page height: {allocated}"
+    );
+}
+
+#[test]
+fn table_height_adapts_to_the_window_resizes_without_compounding_and_resets() {
+    let mut f = Fixture::new();
+    f.render(vec![]);
+    let table = "extension-table:test:0";
+    let initial = f.control_rect(table).height();
+    assert!(
+        initial > 320. && initial < 500.,
+        "Default table height: {initial}"
+    );
+    let start = f
+        .control_rect("extension-table-height-resize:test:0")
+        .center();
+    f.pointer(start, true);
+    f.render(vec![egui::Event::PointerMoved(start + egui::vec2(0., 30.))]);
+    f.render(vec![egui::Event::PointerMoved(start + egui::vec2(0., 60.))]);
+    f.pointer(start + egui::vec2(0., 60.), false);
+    let resized = f.control_rect(table).height();
+    assert!(
+        (resized - initial - 60.).abs() < 2.,
+        "{initial} -> {resized}"
+    );
+    f.key(Key::ArrowDown);
+    assert!((f.control_rect(table).height() - resized - 20.).abs() < 2.);
+    f.key(Key::ArrowUp);
+    assert!((f.control_rect(table).height() - resized).abs() < 2.);
+    f.key(Key::Home);
+    assert!((f.control_rect(table).height() - initial).abs() < 2.);
+}
+
+#[test]
+fn table_height_survives_reordering_and_persistence_without_affecting_other_tables() {
+    let mut f = Fixture::new();
+    let id = egui::Id::new((
+        "extension-table-height",
+        ("test", "key:budgets".to_string()),
+    ));
+    f.ctx.data_mut(|data| data.insert_persisted(id, 450_f32));
+    f.index = 4;
+    f.table.title = "Updated budget overview".into();
+    assert!((f.control_rect("extension-table:test:4").height() - 458.).abs() < 2.);
+    let memory = f.ctx.memory(|memory| ron::to_string(memory).unwrap());
+    let ctx = egui::Context::default();
+    ctx.memory_mut(|m| *m = ron::from_str(&memory).unwrap());
+    ui_probe::install_at(&ctx, f.directory.path().join("table.json"));
+    f.ctx = ctx;
+    assert!((f.control_rect("extension-table:test:4").height() - 458.).abs() < 2.);
+    f.table.key = "another-table".into();
+    assert!(f.control_rect("extension-table:test:4").height() < 420.);
 }
 
 #[test]

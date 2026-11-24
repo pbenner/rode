@@ -55,14 +55,14 @@ pub(super) fn show(
         state.stopped_at.unwrap_or_else(Instant::now),
         interval,
     );
-    // Keep one reading before the left boundary to clip a crossing curve
-    // cleanly. Older readings never participate in drawing or hit testing.
+    // Two readings before the left boundary preserve the crossing curve's
+    // tangent as samples leave the window. Older readings need no geometry.
     let start = state
         .history
         .iter()
         .position(|reading| axis.contains(reading.at))
         .unwrap_or(state.history.len())
-        .saturating_sub(1);
+        .saturating_sub(2);
     let history: Vec<_> = state.history.iter().skip(start).collect();
     let times = history.iter().map(|reading| reading.at).collect();
     let dashboard = Dashboard {
@@ -79,6 +79,7 @@ pub(super) fn show(
         .chain((0..sample.gpus.len()).map(Metric::Gpu))
         .collect();
     let layout = GridLayout::new(ui.available_width(), metrics.len());
+    let mut visible_plot = false;
     ui.allocate_ui_with_layout(
         egui::vec2(layout.width, 0.),
         Layout::top_down(Align::Min),
@@ -97,7 +98,8 @@ pub(super) fn show(
                                 ui.set_width(layout.card_width);
                                 // Row spacing should not affect a card's contents.
                                 ui.spacing_mut().item_spacing = card_spacing;
-                                ui.push_id(metric, |ui| dashboard.metric(ui, metric));
+                                visible_plot |=
+                                    ui.push_id(metric, |ui| dashboard.metric(ui, metric)).inner;
                             },
                         );
                     }
@@ -105,6 +107,13 @@ pub(super) fn show(
             }
         },
     );
+    if state.active && axis.live && axis.contains(latest.at) && visible_plot {
+        // Presentation is independent of host polling. Schedule animation only
+        // while a visible running chart still contains samples; hidden, stopped
+        // and expired charts do not keep the desktop repainting at this cadence.
+        ui.ctx()
+            .request_repaint_after(Duration::from_secs_f64(1. / 60.));
+    }
 }
 
 /// Borrowed current sample/history and shared chart styling for a single render pass.
@@ -120,7 +129,7 @@ struct Dashboard<'a> {
 
 impl Dashboard<'_> {
     /// Build the selected metric's curves and fixed-height heading/legend/footer around its proportional plot.
-    fn metric(&self, ui: &mut egui::Ui, metric: Metric) {
+    fn metric(&self, ui: &mut egui::Ui, metric: Metric) -> bool {
         let palette = self.palette;
         let secondary = secondary_color(palette);
         card(ui, palette, |ui| {
@@ -185,7 +194,7 @@ impl Dashboard<'_> {
                     legend(ui, &curves);
                 },
             );
-            chart(ui, &self.times, &curves, self.interval, self.axis, palette);
+            let visible_plot = chart(ui, &self.times, &curves, self.interval, self.axis, palette);
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), 42.),
                 Layout::top_down(Align::Min),
@@ -195,7 +204,9 @@ impl Dashboard<'_> {
                     self.details(ui, metric);
                 },
             );
-        });
+            visible_plot
+        })
+        .inner
     }
 
     /// Render compact current-resource summaries, retaining complete values in hover text.

@@ -370,13 +370,18 @@ retain pending configuration and request snapshots. Read-only lifecycle requests
 remain independent of the size of an unsent draft. Large tables scroll and render
 only their visible rows. Focus a table with Tab, keyboard hints or a click, then
 use the arrow keys, Page Up/Down and Home/End to scroll it.
+Table height follows the window by default. Large tables have a bottom resize
+handle: drag it or focus it and use Up/Down. Double-click or press Home to restore
+automatic height. Manual heights are remembered per provider and stable table
+identity across refreshes and restarts. In automatic mode, short tables shrink
+to fit their rows.
 Columns start with content-based widths. Drag a header's right edge to resize
 that column, or focus its divider with Tab/keyboard hints and use Left/Right.
 Double-click the divider or press Home while it is focused to restore automatic
 sizing. Widths are remembered across refreshes and restarts for each provider,
 table and column schema; wide tables scroll horizontally. Replies
 cannot overwrite edits made after the request was sent. Runtime restarts are
-explicit and preserve the current input draft, settings disclosure, chart views
+explicit and preserve the current input draft, chart views
 and detached-window ownership. Reopening sends empty input values and never
 replays an action that may have written data. A provider performing writes must journal uncertain outcomes and avoid
 blind retries after a dropped connection or process termination.
@@ -469,7 +474,9 @@ Blocks are bounded to 256 per container; existing control and frame budgets appl
 Sections can mix charts, metrics, fields, tables, links and actions in any order.
 A section can set `collapsible: true` and `default_open: false`; expansion state
 belongs to the host and survives replies and title changes. `default_open` applies
-only on first display and defaults to true. Closing a section retains input drafts.
+on first display of each provider run and defaults to true. An explicit initial
+state takes precedence over disclosure state saved by an earlier run; user
+toggles survive subsequent replies. Closing a section retains input drafts.
 
 `layout.metric_columns` requests a maximum of 1–4 metric columns; RODE reduces it
 for narrow panels. `layout.metric_density` is `auto`, `comfortable` or `compact`.

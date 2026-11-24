@@ -7,12 +7,14 @@ use layout::bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+mod curves;
 mod dashboard;
 mod timeline;
 pub(in crate::app) use timeline::View as ChartView;
 
-// One sample per second for the longest selectable window plus its boundary.
-const HISTORY_LIMIT: usize = timeline::MAX_SECONDS as usize + 2;
+// Inclusive one-second samples for the longest window plus two preceding
+// samples to preserve cubic tangents at the left edge while history scrolls.
+const HISTORY_LIMIT: usize = timeline::MAX_SECONDS as usize + 3;
 
 #[derive(Default)]
 /// Bounded successful telemetry snapshots and derived rate baselines. Request timing
@@ -148,8 +150,8 @@ impl State {
                 .collect(),
         });
         while self.history.len() > HISTORY_LIMIT
-            || self.history.len() > 1
-                && now.duration_since(self.history[1].at)
+            || self.history.len() > 2
+                && now.duration_since(self.history[2].at)
                     > Duration::from_secs(timeline::MAX_SECONDS)
         {
             self.history.pop_front();
@@ -344,11 +346,6 @@ impl EditorApp {
         let interval = Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30));
         ui.add_space(12.);
         dashboard::show(ui, state, interval, view, palette);
-        if state.active && view.mode == timeline::Mode::Scrolling {
-            // Animate cached samples only. Host collection remains interval-based
-            // and continues while hidden; animation runs only for a visible panel.
-            ui.ctx().request_repaint_after(Duration::from_millis(100));
-        }
         if sample.gpus.is_empty() || !sample.gpu_note.is_empty() {
             ui.add_space(12.);
             card(ui, palette, |ui| {
@@ -558,8 +555,9 @@ fn segments(times: &[Instant], values: &[Option<f32>], gap: Duration) -> Vec<Vec
     result
 }
 
-/// Paint a 16:9 percentage plot with fixed axis gutters and real timestamp spacing.
-/// Missing values and long sampling gaps split curves; hovering inspects the nearest sample.
+/// Paint a 16:9 percentage plot with real timestamp spacing and bounded cubic
+/// interpolation. Return visibility for animation scheduling. Missing values and
+/// pauses split curves; hover values always come from the nearest actual sample.
 fn chart(
     ui: &mut egui::Ui,
     times: &[Instant],
@@ -567,12 +565,16 @@ fn chart(
     interval: Duration,
     axis: timeline::Axis,
     palette: theme::Palette,
-) {
+) -> bool {
     // The plot itself is 16:9; reserve the same axis gutters at every width.
     let width = ui.available_width();
     let plot_height = (width - 50.).max(1.) * 9. / 16.;
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, plot_height + 32.), Sense::hover());
+    // Offscreen cards still reserve their layout, but need no curve tessellation.
+    if !ui.is_rect_visible(rect) {
+        return false;
+    }
     let plot = egui::Rect::from_min_max(
         rect.min + egui::vec2(42., 8.),
         rect.max - egui::vec2(8., 24.),
@@ -604,24 +606,15 @@ fn chart(
     for (index, series) in series.iter().enumerate() {
         let plot_painter = painter.with_clip_rect(plot);
         for segment in segments(times, &series.values, interval * 3) {
-            let points: Vec<_> = segment
+            let samples: Vec<_> = segment
                 .into_iter()
                 .map(|(time, value)| position(time, value))
                 .collect();
-            if index == 0 {
-                // Fill individual trapezoids; a concave area polygon cannot be passed to convex_polygon.
-                for pair in points.windows(2) {
-                    plot_painter.add(egui::Shape::convex_polygon(
-                        vec![
-                            egui::pos2(pair[0].x, plot.bottom()),
-                            pair[0],
-                            pair[1],
-                            egui::pos2(pair[1].x, plot.bottom()),
-                        ],
-                        series.color.gamma_multiply(0.20),
-                        Stroke::NONE,
-                    ));
-                }
+            let points = curves::smooth(&samples);
+            if index == 0 && points.len() > 1 {
+                // One gradient mesh per continuous segment avoids hundreds of
+                // individual fill shapes during frame-paced scrolling.
+                plot_painter.add(curves::area(&points, plot.bottom(), series.color));
             }
             if points.len() == 1 {
                 plot_painter.circle_filled(points[0], 2.5, series.color);
@@ -631,6 +624,14 @@ fn chart(
                     Stroke::new(if index == 0 { 2_f32 } else { 1.3_f32 }, series.color),
                 ));
             }
+        }
+        // Mark the actual newest measurement; the curve never extends beyond it.
+        if let Some((&time, Some(value))) = times.last().zip(series.values.last())
+            && axis.contains(time)
+        {
+            let point = position(time, *value);
+            plot_painter.circle_filled(point, 4.5, series.color.gamma_multiply(0.16));
+            plot_painter.circle_filled(point, 2.5, series.color);
         }
     }
     for (fraction, align) in [
@@ -685,7 +686,7 @@ fn chart(
             })
             .map(|(i, _)| i);
         let Some(index) = nearest else {
-            return;
+            return true;
         };
         let first_x = times
             .iter()
@@ -696,7 +697,7 @@ fn chart(
         // Empty startup history and time since the last poll are genuinely
         // blank: hovering them must not imply that a reading was collected.
         if pointer.x < first_x - 6. || pointer.x > last_x + 6. {
-            return;
+            return true;
         }
         let x = position(times[index], 0.).x;
         painter.line_segment(
@@ -722,6 +723,7 @@ fn chart(
             }
         });
     }
+    true
 }
 
 #[cfg(test)]

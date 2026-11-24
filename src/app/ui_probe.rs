@@ -37,6 +37,8 @@ struct Controls {
     project: Option<serde_json::Value>,
     input: InputReceipt,
     input_frame: Option<u64>,
+    /// Captured before widgets consume the frame's animated wheel delta.
+    scrolling: bool,
 }
 
 /// Counts native input delivered to this viewport, without recording keys or text.
@@ -91,6 +93,10 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
         Arc::new(move |ctx| {
             let mut viewports = begin.0.lock().unwrap();
             let controls = viewports.entry(ctx.viewport_id()).or_default();
+            if controls.input_frame != Some(ctx.cumulative_frame_nr()) {
+                controls.scrolling = false;
+            }
+            controls.scrolling |= ctx.input(|input| input.smooth_scroll_delta != egui::Vec2::ZERO);
             controls.observe_input(ctx);
             controls.visible.clear();
             controls.session_ids = None;
@@ -116,6 +122,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             let debugger = controls.debugger.clone();
             let project = controls.project.clone();
             let input = controls.input.clone();
+            let scrolling = controls.scrolling;
             // Keep revisions across repaints, but discard hidden/closed widgets.
             controls
                 .last_change
@@ -151,6 +158,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
                 "size": [ctx.content_rect().width(), ctx.content_rect().height()],
                 "pointer": ctx.pointer_hover_pos().map(|pos| [pos.x, pos.y]),
                 "input": input,
+                "scrolling": scrolling,
                 "buttons": buttons,
                 "keyboard": super::keyboard::snapshot(ctx),
                 "session_ids": session_ids,
@@ -360,6 +368,46 @@ pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrolling_observation_precedes_widget_consumption_and_clears_when_animation_finishes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scroll.json");
+        let ctx = egui::Context::default();
+        install_at(&ctx, path.clone());
+        for frame in 0..60 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    time: Some(frame as f64 / 60.),
+                    events: if frame == 0 {
+                        vec![egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Line,
+                            delta: egui::vec2(0., -3.),
+                            modifiers: Default::default(),
+                        }]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+                |ctx| {
+                    ctx.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+                    if frame == 0 && ctx.current_pass_index() == 0 {
+                        ctx.request_discard("Scroll receipt must survive a layout retry");
+                    }
+                },
+            );
+            let value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(value["input"]["wheels"], 1);
+            if frame == 0 {
+                assert_eq!(value["scrolling"], true);
+            }
+            if frame == 59 {
+                assert_eq!(value["scrolling"], false);
+            }
+        }
+    }
 
     #[test]
     fn input_receipts_require_native_releases_and_survive_repaints_without_content() {

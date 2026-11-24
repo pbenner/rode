@@ -1282,6 +1282,24 @@ class NativeUIReadinessTests(unittest.TestCase):
             self.assertEqual(control.call_args.args, ("list-child",))
             self.assertEqual(click.call_args_list, [call(245, 367, button=5)] * 2)
 
+    def test_upward_scrolling_uses_the_same_acknowledged_input_path(self):
+        states = [
+            dict(self.paint_state(0), buttons=[]),
+            dict(self.paint_state(1), buttons=[dict(name="refresh", enabled=True)]),
+        ]
+        with (
+            patch.object(self.ui, "layout", side_effect=states) as layout,
+            patch.object(self.ui, "control", return_value=(245, 367)),
+            patch("ui_harness.focus_window"),
+            patch("ui_harness.click") as click,
+        ):
+            self.ui.scroll_to_control("refresh", over="list-child", direction="up")
+            click.assert_called_once_with(245, 367, button=4)
+            acknowledged = layout.call_args.args[0]
+            self.assertFalse(acknowledged(states[0]))
+            self.assertTrue(acknowledged(states[1]))
+            self.assertFalse(acknowledged(dict(states[1], scrolling=True)))
+
     def test_visual_background_waits_for_painted_pixels_without_a_fixed_render_delay(self):
         with (
             patch("ui_harness.screenshot") as capture,

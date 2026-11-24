@@ -535,11 +535,17 @@ fn render_section_inner(
         .show(ui, |ui| {
             ui.set_width((ui.available_width() - 1.).max(0.));
             if section.collapsible {
+                let initial = state
+                    .section_defaults
+                    .insert(ui.make_persistent_id(("extension-section", &state.id, &section.key)))
+                    .then_some(section.default_open)
+                    .flatten();
                 let header = keyboard::CollapsingHeader::new(
                     RichText::new(&section.title).size(18.).strong(),
                 )
                 .id_salt(("extension-section", &state.id, &section.key))
                 .default_open(section.default_open.unwrap_or(true))
+                .open(initial)
                 .show_unindented(ui, |ui| section_body(ui, state, section, palette, chosen));
                 ui_probe::button(
                     ui,
@@ -634,7 +640,18 @@ fn render_fields(
                     .selected_text(selected)
                     .show_ui(ui, |ui| {
                         for choice in &field.choices {
-                            ui.selectable_value(value, choice.value.clone(), &choice.label);
+                            let response = keyboard::selectable_value(
+                                ui,
+                                value,
+                                choice.value.clone(),
+                                &choice.label,
+                            );
+                            ui_probe::value(
+                                ui,
+                                &format!("extension-choice:{}", field.key),
+                                &response,
+                                &choice.value,
+                            );
                         }
                     })
                     .response;
@@ -1011,7 +1028,7 @@ mod tests {
             ..Default::default()
         };
         let mut rect = egui::Rect::NOTHING;
-        for frame in 0..5 {
+        for frame in 0..6 {
             if frame == 1 {
                 section.default_open = Some(true);
             }
@@ -1019,6 +1036,11 @@ mod tests {
                 section.title = "Updated details".into();
                 section.default_open = Some(false);
                 state.values.insert("weight".into(), "85".into());
+            }
+            if frame == 5 {
+                // A restarted provider gets its declared default again, even
+                // when egui retained an expanded state from the previous run.
+                state.section_defaults.clear();
             }
             let mut visible = false;
             let _ = ctx.run(
@@ -1061,8 +1083,8 @@ mod tests {
                     });
                 },
             );
-            assert_eq!(visible, frame >= 3, "frame {frame}");
-            if frame == 4 {
+            assert_eq!(visible, (3..=4).contains(&frame), "frame {frame}");
+            if frame >= 4 {
                 assert_eq!(state.values["weight"], "85");
             }
         }

@@ -7,6 +7,7 @@ use std::ops::RangeInclusive;
 pub(in crate::app) enum Edge {
     Right,
     Top,
+    Bottom,
 }
 
 pub(in crate::app) struct Handle<'a> {
@@ -77,8 +78,12 @@ impl Handle<'_> {
             }
             if response.dragged() {
                 let delta = response.total_drag_delta().unwrap_or_default();
-                size =
-                    clamp(drag_start.unwrap_or(size) + if horizontal { delta.x } else { -delta.y });
+                let delta = match self.edge {
+                    Edge::Right => delta.x,
+                    Edge::Top => -delta.y,
+                    Edge::Bottom => delta.y,
+                };
+                size = clamp(drag_start.unwrap_or(size) + delta);
             }
             reset = response.double_clicked()
                 || response.has_focus()
@@ -87,10 +92,10 @@ impl Handle<'_> {
                 size = clamp(self.default);
                 *drag_start = None;
             } else if response.has_focus() {
-                let keys = if horizontal {
-                    [(Key::ArrowLeft, -20.), (Key::ArrowRight, 20.)]
-                } else {
-                    [(Key::ArrowUp, 20.), (Key::ArrowDown, -20.)]
+                let keys = match self.edge {
+                    Edge::Right => [(Key::ArrowLeft, -20.), (Key::ArrowRight, 20.)],
+                    Edge::Top => [(Key::ArrowUp, 20.), (Key::ArrowDown, -20.)],
+                    Edge::Bottom => [(Key::ArrowUp, -20.), (Key::ArrowDown, 20.)],
                 };
                 for (key, step) in keys {
                     let presses =

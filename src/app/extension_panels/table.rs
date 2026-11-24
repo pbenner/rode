@@ -8,6 +8,8 @@ mod tests;
 const MIN_WIDTH: f32 = 72.;
 const MAX_WIDTH: f32 = 4096.;
 const GRIP_WIDTH: f32 = 10.;
+const MIN_HEIGHT: f32 = 160.;
+const MAX_HEIGHT: f32 = 1200.;
 
 /// Only user overrides are persisted. Automatic widths continue following new
 /// data and font/window changes. Provider, table identity and column schema keep
@@ -131,14 +133,31 @@ fn render_table_inner(ui: &mut egui::Ui, id: (&str, usize), table: &protocol::Ta
         .collect();
     let font = egui::FontSelection::Default.resolve(ui.style());
     let row_height = ui.fonts_mut(|fonts| fonts.row_height(&font)).max(24.);
+    let height_id = egui::Id::new(("extension-table-height", &stable_id));
+    let default_height = (ui.ctx().content_rect().height() * 0.65).clamp(320., 720.);
+    let height_override = ui.ctx().data_mut(|data| {
+        data.get_persisted::<f32>(height_id)
+            .filter(|height| height.is_finite())
+            .map(|height| height.clamp(MIN_HEIGHT, MAX_HEIGHT))
+    });
+    let height = height_override.unwrap_or(default_height);
+    let content_height = (table.rows.len() + 1) as f32 * (row_height + ui.spacing().item_spacing.y);
+    // The outer panel scrolls the full page. Do not shrink a nested table to
+    // the few remaining pixels below preceding cards, leaving a tiny viewport.
+    let min_height = if height_override.is_some() {
+        height
+    } else {
+        height.min(content_height)
+    };
     let spacing = ui.spacing().item_spacing.x;
     let total_width = widths.iter().sum::<f32>() + spacing * widths.len().saturating_sub(1) as f32;
     let mut headers = Vec::new();
     let frame = egui::Frame::new().inner_margin(4).show(ui, |ui| {
         egui::ScrollArea::both()
             .id_salt(("extension-table-scroll", &stable_id))
-            .max_height(320.)
-            .auto_shrink([false, true])
+            .max_height(height)
+            .min_scrolled_height(min_height)
+            .auto_shrink([false, height_override.is_none()])
             .show_rows(ui, row_height, table.rows.len() + 1, |ui, range| {
                 ui.set_min_width(total_width);
                 for index in range.clone() {
@@ -194,6 +213,42 @@ fn render_table_inner(ui: &mut egui::Ui, id: (&str, usize), table: &protocol::Ta
             })
     });
     let mut output = frame.inner;
+    if content_height > default_height || height_override.is_some() {
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(frame.response.rect.width(), GRIP_WIDTH),
+            Sense::hover(),
+        );
+        let drag_id = height_id.with("drag");
+        let mut start = ui
+            .ctx()
+            .data(|data| data.get_temp::<Option<f32>>(drag_id).flatten());
+        let resized = layout::resize::Handle {
+            rect,
+            id: height_id.with("grip"),
+            label: &format!("Resize {} height", table.title),
+            edge: layout::resize::Edge::Bottom,
+            size: height,
+            default: default_height,
+            range: MIN_HEIGHT..=MAX_HEIGHT,
+            enabled: true,
+        }
+        .show(ui, &mut start);
+        ui_probe::button(
+            ui,
+            &format!("extension-table-height-resize:{}:{}", id.0, id.1),
+            &resized.response,
+        );
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(drag_id, start);
+            if resized.response.changed() {
+                if resized.reset {
+                    data.remove::<f32>(height_id);
+                } else {
+                    data.insert_persisted(height_id, resized.size);
+                }
+            }
+        });
+    }
     let response = ui.interact(
         frame.response.rect,
         ui.id().with(("extension-table-focus", &stable_id)),

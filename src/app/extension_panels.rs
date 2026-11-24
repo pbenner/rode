@@ -33,6 +33,9 @@ pub(super) struct Instance {
     settings_dirty: bool,
     updated_settings: Option<BTreeMap<String, serde_json::Value>>,
     chart_views: BTreeMap<String, chart::View>,
+    /// Apply explicit initial section states once per provider/view container,
+    /// without restoring stale disclosure choices from a previous app session.
+    section_defaults: std::collections::HashSet<egui::Id>,
 }
 /// Each enabled provider owns its process, settings snapshot, draft and refresh
 /// timer. Selecting a different panel never cancels another extension's work.
@@ -117,6 +120,9 @@ impl EditorApp {
                 .remove(id)
                 .unwrap_or_default();
             state.stop();
+            // Explicit defaults belong to the new provider run. Stopping a
+            // transport alone must not collapse the last visible error/draft.
+            state.section_defaults.clear();
             state.owner = owner;
             state.id = id.into();
             state.provider = Some(manifest.clone());
