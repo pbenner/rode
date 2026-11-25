@@ -65,11 +65,12 @@ pub(super) fn show(
         .saturating_sub(2);
     let history: Vec<_> = state.history.iter().skip(start).collect();
     let times = history.iter().map(|reading| reading.at).collect();
+    let continuity = history.iter().map(|reading| reading.continuous).collect();
     let dashboard = Dashboard {
         history,
         sample,
         latest,
-        interval,
+        continuity,
         palette,
         times,
         axis,
@@ -122,7 +123,7 @@ struct Dashboard<'a> {
     sample: &'a project::Monitor,
     latest: &'a Reading,
     times: Vec<Instant>,
-    interval: Duration,
+    continuity: Vec<bool>,
     palette: theme::Palette,
     axis: timeline::Axis,
 }
@@ -194,7 +195,14 @@ impl Dashboard<'_> {
                     legend(ui, &curves);
                 },
             );
-            let visible_plot = chart(ui, &self.times, &curves, self.interval, self.axis, palette);
+            let visible_plot = chart(
+                ui,
+                &self.times,
+                &curves,
+                &self.continuity,
+                self.axis,
+                palette,
+            );
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), 42.),
                 Layout::top_down(Align::Min),

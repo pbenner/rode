@@ -56,6 +56,9 @@ pub(super) struct State {
     stopped_at: Option<Instant>,
     /// A resumed collector needs a fresh counter baseline, even after a short pause.
     rate_baseline: bool,
+    /// Last successful request's expected period, including collection/transport time.
+    /// Keep the previous cadence while transitioning to a faster sampling setting.
+    cadence: Duration,
 }
 
 /// One monotonic-time chart sample; utilization values are percentages in 0–100
@@ -63,6 +66,9 @@ pub(super) struct State {
 pub(super) struct Reading {
     /// Successful collection time, used directly for chart spacing and rate deltas.
     at: Instant,
+    /// Whether collection was continuous from the preceding reading. Capture this
+    /// once so later slider changes cannot turn valid historical curves into dots.
+    continuous: bool,
     cpu: Option<f32>,
     busiest: Option<f32>,
     /// Used physical RAM as a percentage, rather than a byte count.
@@ -104,6 +110,7 @@ impl State {
         self.network_rate = None;
         self.rate_baseline = false;
         self.monitor_last = None;
+        self.cadence = Duration::ZERO;
         self.monitor_error.clear();
         self.discard_pending |= self.monitor_busy;
     }
@@ -116,14 +123,16 @@ impl State {
 
     /// Derive CPU percentages and network bytes/second from a recent successful sample,
     /// then append bounded history. Counter resets, zero deltas and long pauses produce
-    /// unavailable rates instead of invented zeroes; callers provide increasing sample times.
+    /// unavailable rates instead of invented zeroes; callers provide increasing sample times
+    /// and an expected completion interval including measured collection/transport time.
     pub(super) fn record(&mut self, sample: project::Monitor, now: Instant, interval: Duration) {
         // Request scheduling also advances on errors. Rates must use the last successful sample.
         let elapsed = self.history.back().map(|r| now.duration_since(r.at));
-        let previous = self.monitor.as_ref().filter(|_| {
-            self.rate_baseline
-                && elapsed.is_some_and(|elapsed| !elapsed.is_zero() && elapsed <= interval * 3)
-        });
+        let continuous = self.rate_baseline
+            && elapsed.is_some_and(|elapsed| {
+                !elapsed.is_zero() && elapsed <= interval.max(self.cadence) * 3
+            });
+        let previous = self.monitor.as_ref().filter(|_| continuous);
         self.cpu_usage = sample
             .cpus
             .iter()
@@ -143,6 +152,7 @@ impl State {
         });
         self.history.push_back(Reading {
             at: now,
+            continuous,
             cpu: self.cpu_usage.first().copied().flatten(),
             busiest: self
                 .cpu_usage
@@ -177,6 +187,7 @@ impl State {
         }
         self.monitor = Some(sample);
         self.rate_baseline = true;
+        self.cadence = interval;
     }
 }
 
@@ -248,7 +259,7 @@ impl EditorApp {
                     .is_none_or(|time| time.elapsed() >= interval)
             {
                 self.host_tools.monitoring.monitor_busy = true;
-                self.dispatch_host_monitor(ctx);
+                self.dispatch_host_monitor(ctx, interval);
             }
             ctx.request_repaint_after(interval);
         }
@@ -259,6 +270,7 @@ impl EditorApp {
     pub(in crate::app) fn complete_host_monitor(
         &mut self,
         result: Result<project::Response, String>,
+        cadence: Duration,
         ctx: &egui::Context,
     ) {
         self.host_tools.monitoring.monitor_busy = false;
@@ -273,11 +285,9 @@ impl EditorApp {
         self.host_tools.monitoring.monitor_error.clear();
         match result {
             Ok(project::Response::Monitor(sample)) => {
-                self.host_tools.monitoring.record(
-                    sample,
-                    Instant::now(),
-                    sampling_interval(self.areas.prefs.monitor_interval),
-                );
+                self.host_tools
+                    .monitoring
+                    .record(sample, Instant::now(), cadence);
             }
             Err(error) => self.host_tools.monitoring.monitor_error = error,
             _ => self.host_tools.monitoring.monitor_error = "Invalid host monitor response".into(),
@@ -299,9 +309,6 @@ impl EditorApp {
             },
             palette,
             |ui| {
-                if self.host_tools.monitoring.monitor_busy {
-                    ui.spinner();
-                }
                 let state = &mut self.host_tools.monitoring;
                 let toggle = crate::keyboard::button(
                     ui,
@@ -590,18 +597,22 @@ fn duration_label(seconds: f32) -> String {
 }
 
 // Return separate segments so unavailable telemetry and pauses remain visible gaps.
-fn segments(times: &[Instant], values: &[Option<f32>], gap: Duration) -> Vec<Vec<(Instant, f32)>> {
+fn segments(
+    times: &[Instant],
+    values: &[Option<f32>],
+    continuity: &[bool],
+) -> Vec<Vec<(Instant, f32)>> {
     let mut result: Vec<Vec<_>> = vec![];
-    let mut previous = None;
-    for (&time, &value) in times.iter().zip(values) {
+    let mut previous = false;
+    for ((&time, &value), &continuous) in times.iter().zip(values).zip(continuity) {
         if let Some(value) = value.and_then(valid_percentage) {
-            if previous.is_none_or(|last| time.duration_since(last) > gap) {
+            if !previous || !continuous {
                 result.push(vec![]);
             }
             result.last_mut().unwrap().push((time, value));
-            previous = Some(time);
+            previous = true;
         } else {
-            previous = None;
+            previous = false;
         }
     }
     result
@@ -614,7 +625,7 @@ fn chart(
     ui: &mut egui::Ui,
     times: &[Instant],
     series: &[Series<'_>],
-    interval: Duration,
+    continuity: &[bool],
     axis: timeline::Axis,
     palette: theme::Palette,
 ) -> bool {
@@ -657,7 +668,7 @@ fn chart(
     };
     for (index, series) in series.iter().enumerate() {
         let plot_painter = painter.with_clip_rect(plot);
-        for segment in segments(times, &series.values, interval * 3) {
+        for segment in segments(times, &series.values, continuity) {
             let samples: Vec<_> = segment
                 .into_iter()
                 .map(|(time, value)| position(time, value))

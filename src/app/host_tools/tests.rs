@@ -49,6 +49,7 @@ fn a_host_switch_drains_the_old_monitor_reply_before_admitting_the_new_host() {
         .tx
         .send(Reply::Monitor {
             generation: previous,
+            cadence: Duration::from_secs(1),
             result: Err("Previous host disconnected".into()),
         })
         .unwrap();
@@ -64,6 +65,7 @@ fn a_host_switch_drains_the_old_monitor_reply_before_admitting_the_new_host() {
         .tx
         .send(Reply::Monitor {
             generation: app.host_tools.monitor_generation,
+            cadence: Duration::from_secs(1),
             result: Ok(crate::project::Response::Monitor(crate::project::Monitor {
                 hostname: "selected-host".into(),
                 ..Default::default()

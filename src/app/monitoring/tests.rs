@@ -2,6 +2,132 @@
 use super::*;
 
 #[test]
+fn slow_polls_and_rate_changes_keep_continuous_curves_but_pauses_remain_gaps() {
+    let mut state = State::default();
+    state.set_active(true);
+    let start = Instant::now() - Duration::from_secs(10);
+    // A 100 ms setting plus 400 ms of host/SSH work produces a real 500 ms cadence.
+    let cadence = MIN_INTERVAL + Duration::from_millis(400);
+    for index in 0..4 {
+        state.record(
+            sample((index as u64 + 1) * 100),
+            start + cadence * index,
+            cadence,
+        );
+    }
+    assert_eq!(state.cpu_usage[0], Some(50.));
+    assert_eq!(state.network_rate, Some((2000., 400.)));
+    let latest = start + cadence * 3 + MIN_INTERVAL;
+    state.record(sample(500), latest, MIN_INTERVAL);
+    assert!(
+        state
+            .history
+            .iter()
+            .skip(1)
+            .all(|reading| reading.continuous)
+    );
+
+    let ctx = egui::Context::default();
+    let palette = theme::Palette::default();
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000., 800.),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                dashboard::show(
+                    ui,
+                    &state,
+                    MIN_INTERVAL,
+                    ChartView {
+                        mode: timeline::Mode::History,
+                        ..Default::default()
+                    },
+                    palette,
+                );
+            });
+        },
+    );
+    assert!(
+        output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Path(path) if path.points.len() > 2
+                && path.stroke.color == egui::epaint::ColorMode::Solid(palette.accent)
+        )),
+        "Slow successful polls must draw a curve rather than isolated dots"
+    );
+
+    state.set_active(false);
+    state.set_active(true);
+    state.record(sample(600), latest + MIN_INTERVAL, MIN_INTERVAL);
+    assert!(!state.history.back().unwrap().continuous);
+    assert!(state.cpu_usage[0].is_none());
+    state.record(sample(700), latest + Duration::from_secs(10), MIN_INTERVAL);
+    assert!(!state.history.back().unwrap().continuous);
+    let times: Vec<_> = state.history.iter().map(|reading| reading.at).collect();
+    let continuity: Vec<_> = state
+        .history
+        .iter()
+        .map(|reading| reading.continuous)
+        .collect();
+    let values: Vec<_> = state.history.iter().map(|reading| reading.memory).collect();
+    assert_eq!(segments(&times, &values, &continuity).len(), 3);
+}
+
+#[test]
+fn slow_request_completions_use_their_captured_cadence_for_rate_baselines() {
+    let ctx = egui::Context::default();
+    let mut app = EditorApp::new(
+        &eframe::CreationContext::_new_kittest(ctx.clone()),
+        Startup::default(),
+    );
+    app.areas.prefs.monitor_interval = 0.1;
+    app.host_tools.monitoring.set_active(true);
+    // Start with a fast baseline, then complete a much slower request. The old
+    // cadence must not be enough to admit this reply if its captured timing is lost.
+    let cadence = Duration::from_secs(5);
+    app.host_tools
+        .monitoring
+        .record(sample(100), Instant::now() - cadence, MIN_INTERVAL);
+    app.complete_host_monitor(Ok(project::Response::Monitor(sample(200))), cadence, &ctx);
+    assert_eq!(app.host_tools.monitoring.cpu_usage[0], Some(50.));
+    assert!(app.host_tools.monitoring.history.back().unwrap().continuous);
+}
+
+#[test]
+fn pending_collection_keeps_its_busy_guard_without_animating_a_spinner() {
+    let ctx = egui::Context::default();
+    let mut app = EditorApp::new(
+        &eframe::CreationContext::_new_kittest(ctx.clone()),
+        Startup::default(),
+    );
+    app.host_tools.monitoring.set_active(true);
+    app.host_tools.monitoring.monitor_busy = true;
+    let mut delay = Duration::ZERO;
+    for frame in 0..5 {
+        let output = ctx.run(
+            egui::RawInput {
+                time: Some(frame as f64 * 0.1),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900., 600.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.monitor_ui(ui));
+            },
+        );
+        delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+    }
+    assert_eq!(delay, Duration::MAX);
+    assert!(app.host_tools.monitoring.monitor_busy);
+}
+
+#[test]
 fn fractional_sampling_intervals_stay_finite_and_within_bounds() {
     for (seconds, millis) in [
         (0.1, 100),
@@ -437,7 +563,16 @@ fn curves_use_real_times_and_break_at_missing_values_and_pauses() {
         Some(5.),
         Some(6.),
     ];
-    let curves = segments(&times, &values, Duration::from_secs(6));
+    let mut state = State::default();
+    for (index, &time) in times.iter().enumerate() {
+        state.record(sample(index as u64 * 100), time, Duration::from_secs(2));
+    }
+    let continuity: Vec<_> = state
+        .history
+        .iter()
+        .map(|reading| reading.continuous)
+        .collect();
+    let curves = segments(&times, &values, &continuity);
     assert_eq!(curves.len(), 3);
     assert_eq!(curves[0], vec![(times[0], 1.), (times[1], 2.)]);
     assert_eq!(curves[1], vec![(times[3], 3.), (times[4], 4.)]);
@@ -509,7 +644,7 @@ fn charts_fit_compact_widths_and_use_the_active_palette() {
                                     color: palette.accent,
                                     values: vec![Some(10.), Some(75.), Some(45.)],
                                 }],
-                                Duration::from_secs(2),
+                                &[false, true, true],
                                 ChartView {
                                     mode: timeline::Mode::History,
                                     ..Default::default()

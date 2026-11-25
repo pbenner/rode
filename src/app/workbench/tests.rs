@@ -372,7 +372,7 @@ fn resetting_monitor_history_rejects_pending_replies_and_starts_a_fresh_baseline
         app.host_tools.monitoring.reset_history();
         assert!(app.host_tools.monitoring.monitor_busy);
         assert!(app.host_tools.monitoring.history.is_empty());
-        app.complete_host_monitor(result, &ctx);
+        app.complete_host_monitor(result, monitoring::DEFAULT_INTERVAL, &ctx);
         assert!(!app.host_tools.monitoring.monitor_busy);
         assert!(app.host_tools.monitoring.monitor_last.is_none());
         assert!(app.host_tools.monitoring.monitor_error.is_empty());
@@ -385,6 +385,7 @@ fn resetting_monitor_history_rejects_pending_replies_and_starts_a_fresh_baseline
             hostname: "fresh".into(),
             ..Default::default()
         })),
+        monitoring::DEFAULT_INTERVAL,
         &ctx,
     );
     assert_eq!(app.host_tools.monitoring.history.len(), 1);
@@ -413,7 +414,7 @@ fn stopping_and_disabling_monitoring_drain_pending_replies_before_a_restart() {
             app.host_tools.monitoring.set_active(true);
         }
         assert!(app.host_tools.monitoring.monitor_busy);
-        app.complete_host_monitor(reply(), &ctx);
+        app.complete_host_monitor(reply(), monitoring::DEFAULT_INTERVAL, &ctx);
         assert!(!app.host_tools.monitoring.monitor_busy);
         assert!(app.host_tools.monitoring.monitor.is_none());
         assert!(app.host_tools.monitoring.history.is_empty());
@@ -422,12 +423,12 @@ fn stopping_and_disabling_monitoring_drain_pending_replies_before_a_restart() {
     app.set_extension(crate::extensions::Feature::Monitor.id(), false);
     assert!(!app.host_tools.monitoring.active);
     assert!(app.host_tools.monitoring.monitor_busy);
-    app.complete_host_monitor(reply(), &ctx);
+    app.complete_host_monitor(reply(), monitoring::DEFAULT_INTERVAL, &ctx);
     assert!(!app.host_tools.monitoring.monitor_busy);
     app.set_extension(crate::extensions::Feature::Monitor.id(), true);
     assert!(!app.host_tools.monitoring.active);
     app.host_tools.monitoring.set_active(true);
-    app.complete_host_monitor(reply(), &ctx);
+    app.complete_host_monitor(reply(), monitoring::DEFAULT_INTERVAL, &ctx);
     assert_eq!(app.host_tools.monitoring.history.len(), 1);
     app.workbench.reset_project();
     assert!(app.host_tools.monitoring.active);

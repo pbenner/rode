@@ -10,6 +10,8 @@ struct TransferHost {
 enum Reply {
     Monitor {
         generation: u64,
+        /// Requested delay plus the measured host request time, captured before UI delivery.
+        cadence: Duration,
         result: Result<crate::project::Response, String>,
     },
     Prepared {
@@ -177,11 +179,12 @@ impl EditorApp {
         self.host_tools.change_monitor_host();
     }
     /// Capture one read-only host request independently of the project reply generation.
-    pub(super) fn dispatch_host_monitor(&self, ctx: &egui::Context) {
+    pub(super) fn dispatch_host_monitor(&self, ctx: &egui::Context, interval: Duration) {
         let remote = self.host_tools.monitor_remote.clone();
         let generation = self.host_tools.monitor_generation;
         let tx = self.host_tools.tx.clone();
         let ctx = ctx.clone();
+        let started = Instant::now();
         std::thread::spawn(move || {
             let request = Request::Tool {
                 request: crate::project::Request::Monitor { root: "/".into() },
@@ -196,7 +199,12 @@ impl EditorApp {
                     .ok_or_else(|| anyhow::anyhow!("Host returned no monitor result"))
             })
             .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Reply::Monitor { generation, result });
+            let cadence = interval.saturating_add(started.elapsed());
+            let _ = tx.send(Reply::Monitor {
+                generation,
+                cadence,
+                result,
+            });
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         });
     }
@@ -246,9 +254,13 @@ impl EditorApp {
     pub(super) fn poll_host_tools(&mut self, ctx: &egui::Context) {
         while let Ok(reply) = self.host_tools.rx.try_recv() {
             match reply {
-                Reply::Monitor { generation, result } => {
+                Reply::Monitor {
+                    generation,
+                    cadence,
+                    result,
+                } => {
                     if generation == self.host_tools.monitor_generation {
-                        self.complete_host_monitor(result, ctx);
+                        self.complete_host_monitor(result, cadence, ctx);
                     } else {
                         self.host_tools.discard_monitor_completion();
                     }
