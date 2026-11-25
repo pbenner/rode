@@ -45,8 +45,7 @@ impl EditorApp {
                 let alive = terminal.alive.clone();
                 self.ssh_master = Some(terminal);
                 self.show_terminal = true;
-                self.login_terminal_intent();
-                self.status = "Connecting · complete any prompts in the terminal".into();
+                self.status = "Connecting · open Terminal for authentication prompts".into();
                 let cancel = self.workspace.begin_connection();
                 let replies = self.workers.workspace(ctx);
                 let vault_work = self.vaults.work();
@@ -73,7 +72,6 @@ impl EditorApp {
                     };
                     let _ = replies.send(WorkspaceEvent::Connected { result });
                 });
-                Terminal::focus(ctx);
             }
             Err(error) => {
                 self.ssh_failed(format!("{error:#}"), ctx);
@@ -149,8 +147,7 @@ impl EditorApp {
             output.set_visible(true);
             self.terminal = Some(output);
             self.show_terminal = true;
-            self.login_terminal_intent();
-            self.notify(format!("{message} SSH login output is retained in the terminal. Choose New for a local shell."), true);
+            self.notify(format!("{message} Open Terminal to review the retained SSH login output. Choose New for a local shell."), true);
         } else {
             self.notify(message, true);
         }
@@ -204,10 +201,9 @@ impl EditorApp {
         self.dialog_input.clear();
         self.cancel_guarded_action();
         self.dialog = Dialog::None;
-        self.show_terminal = false;
         self.workspace.request_local_fallback();
         self.status = "SSH disconnected · local mode".into();
-        self.focus_editor_in(self.focused_editor(), ctx);
+        ctx.request_repaint();
     }
     /// Restore bound paths/revisions only for recovery records matching the prepared connection identity.
     pub(super) fn restore_ssh_buffers(&mut self) {
@@ -414,21 +410,74 @@ mod tests {
     }
 
     #[test]
-    fn prepared_ssh_connections_show_welcome_without_late_terminal_takeover() {
-        for (ready, connections) in [(false, false), (true, false), (false, true)] {
+    fn connection_preparation_late_shells_and_disconnect_preserve_arrangement() {
+        use areas::Area;
+        use sidebar::View;
+        let arrangement = |app: &EditorApp| {
+            (
+                app.presentation.area,
+                app.presentation.sidebar,
+                app.presentation.surface,
+                app.presentation.panel,
+                app.presentation.last_tool,
+                app.presentation.detached,
+                app.presentation.tools_hidden,
+                app.presentation.floating_tabs.clone(),
+                app.navigation.zoom,
+            )
+        };
+        for (area, sidebar, tool, detached) in [
+            (Area::Welcome, None, None, false),
+            (Area::Projects, Some(View::Explorer), None, false),
+            (
+                Area::Projects,
+                Some(View::Connections),
+                Some(ToolTab::Panel(Panel::Agent)),
+                false,
+            ),
+            (
+                Area::Projects,
+                Some(View::Explorer),
+                Some(ToolTab::Terminal),
+                false,
+            ),
+            (
+                Area::Monitor,
+                Some(View::Connections),
+                Some(ToolTab::Panel(Panel::Problems)),
+                true,
+            ),
+        ] {
             let ctx = egui::Context::default();
             let cc = eframe::CreationContext::_new_kittest(ctx.clone());
             let mut app = EditorApp::new(&cc, Startup::default());
+            app.new_file();
             let mut workspace = crate::app::tests::remote_workspace();
-            workspace.ready = ready;
+            workspace.ready = false;
             app.workspace.set_fixture(Some(workspace));
             app.show_terminal = true;
-            if ready {
-                app.terminal_intent();
-            } else {
-                app.login_terminal_intent();
+            if let Some(tool) = tool {
+                match tool {
+                    ToolTab::Terminal => app.terminal_intent(),
+                    ToolTab::Panel(panel) => app.presentation.select_panel(panel),
+                    _ => unreachable!(),
+                }
             }
-            Terminal::focus(&ctx);
+            match sidebar {
+                Some(View::Explorer) => app.presentation.explorer(true),
+                Some(View::Connections) => app.presentation.show_connections(),
+                None => app.presentation.hide_sidebar(),
+            }
+            app.presentation.enter_area(area);
+            if detached {
+                app.presentation.detach_tools();
+                app.presentation.hide_tools();
+                app.detach_tab(ToolTab::Panel(Panel::Git), &ctx);
+            }
+            if sidebar == Some(View::Connections) {
+                app.navigation.zoom = Some(navigation::Pane::Connections);
+            }
+            let before = arrangement(&app);
             let project = tempfile::tempdir().unwrap();
             let response = files::local(&Request::Prepare {
                 path: project.path().to_string_lossy().into(),
@@ -438,92 +487,41 @@ mod tests {
             app.commit_project(response, true, Default::default(), true, None, &ctx);
             assert!(app.project_ready());
             assert!(app.session_busy(), "The background shell still starts");
-            assert!(app.presentation.sidebar.is_none());
-            assert!(!app.panel_visible(Panel::Agent));
-            assert_eq!(app.terminal_visible(), ready);
-            if !ready {
-                let render = |app: &mut EditorApp| {
-                    let _ = ctx.run(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(1000., 760.),
-                            )),
-                            ..Default::default()
-                        },
-                        |ctx| {
-                            app.navigation.begin_layout();
-                            app.connections_sidebar(ctx);
-                            app.explorer(ctx);
-                            app.workspace_content(ctx);
-                        },
-                    );
-                };
-                render(&mut app);
-                assert_eq!(app.presentation.area, areas::Area::Welcome);
-                assert_eq!(app.navigation.active, navigation::Pane::Tools);
-                assert!(app.navigation.rect(navigation::Pane::Explorer).is_none());
-                assert!(app.navigation.rect(navigation::Pane::Tools).is_some());
-                assert!(app.documents.active().is_none());
-                assert!(!app.agents.chat.busy);
-                let surface = app.presentation.surface;
-                let panel = app.presentation.panel;
-                if connections {
-                    app.show_connections(&ctx);
-                    app.navigation.zoom = Some(navigation::Pane::Connections);
-                    app.dialog = Dialog::Open;
-                }
-                let pane = app.navigation.active;
-                let zoom = app.navigation.zoom;
+            assert_eq!(arrangement(&app), before);
 
-                // A shell may attach after Welcome has already rendered.
-                let plan = &app.workspace.as_ref().unwrap().plan;
-                let policy = crate::sessions::fingerprint(plan);
-                let info = serde_json::from_value(serde_json::json!({
-                    "id": "background-shell", "name": "Shell", "root": plan.root,
-                    "policy": policy, "mode": plan.label(), "alive": true,
-                    "clients": 1, "created": 0, "exit_code": null,
-                    "persistent": false, "allocation": null
-                }))
-                .unwrap();
-                let (terminal, _stream) = Terminal::stream(&ctx, "Shell".into(), |_| {});
-                app.add_terminal_view(terminal, "background-shell".into(), "Shell".into());
-                app.handle_session(
-                    sessions::Job::Create {
-                        persistent: false,
-                        policy,
-                    },
-                    Ok(crate::project::Response::Sessions(crate::sessions::Reply {
-                        response: rode_session::Response::Session(info),
-                        executable: String::new(),
-                        prefix: vec![],
-                    })),
-                    &ctx,
-                );
-                render(&mut app);
-                assert!(!app.panel_visible(Panel::Agent));
-                assert!(!app.terminal_visible());
-                assert_eq!(app.presentation.area, areas::Area::Welcome);
-                assert_eq!(app.navigation.active, pane);
-                assert_eq!(app.navigation.zoom, zoom);
-                assert!(
-                    app.dialog
-                        == if connections {
-                            Dialog::Open
-                        } else {
-                            Dialog::None
-                        }
-                );
-                assert_eq!(app.connections_visible(), connections);
-                assert_eq!(app.presentation.surface, surface);
-                assert_eq!(app.presentation.panel, panel);
-                assert!(app.presentation.last_tool.is_none());
-                app.dialog = Dialog::None;
-                app.toggle_sidebar(&ctx);
-                assert!(app.tools_visible());
-                assert_eq!(app.presentation.panel, Some(Panel::Agent));
-                assert!(app.agents.focus);
-            }
+            // Delayed shell creation must not replay navigation or reset zoom.
+            let plan = &app.workspace.as_ref().unwrap().plan;
+            let policy = crate::sessions::fingerprint(plan);
+            let info = serde_json::from_value(serde_json::json!({
+                "id": "background-shell", "name": "Shell", "root": plan.root,
+                "policy": policy, "mode": plan.label(), "alive": true,
+                "clients": 1, "created": 0, "exit_code": null,
+                "persistent": false, "allocation": null
+            }))
+            .unwrap();
+            let (terminal, _stream) = Terminal::stream(&ctx, "Shell".into(), |_| {});
+            app.add_terminal_view(terminal, "background-shell".into(), "Shell".into());
+            app.handle_session(
+                sessions::Job::Create {
+                    persistent: false,
+                    policy,
+                },
+                Ok(crate::project::Response::Sessions(crate::sessions::Reply {
+                    response: rode_session::Response::Session(info),
+                    executable: String::new(),
+                    prefix: vec![],
+                })),
+                &ctx,
+            );
+            assert_eq!(arrangement(&app), before);
+            assert!(!app.documents.is_empty());
+            app.finish_project_close(
+                workspace::CloseTarget::Disconnect,
+                workspace::LeaveReason::Disconnected,
+                &ctx,
+            );
+            assert!(app.documents.is_empty());
+            assert_eq!(arrangement(&app), before);
         }
     }
 
@@ -639,6 +637,14 @@ mod tests {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
+        app.presentation.explorer(true);
+        app.presentation.select_panel(Panel::Problems);
+        let arrangement = (
+            app.presentation.area,
+            app.presentation.sidebar,
+            app.presentation.surface,
+            app.presentation.panel,
+        );
         app.connect(
             Profile {
                 host: "failed-login".into(),
@@ -648,6 +654,15 @@ mod tests {
             },
             &ctx,
             false,
+        );
+        assert_eq!(
+            (
+                app.presentation.area,
+                app.presentation.sidebar,
+                app.presentation.surface,
+                app.presentation.panel,
+            ),
+            arrangement
         );
         let deadline = Instant::now() + Duration::from_secs(8);
         while app.workspace.is_some()
@@ -667,6 +682,15 @@ mod tests {
         assert!(app.ssh_master.is_none());
         assert!(app.show_terminal);
         assert!(!app.terminal.as_ref().unwrap().is_alive());
+        assert_eq!(
+            (
+                app.presentation.area,
+                app.presentation.sidebar,
+                app.presentation.surface,
+                app.presentation.panel,
+            ),
+            arrangement
+        );
         app.set_dialog(Dialog::Folder);
         assert!(!app.project_picker.remote);
         app.set_dialog(Dialog::None);

@@ -189,8 +189,8 @@ class ProjectUI(NativeUI):
         self.control(name, focused=True)
         return info
 
-    def remote_editor(self, project, welcome=False):
-        """Keep Welcome or retained source visible after the background shell attaches."""
+    def remote_editor(self, project, welcome=False, empty=False):
+        """Check the chosen Welcome/editor view after the background shell attaches."""
         self.wait(
             lambda: any(
                 info["root"] == str(project) and info["alive"] and info["clients"] > 0
@@ -205,7 +205,10 @@ class ProjectUI(NativeUI):
             self.absent("pane-Explorer")
         else:
             self.control("pane-Editor")
-            self.control("source-editor", focused=True)
+            if empty:
+                self.absent("source-editor")
+            else:
+                self.control("source-editor", focused=True)
         self.layout(
             lambda state: all(
                 not button["name"].startswith("terminal-input:") for button in state["buttons"]
@@ -415,6 +418,12 @@ def run(remote=False, fallback=False):
                     contents = (second / "beta.rs").read_text()
                     ui.append(contents, "discarded-on-disconnect")
                     ui.resize(850, 560)
+                    ui.click("activity:Connections")
+                    sidebar = next(
+                        button["rect"]
+                        for button in ui.layout()["buttons"]
+                        if button["name"] == "pane-Connections"
+                    )
                     screenshot(window, "ssh-disconnect-compact.png")
                     ui.click("disconnect-ssh")
                     ui.control("guard-discard")
@@ -424,7 +433,18 @@ def run(remote=False, fallback=False):
                     ui.copy("source-editor", contents + "\n// discarded-on-disconnect")
                     ui.click("disconnect-ssh")
                     ui.click("guard-discard")
-                    ui.disconnected(closed=True)
+                    ui.disconnected(explorer=False, closed=True)
+                    ui.control("pane-Connections")
+                    ui.control("workspace-sidebar-closed")
+                    ui.absent("welcome-screen")
+                    ui.layout(
+                        lambda state: any(
+                            b["name"] == "pane-Connections"
+                            and all(abs(a - c) <= 1 for a, c in zip(b["rect"], sidebar))
+                            for b in state["buttons"]
+                        ),
+                        "Disconnect changed the Connections sidebar geometry",
+                    )
                     ui.wait(
                         lambda: (
                             [info["id"] for info in session_rpc(environment, "list")]
@@ -442,7 +462,16 @@ def run(remote=False, fallback=False):
                     ui.click("status-connection")
                     ui.click("status-reconnect")
                     ui.project(second, remote=True)
-                    ui.remote_editor(second, welcome=True)
+                    ui.remote_editor(second, empty=True)
+                    ui.control("pane-Connections")
+                    ui.layout(
+                        lambda state: any(
+                            b["name"] == "pane-Connections"
+                            and all(abs(a - c) <= 1 for a, c in zip(b["rect"], sidebar))
+                            for b in state["buttons"]
+                        ),
+                        "Reconnect changed the Connections sidebar geometry",
+                    )
                     ui.edit_file(second / "beta.rs", "saved-before-disconnect")
                     ui.command("Toggle terminal")
                     ui.terminal(second)
@@ -466,7 +495,7 @@ def run(remote=False, fallback=False):
                     ui.disconnected(closed=True)
                     ui.command("Remote: Reconnect SSH")
                     ui.project(second, remote=True)
-                    ui.remote_editor(second, welcome=True)
+                    ui.remote_editor(second, empty=True)
                     ui.open_file(second / "beta.rs")
                     ui.command("Toggle terminal")
                     ui.terminal(second)
@@ -580,8 +609,10 @@ def failed_connection(backend):
                 try:
                     window = window_for(process, log.name)
                     ui = ProjectUI(window, process, log.name, environment, base)
-                    ui.control("terminal-output-ended")
                     ui.disconnected(explorer=False)
+                    ui.control("welcome-screen")
+                    ui.command("Toggle terminal")
+                    ui.control("terminal-output-ended")
                     screenshot(window, f"ssh-login-error-output-{backend}.png")
                     ui.click("terminal-output-ended")
                     ui.control("terminal-output-ended", focused=True)

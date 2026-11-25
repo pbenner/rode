@@ -1028,6 +1028,9 @@ pub(in crate::app) mod tests {
                 workspace.remote.as_mut().unwrap().profile.root = "/plain".into();
                 app.vaults.active.as_mut().unwrap().remote = workspace.remote.clone();
                 app.workspace.set_fixture(Some(workspace));
+                app.presentation.show_connections();
+                let area = app.presentation.area;
+                let sidebar = app.presentation.sidebar;
                 let work = app.vaults.work();
                 app.guarded(
                     if disconnect {
@@ -1055,9 +1058,13 @@ pub(in crate::app) mod tests {
                     assert!(app.workspace.as_ref().unwrap().connected);
                     assert_eq!(app.workspace.project_open(), !locked);
                 }
-                if locked {
+                if disconnect {
+                    assert_eq!(app.presentation.area, area);
+                    assert_eq!(app.presentation.sidebar, sidebar);
+                }
+                if locked && !disconnect {
                     assert_eq!(app.presentation.area, areas::Area::Welcome);
-                } else {
+                } else if !locked {
                     assert!(app.vaults.message.contains("Still UNLOCKED"));
                 }
             }

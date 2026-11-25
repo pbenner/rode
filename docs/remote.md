@@ -9,8 +9,8 @@ client requirements.
 ## Connect and open a project
 
 1. Open **Connections** in the left rail, then choose **Connect SSH…**.
-2. Enter a host or SSH alias, review the connection settings and connect. Complete authentication in the login terminal.
-3. When Welcome appears, choose **Open project folder** to browse the SSH host. Select a folder and confirm **Open project**.
+2. Enter a host or SSH alias, review the connection settings and connect. If authentication needs input, open **Terminal** to complete its prompts.
+3. Choose **Open project folder** to browse the SSH host. Select a folder and confirm **Open project**.
 4. Use **Explorer** for files and **Project tools** for Chat, Terminal and other project tools. The bottom **SSH · user@host** badge identifies the connected host separately from the folder path.
 
 Every connection can configure:
@@ -48,12 +48,16 @@ name is preserved rather than overwritten.
 
 Blank optional fields defer to your OpenSSH configuration. Passwords, key passphrases, MFA, and host-key confirmation are handled interactively in the terminal. RODE does not store credentials or disable host-key verification. SSH agent forwarding is governed by your own SSH config. Work channels preserve the authenticated master's agent-forwarding policy; agent forwarding remains off unless you enable it for that host.
 
-Once a connection finishes opening the workspace, RODE shows Welcome with Explorer
-hidden. Choose **Open project folder** to browse folders on the connected SSH host,
-or select **Explorer** or **Project tools** in the left rail to start work.
-Reconnecting with open buffers returns to the editor and preserves their unsaved
-changes. The project shell starts in the background; use **Toggle terminal** when
-you need it.
+Connecting and reconnecting preserve the current view, sidebar selection, widths
+and detached windows. A fresh launch still starts on Welcome; choose **Open project
+folder** to browse the connected host, or select **Explorer** or **Project tools**
+in the left rail. Reconnecting preserves eligible recovery buffers and their
+unsaved changes without selecting another view. Authentication output and the
+project shell are available through **Toggle terminal** when you need them.
+
+Disconnect closes file tabs after the unsaved-change checks, while keeping the
+current view and sidebar arrangement. Explorer then lists the local working
+directory. Detached tool windows keep their placement.
 
 To use your desktop's SSH agent for Git operations on a remote host, enable `ForwardAgent yes` for that host in your desktop SSH config, then reconnect RODE and open a new terminal. The desktop process must have access to the agent when it connects. In a normal-mode remote terminal, `ssh-add -l` should list the forwarded identities, and the Git tab uses the same agent. Existing persistent terminals retain their original environment. This is separate from the project's sandbox setting.
 
@@ -591,7 +595,7 @@ The Rust SSH master receives its launch profile through an owner-only file in it
 
 Choose **Disconnect** beside the project action in the top header, open the SSH badge in the bottom status bar and choose **Disconnect SSH**, or use **Remote: Disconnect SSH** in the command palette. The header button appears only while SSH is connected. Disconnecting, losing the connection, or a failed login clears the selected SSH host and restores the desktop CWD as a local project in Normal mode, just like implicit startup. The Explorer lists local files, and saved sandbox grants are not applied to this fallback. **Open project folder…** and **Open file…** work locally. Explicit **Disconnect** closes all files across editor windows. If any file has unsaved edits, choose **Keep editing** to cancel and save your work, or **Discard changes** to close the files and disconnect. Submitted saves must finish successfully before disconnect proceeds. Unexpected connection loss or a failed login instead retains open tabs and unsaved edits as disconnected buffers. Use **Save As** for a local copy, or **Remote: Reconnect SSH** to reconnect to their original project and restore their file bindings. Their original paths are never used for local file access. Opening a local project follows the usual unsaved-change protection. Disconnect stops project kernels/builds and detaches agent/terminal views: **Persist: on** sessions continue, while **Persist: off** sessions end after their last view closes. Reattach agents through **Agent chat → Running** under their original project policy. Disconnect is briefly unavailable while terminal/agent startup or a persistence change is pending.
 
-If login fails or the connection ends unexpectedly, the terminal shows **SSH ERROR / host** and retains the login's output, including client errors such as `Permission denied` or `Connection refused`. It is read-only: the SSH process is stopped, and this is not a local shell. Scroll to earlier output, use **Copy**, and choose **New terminal → Outside sandbox** when you want a local shell. Folder/file opening already uses the local computer; **Remote: Reconnect SSH** starts a fresh attempt. The bounded terminal output stays only in this window's memory and is cleared when replaced by a new terminal/project or the window closes. RODE does not save the login output to preferences or a log file.
+If login fails or the connection ends unexpectedly, open **Terminal** to review **SSH ERROR / host** and the retained login output, including client errors such as `Permission denied` or `Connection refused`. The current view stays selected. The output is read-only: the SSH process is stopped, and this is not a local shell. Scroll to earlier output, use **Copy**, and choose **New terminal → Outside sandbox** when you want a local shell. Folder/file opening already uses the local computer; **Remote: Reconnect SSH** starts a fresh attempt. The bounded terminal output stays only in this window's memory and is cleared when replaced by a new terminal/project or the window closes. RODE does not save the login output to preferences or a log file.
 
 ## Project folders and sandbox mode
 

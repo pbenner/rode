@@ -5,6 +5,12 @@
 
 use super::*;
 
+#[derive(Clone, Copy)]
+enum ImageAction {
+    Save,
+    Copy,
+}
+
 impl EditorApp {
     /// Render cell controls, growing source editors and bounded outputs. Defer run/host
     /// actions until the document borrow ends so rendering never directly launches a process.
@@ -25,6 +31,8 @@ impl EditorApp {
         let font_size = self.font_size;
         let mut jobs = Vec::new();
         let mut image_export = None;
+        let mut image_copy = None;
+        let copying_image = self.notebook_clipboard.busy();
         let mut changed = false;
         let mut link = None;
         let focus = if view.source_mode {
@@ -221,14 +229,43 @@ impl EditorApp {
                                         }
                                         match view.pictures.get(&key) {
                                             Some(Picture::Ready(texture, _lease)) => {
-                                                let image = ui.add(egui::Image::new(texture).fit_to_original_size(1.).max_width(ui.available_width()).max_height(600.));
-                                                ui_probe::button(ui, "notebook-output-image", &image);
+                                                let mut requested = None;
+                                                // A display update gets a new interaction identity,
+                                                // so an old menu cannot act on its replacement plot.
+                                                ui.push_id(("output-image", uid, cell.outputs_version, output_index), |ui| {
+                                                    let image = ui.add(egui::Image::new(texture).fit_to_original_size(1.).max_width(ui.available_width()).max_height(600.).sense(Sense::click()));
+                                                    if image.clicked() { image.request_focus(); }
+                                                    keyboard::target(ui, &format!("Notebook image, cell {}, output {}", at + 1, output_index + 1), &image);
+                                                    ui_probe::button(ui, "notebook-output-image", &image);
+                                                    ui_probe::button(ui, &format!("notebook-output-image:{uid}:{output_index}"), &image);
+                                                    keyboard::context_menu(&image, |ui| {
+                                                        let save = crate::keyboard::button(ui, "Save image as…");
+                                                        ui_probe::button(ui, "notebook-image-menu-save", &save);
+                                                        if save.clicked() {
+                                                            requested = Some(ImageAction::Save);
+                                                            ui.close();
+                                                        }
+                                                        let copy = ui.add_enabled(!copying_image, crate::keyboard::Button::new("Copy image"))
+                                                            .on_hover_text("Copy the image to the desktop clipboard at its original resolution.");
+                                                        ui_probe::button(ui, "notebook-image-menu-copy", &copy);
+                                                        if copy.clicked() {
+                                                            requested = Some(ImageAction::Copy);
+                                                            ui.close();
+                                                        }
+                                                    });
+                                                });
                                                 let save = crate::keyboard::small_button(ui, "Save image as…")
                                                     .on_hover_text("Save the original image on the project host, at its full resolution.");
                                                 ui_probe::button(ui, &format!("notebook-save-image:{uid}:{output_index}"), &save);
                                                 if save.clicked() {
+                                                    requested = Some(ImageAction::Save);
+                                                }
+                                                if let Some(requested) = requested {
                                                     match export::ImageExport::capture(id, &path, at + 1, output_index + 1, &output["data"]) {
-                                                        Ok(snapshot) => image_export = Some(snapshot),
+                                                        Ok(snapshot) => match requested {
+                                                            ImageAction::Save => image_export = Some(snapshot),
+                                                            ImageAction::Copy => image_copy = Some(snapshot),
+                                                        },
                                                         Err(error) => view.error = error.to_string(),
                                                     }
                                                 }
@@ -381,6 +418,9 @@ impl EditorApp {
         self.documents[index].replace_notebook(view);
         if let Some(snapshot) = image_export {
             self.set_dialog(Dialog::NotebookImage(Box::new(snapshot)));
+        }
+        if let Some(snapshot) = image_copy {
+            self.copy_notebook_image(snapshot, ctx);
         }
         match action {
             Some(Action::Run(all)) => self.run_notebook(all, ctx),

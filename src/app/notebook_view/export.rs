@@ -1,10 +1,83 @@
-//! Original notebook image snapshots and protected project-host export.
+//! Original notebook image snapshots, clipboard copies and protected project-host export.
 //!
-//! Capture the MIME payload when Save is selected, so reruns, display updates or
-//! tab changes cannot replace the chosen image while the destination picker is open.
+//! Capture the MIME payload when an image action is selected, so reruns, display
+//! updates or tab changes cannot replace it while saving or copying is pending.
 use super::*;
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+/// A desktop clipboard request outlives tab switches and project changes, but
+/// never the window. One pending decode bounds repeated copy requests.
+#[derive(Default)]
+pub(in crate::app) struct Clipboard {
+    pending: Option<mpsc::Receiver<Result<arboard::Clipboard, String>>>,
+    /// Linux needs a live clipboard owner to serve later paste requests.
+    owner: Option<arboard::Clipboard>,
+}
+impl Clipboard {
+    pub(super) fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn start(
+        &mut self,
+        snapshot: ImageExport,
+        budget: Arc<crate::images::Budget>,
+        ctx: &egui::Context,
+    ) {
+        if self.busy() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.pending = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _io = budget.io.lock().unwrap_or_else(|e| e.into_inner());
+            let result = (|| -> Result<arboard::Clipboard> {
+                let decoded = crate::images::decode_original(
+                    &snapshot.data,
+                    &snapshot.suggested_path,
+                    &budget,
+                )?;
+                let mut clipboard =
+                    arboard::Clipboard::new().context("Cannot open the desktop clipboard")?;
+                // egui-winit 0.33 copies premultiplied ColorImage bytes directly.
+                // Native clipboard images require straight RGBA to preserve alpha.
+                clipboard
+                    .set_image(arboard::ImageData {
+                        width: decoded.rgba.width() as usize,
+                        height: decoded.rgba.height() as usize,
+                        bytes: std::borrow::Cow::Borrowed(decoded.rgba.as_raw()),
+                    })
+                    .context("Cannot transfer image to the desktop clipboard")?;
+                Ok(clipboard)
+            })()
+            .map_err(|error| format!("Cannot copy notebook image: {error:#}"));
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Retain clipboard ownership even when the source notebook is no longer open.
+    fn poll(&mut self) -> Option<String> {
+        let received = self.pending.as_ref()?.try_recv();
+        let result = match received {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("Notebook image copy worker stopped".into())
+            }
+        };
+        self.pending = None;
+        match result {
+            Ok(clipboard) => {
+                self.owner = Some(clipboard);
+                None
+            }
+            Err(error) => Some(error),
+        }
+    }
+}
 
 /// One bounded immutable output selection, owned by the save dialog until submission/cancel.
 #[derive(PartialEq)]
@@ -78,6 +151,17 @@ impl ImageExport {
     }
 }
 impl EditorApp {
+    pub(super) fn copy_notebook_image(&mut self, snapshot: ImageExport, ctx: &egui::Context) {
+        self.notebook_clipboard
+            .start(snapshot, self.image_budget.clone(), ctx);
+    }
+
+    pub(in crate::app) fn poll_notebook_image_copy(&mut self) {
+        if let Some(error) = self.notebook_clipboard.poll() {
+            self.notify(error, true);
+        }
+    }
+
     /// Submit an explicit image export without rebinding or marking its notebook saved.
     pub(in crate::app) fn save_notebook_image(
         &mut self,
@@ -107,6 +191,35 @@ pub(super) fn image_bundle(bundle: &Value) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_reports_failed_copies_and_bounds_pending_requests() {
+        let budget = Arc::new(crate::images::Budget::default());
+        let mut clipboard = Clipboard::default();
+        let ctx = egui::Context::default();
+        let invalid = |data: &str| ImageExport {
+            document: 42,
+            suggested_path: "plot.png".into(),
+            extension: "png".into(),
+            data: data.into(),
+        };
+        clipboard.start(invalid("invalid base64!"), budget.clone(), &ctx);
+        assert!(clipboard.busy());
+        // A different error would result if the second request replaced the first.
+        clipboard.start(invalid(&STANDARD.encode("not a PNG")), budget.clone(), &ctx);
+        let until = Instant::now() + Duration::from_secs(5);
+        let error = loop {
+            if let Some(error) = clipboard.poll() {
+                break error;
+            }
+            assert!(Instant::now() < until, "Image copy did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert!(error.contains("Invalid image data"), "{error}");
+        assert!(!clipboard.busy());
+        assert_eq!(clipboard.poll(), None);
+        assert_eq!(budget.used(), 0);
+    }
 
     #[test]
     fn exports_preserve_original_png_and_jpeg_snapshots_and_never_replace_existing_files() {

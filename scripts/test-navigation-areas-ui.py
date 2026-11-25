@@ -341,6 +341,10 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
                 child.click(f"workspace-reattach:{title}")
             else:
                 request_close(child.window)
+            # The rail is present before and after reattachment. Wait for the
+            # central page handoff so project_editor cannot accept a stale editor.
+            if title != "Connections":
+                ui.absent("pane-Editor")
             ui.control("workspace-sidebar")
             if title == "Monitor":
                 ui.control("monitor-stop")

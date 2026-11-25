@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -128,7 +129,49 @@ def execution(ui, source, original, label):
     if isinstance(original_image, list):
         original_image = "".join(original_image)
     image_path = ui.project_root / "exported-plot.png"
-    ui.click(f"notebook-save-image:{plot['uid']}:{output_index}")
+    image_control = f"notebook-output-image:{plot['uid']}:{output_index}"
+    # Seed text so a stale image clipboard cannot satisfy the copy assertion.
+    ui.copy(f"notebook-cell:{plot['uid']}", "".join(book["cells"][3]["source"]))
+    ui.click(image_control, mouse_button=3)
+    ui.control("notebook-image-menu-save")
+    ui.click("notebook-image-menu-copy")
+
+    def clipboard_image():
+        try:
+            reply = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+                capture_output=True,
+                timeout=1,
+            )
+            return (
+                reply.stdout
+                if reply.returncode == 0 and reply.stdout.startswith(b"\x89PNG")
+                else None
+            )
+        except subprocess.TimeoutExpired:
+            return None
+
+    copied = ui.wait(clipboard_image, "Notebook image was not copied to the desktop clipboard")
+    original_pixels = subprocess.check_output(
+        ["convert", "-", "-depth", "8", "rgba:-"],
+        input=base64.b64decode(original_image),
+        timeout=5,
+    )
+    copied_pixels = subprocess.check_output(
+        ["convert", "-", "-depth", "8", "rgba:-"], input=copied, timeout=5
+    )
+    assert copied_pixels == original_pixels, (
+        "Clipboard image changed the plot's pixels or dimensions"
+    )
+    ui.click(image_control)
+    ui.control(image_control, focused=True)
+    key("F10", ("Shift_L",))
+    ui.control("notebook-image-menu-copy")
+    key("Escape")
+    ui.absent("notebook-image-menu-copy")
+    ui.click(image_control, mouse_button=3)
+    screenshot(ui.window, label + "-image-menu.png")
+    ui.click("notebook-image-menu-save")
     ui.fill_path(str(image_path))
     key("Return")
     ui.absent("file-dialog-path")
@@ -271,6 +314,11 @@ def run(remote=False):
         original = json.loads(source.read_text())
         original["cells"][0]["source"].extend(
             ["\n\nInline $E=mc^2$.\n\n", "$$x_i^2 + y_i^2 = z_i^2$$\n"]
+        )
+        # Include partial transparency so copying cannot silently premultiply
+        # the clipboard's straight RGBA pixels and darken pasted plots.
+        original["cells"][3]["source"].insert(
+            -1, "plt.gcf().patch.set_alpha(0.5)\nplt.gca().patch.set_alpha(0.5)\n"
         )
         source.write_text(json.dumps(original))
         (project / "notes.txt").write_text("preserve text\n")

@@ -601,6 +601,7 @@ impl EditorApp {
     /// Drain kernel events and window-owned shutdowns without blocking. Apply outputs
     /// only to matching cell versions, serialize accepted changes and report cleanup failures.
     pub(super) fn poll_notebooks(&mut self, ctx: &egui::Context) {
+        self.poll_notebook_image_copy();
         for error in self.notebook_shutdowns.poll() {
             self.abort_lifecycle(error, ctx);
         }

@@ -83,11 +83,6 @@ impl Controller {
     }
     pub fn select_terminal(&mut self) {
         self.remember(ToolTab::Terminal);
-        self.show_terminal();
-    }
-    /// Authentication and connection errors need a terminal view without choosing the user's
-    /// preferred project tool. Only explicit terminal navigation updates restoration history.
-    pub fn show_terminal(&mut self) {
         self.0.area = Area::Projects;
         if !self.floating_tabs.contains(&ToolTab::Terminal) {
             self.0.surface = Surface::Terminal;
@@ -164,14 +159,12 @@ mod tests {
         assert_eq!(state.surface, Surface::Editor);
     }
     #[test]
-    fn login_output_preserves_default_and_deliberate_tool_choices() {
+    fn only_explicit_tool_selection_updates_restoration_history() {
         let mut state = Controller::default();
-        state.show_terminal();
-        state.select_editor();
+        state.enter_area(Area::Welcome);
         assert!(state.last_tool.is_none());
         state.select_panel(Panel::Settings);
-        state.show_terminal();
-        state.select_editor();
+        state.enter_area(Area::Monitor);
         assert_eq!(state.last_tool, Some(ToolTab::Panel(Panel::Settings)));
         state.select_terminal();
         state.select_editor();

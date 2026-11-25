@@ -207,6 +207,7 @@ pub struct EditorApp {
     documents: documents::Documents,
     /// Cleanup ownership survives notebook view replacement and tab removal.
     notebook_shutdowns: notebook_view::Shutdowns,
+    notebook_clipboard: notebook_view::export::Clipboard,
     /// Owns completion admission and the workspace clock independently of domain state.
     workers: workers::Inbox,
     explorer_state: explorer::State,
@@ -333,6 +334,7 @@ impl EditorApp {
             workspace: Default::default(),
             documents: Default::default(),
             notebook_shutdowns: Default::default(),
+            notebook_clipboard: Default::default(),
             workers: Default::default(),
             explorer_state: Default::default(),
             terminal: None,

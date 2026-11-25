@@ -83,9 +83,13 @@ Kernels share the selected allocation's resources with its other steps, includin
 
 ## Saving plots
 
-Each displayed PNG or JPEG output has a **Save image as…** button. It opens the shared file picker and saves the original image bytes at their full resolution, rather than the reduced on-screen preview. For SSH notebooks, the destination is on the project host and obeys the workspace's file permissions. Choose a new filename; existing files are never overwritten. A missing extension is filled in automatically, and the format is preserved without conversion.
+Right-click a displayed PNG or JPEG output for **Save image as…** and **Copy image**. You can also focus the image and press **Shift+F10** to open its menu. The existing **Save image as…** button remains available below the image.
 
-The image is captured when you select Save, so a subsequent cell rerun or display update cannot substitute a different plot. Export does not change notebook content, dirty state or file identity. Quit waits for submitted exports; a failed save keeps the editor open and reports the error. Unsupported or oversized image payloads retain their existing preview limits and remain preserved in notebook JSON.
+Save opens the shared file picker and writes the original image bytes at their full resolution, rather than the reduced on-screen preview. For SSH notebooks, the destination is on the project host and obeys the workspace's file permissions. Choose a new filename; existing files are never overwritten. A missing extension is filled in automatically, and the format is preserved without conversion.
+
+**Copy image** places the decoded image at its original resolution on the desktop clipboard, preserving colours and transparency, including when the kernel runs over SSH. Decoding and clipboard transfer run in the background under the existing image-memory limits. Copying does not save a file or modify the notebook.
+
+The image is captured when you select Save or Copy, so a subsequent cell rerun or display update cannot substitute a different plot. Export does not change notebook content, dirty state or file identity. Quit waits for submitted exports; a failed save keeps the editor open and reports the error. Unsupported or oversized image payloads retain their existing preview limits and remain preserved in notebook JSON.
 
 ## Limits
 

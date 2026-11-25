@@ -194,6 +194,47 @@ pub fn decode_bytes(
     budget: &Arc<Budget>,
     texture_limit: usize,
 ) -> Result<Decoded> {
+    let raster = decode_raster(bytes, path, budget, Some(texture_limit))?;
+    let size = [raster.rgba.width() as usize, raster.rgba.height() as usize];
+    Ok(Decoded {
+        pixels: Arc::new(ColorImage::from_rgba_unmultiplied(
+            size,
+            raster.rgba.as_raw(),
+        )),
+        original: raster.original,
+        format: raster.format,
+        encoded_bytes: raster.encoded_bytes,
+        lease: raster.lease,
+    })
+}
+
+/// Decode original pixels for clipboard transfer under the same source and
+/// allocation limits as previews, without applying a GPU texture-size reduction.
+pub(crate) fn decode_original(
+    encoded: &str,
+    path: &str,
+    budget: &Arc<Budget>,
+) -> Result<DecodedRaster> {
+    let bytes = STANDARD.decode(encoded).context("Invalid image data")?;
+    decode_raster(&bytes, path, budget, None)
+}
+
+/// Straight RGBA for native clipboard transfer. Keep the allocation lease alive
+/// with the pixels; GPU previews convert to premultiplied `ColorImage` separately.
+pub(crate) struct DecodedRaster {
+    pub rgba: image::RgbaImage,
+    original: [u32; 2],
+    format: String,
+    encoded_bytes: usize,
+    lease: Arc<Lease>,
+}
+
+fn decode_raster(
+    bytes: &[u8],
+    path: &str,
+    budget: &Arc<Budget>,
+    texture_limit: Option<usize>,
+) -> Result<DecodedRaster> {
     let mut reader = ImageReader::new(Cursor::new(bytes));
     if let Some(format) = format_for(path) {
         reader.set_format(format);
@@ -227,9 +268,11 @@ pub fn decode_bytes(
         DynamicImage::from_decoder(decoder).context("Cannot decode image; it may be corrupt")?;
     image.apply_orientation(orientation);
     let original = [image.width(), image.height()];
-    let limit = texture_limit.clamp(1, 4096) as u32;
-    if image.width() > limit || image.height() > limit {
-        image = image.thumbnail(limit, limit);
+    if let Some(limit) = texture_limit {
+        let limit = limit.clamp(1, 4096) as u32;
+        if image.width() > limit || image.height() > limit {
+            image = image.thumbnail(limit, limit);
+        }
     }
     let rgba = image.into_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
@@ -239,8 +282,8 @@ pub fn decode_bytes(
         .used
         .fetch_sub(lease.bytes - retained, Ordering::AcqRel);
     lease.bytes = retained;
-    Ok(Decoded {
-        pixels: Arc::new(ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())),
+    Ok(DecodedRaster {
+        rgba,
         original,
         format: format!("{format:?}").to_uppercase(),
         encoded_bytes: bytes.len(),
@@ -251,6 +294,25 @@ pub fn decode_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_rasters_keep_original_resolution_and_straight_alpha() {
+        let pixels = image::RgbaImage::from_pixel(4097, 2, image::Rgba([40, 120, 200, 128]));
+        let mut bytes = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(pixels.clone())
+            .write_to(&mut bytes, ImageFormat::Png)
+            .unwrap();
+        let data = STANDARD.encode(bytes.into_inner());
+        let budget = Arc::new(Budget::default());
+        let preview = decode(&data, "plot.png", &budget, 64).unwrap();
+        assert_eq!(preview.pixels.size[0], 64);
+        let original = decode_original(&data, "plot.png", &budget).unwrap();
+        assert_eq!(original.rgba, pixels);
+        assert_eq!(budget.used(), 4097 * 2 * 4 + 64 * 4);
+        drop((original, preview));
+        assert_eq!(budget.used(), 0);
+    }
+
     #[test]
     fn document_sources_do_not_consume_the_raster_pixel_budget() {
         let budget = Arc::new(Budget::default());

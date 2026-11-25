@@ -198,6 +198,7 @@ impl EditorApp {
     /// Install an accepted prepared context after common guards pass. Invalidate old
     /// services/generations before starting commands for the new host and policy.
     /// A startup file is opened through the ordinary reader only after this commit.
+    /// Host preparation otherwise leaves the current layout and focus selection alone.
     pub(in crate::app) fn commit_prepared(&mut self, prepared: Prepared, ctx: &egui::Context) {
         let Prepared {
             response,
@@ -212,7 +213,6 @@ impl EditorApp {
             self.notify("Host returned an invalid project description.", true);
             return;
         };
-        let opening_connection = remote && self.workspace.as_ref().is_some_and(|w| !w.ready);
         let connection = if remote {
             self.workspace.as_ref().and_then(|w| w.remote.clone())
         } else {
@@ -275,33 +275,11 @@ impl EditorApp {
         if plan.requested && !plan.active {
             self.notify(plan.reason.clone(), false);
         }
-        let show_welcome = open_file.is_none() && self.presentation.area == areas::Area::Welcome;
         self.show_terminal |= remote || options.enabled;
         if let Some(path) = open_file {
             self.open_file_in(path, egui::ViewportId::ROOT, ctx);
         } else if self.show_terminal {
             self.start_project_terminal(ctx);
-        }
-        if show_welcome || (opening_connection && self.documents.active().is_none()) {
-            // A fresh login stays on Welcome. Late shell attachment must not
-            // take over this presentation or the remembered project view.
-            if self.presentation.surface == tool_windows::Surface::Terminal
-                && self.presentation.last_tool != Some(ToolTab::Terminal)
-            {
-                if let Some(ToolTab::Panel(panel)) = self.presentation.last_tool
-                    && self.panel_enabled(panel)
-                    && !self.tab_detached(ToolTab::Panel(panel))
-                {
-                    self.presentation.select_panel(panel);
-                } else {
-                    self.presentation.select_editor();
-                }
-            }
-            self.open_area(areas::Area::Welcome, ctx);
-        } else if opening_connection {
-            // Reconnect resumes retained buffers, including unsaved recovery
-            // text, through the existing editor rather than the login terminal.
-            self.focus_editor_in(egui::ViewportId::ROOT, ctx);
         }
     }
 
@@ -392,15 +370,15 @@ impl EditorApp {
     ) {
         if target == CloseTarget::Disconnect {
             self.detach_ssh(documents::Retention::Discard, ctx);
-        } else {
-            self.clear_project(documents::Retention::Discard, reason);
-            self.workspace.clear_project_context();
-            self.invalidate_project_candidate(PickerReset::Close);
-            if self.workspace.is_none() {
-                self.workspace.request_local_fallback();
-            }
-            self.status = "Project closed".into();
+            return;
         }
+        self.clear_project(documents::Retention::Discard, reason);
+        self.workspace.clear_project_context();
+        self.invalidate_project_candidate(PickerReset::Close);
+        if self.workspace.is_none() {
+            self.workspace.request_local_fallback();
+        }
+        self.status = "Project closed".into();
         self.project_closed_presentation(ctx);
     }
 

@@ -320,11 +320,8 @@ fn global_navigation_and_project_preparation_preserve_detached_tool_selection() 
     assert!(app.tools_visible());
     assert!(app.panel_visible(Panel::Problems));
     let project = tempfile::tempdir().unwrap();
-    for login in [false, true] {
-        if login {
-            app.login_terminal_intent();
-        }
-        app.open_area(Area::Welcome, &ctx);
+    for area in [Area::Welcome, Area::Monitor] {
+        app.open_area(area, &ctx);
         let response = files::local(&Request::Prepare {
             path: project.path().to_string_lossy().into(),
             sandbox: Default::default(),
@@ -334,10 +331,11 @@ fn global_navigation_and_project_preparation_preserve_detached_tool_selection() 
         assert!(app.presentation.detached);
         assert!(app.tools_visible());
         assert_eq!(app.presentation.panel, Some(Panel::Problems));
+        assert_eq!(app.presentation.area, area);
     }
     app.presentation.hide_tools();
     assert!(!app.panel_visible(Panel::Problems));
-    assert_eq!(app.presentation.area, Area::Welcome);
+    assert_eq!(app.presentation.area, Area::Monitor);
 }
 
 #[test]
