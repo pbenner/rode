@@ -63,13 +63,13 @@ impl Area {
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(super) struct Preferences {
-    pub monitor_interval: u64,
+    pub monitor_interval: f64,
     pub monitor_chart: monitoring::ChartView,
 }
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            monitor_interval: 2,
+            monitor_interval: monitoring::DEFAULT_INTERVAL.as_secs_f64(),
             monitor_chart: Default::default(),
         }
     }
@@ -90,9 +90,9 @@ impl State {
         let configured = interval.is_some() || chart.is_some();
         let prefs = Preferences {
             monitor_interval: interval
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(2)
-                .clamp(1, 30),
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|v| monitoring::sampling_interval(v).as_secs_f64())
+                .unwrap_or(monitoring::DEFAULT_INTERVAL.as_secs_f64()),
             monitor_chart: chart
                 .filter(|v| v.len() <= 1024)
                 .and_then(|v| serde_json::from_str(&v).ok())
@@ -239,16 +239,8 @@ impl EditorApp {
         ui.separator();
         if self.feature(crate::extensions::Feature::Monitor) {
             ui.strong("Host monitor");
-            if ui
-                .add(crate::keyboard::named(
-                    "Monitor refresh interval",
-                    egui::Slider::new(&mut self.areas.prefs.monitor_interval, 1..=30)
-                        .text("Refresh interval (s)"),
-                ))
-                .changed()
-            {
-                self.areas.pending = true;
-            }
+            self.areas.pending |=
+                monitoring::sampling_control(ui, &mut self.areas.prefs.monitor_interval);
             let previous = self.areas.prefs.monitor_chart;
             self.areas.prefs.monitor_chart.controls(ui);
             self.areas.pending |= previous != self.areas.prefs.monitor_chart;

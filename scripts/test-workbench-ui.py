@@ -190,12 +190,21 @@ def run(remote=False, scenario="all"):
                     command("System: Monitor")
                     ui.control("monitor-start")
                     ui.absent("monitor-sample")
+                    ui.value("monitor-sampling-interval-value", "1")
                     ui.click("monitor-start")
                     ui.control("monitor-running")
                     ui.control("monitor-sample")
+                    # Adjust the real slider while collecting. Keyboard access
+                    # shares the same control in docked/detached monitor views.
+                    ui.hint("Monitor sampling interval")
+                    key("Left")
+                    ui.value("monitor-sampling-interval-value", "0.9")
+                    ui.control("monitor-running")
+                    key("Right")
+                    ui.value("monitor-sampling-interval-value", "1")
                     count_names = [
                         "monitor-history-count:" + hashlib.sha256(str(i).encode()).hexdigest()
-                        for i in range(604)
+                        for i in range(6004)
                     ]
                     collected = set(count_names[2:])
                     ui.layout(

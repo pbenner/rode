@@ -83,7 +83,7 @@ impl Default for Preferences {
             format_on_save: true,
             check_on_save: true,
             live_checks: true,
-            monitor_interval: 2,
+            monitor_interval: monitoring::DEFAULT_INTERVAL.as_secs(),
             monitor_chart: Default::default(),
             sandbox: Default::default(),
             git_sandbox: false,
@@ -330,7 +330,9 @@ impl EditorApp {
     /// project switches cannot replace application-wide monitor configuration.
     pub(super) fn migrate_monitor_preferences(&mut self) {
         if !self.areas.monitor_configured {
-            self.areas.prefs.monitor_interval = self.workbench.prefs.monitor_interval.clamp(1, 30);
+            self.areas.prefs.monitor_interval =
+                monitoring::sampling_interval(self.workbench.prefs.monitor_interval as f64)
+                    .as_secs_f64();
             self.areas.prefs.monitor_chart = self.workbench.prefs.monitor_chart;
             self.areas.monitor_configured = true;
             self.areas.pending = true;

@@ -255,6 +255,38 @@ fn application_dialogs_return_with_their_area_and_other_windows_keep_their_owner
 }
 
 #[test]
+fn monitor_sampling_defaults_and_saved_choices_are_bounded() {
+    assert_eq!(Preferences::default().monitor_interval, 1.0);
+    assert_eq!(State::load(None).prefs.monitor_interval, 1.0);
+    for (saved, expected) in [
+        ("2", 2.0),
+        ("0.1", 0.1),
+        ("0.3", 0.3),
+        ("5", 5.0),
+        ("7", 5.0),
+        ("0", 0.1),
+        ("-1", 0.1),
+        ("99", 5.0),
+        ("invalid", 1.0),
+        ("NaN", 1.0),
+        ("inf", 1.0),
+        ("-inf", 1.0),
+    ] {
+        let mut storage = Storage::default();
+        storage
+            .0
+            .insert("host_monitor_interval".into(), saved.into());
+        let mut state = State::load(Some(&storage));
+        assert_eq!(state.prefs.monitor_interval, expected);
+        assert!(state.monitor_configured);
+        state.prefs.monitor_interval = 0.3;
+        state.pending = true;
+        state.store(&mut storage);
+        assert_eq!(State::load(Some(&storage)).prefs.monitor_interval, 0.3);
+    }
+}
+
+#[test]
 fn monitor_updates_leave_obsolete_toolbar_preferences_untouched() {
     let mut storage = Storage::default();
     let legacy = r#"["Tasks","Debugger"]"#;
@@ -263,10 +295,10 @@ fn monitor_updates_leave_obsolete_toolbar_preferences_untouched() {
         .insert("project_toolbar_pins".into(), legacy.into());
     let mut monitor = State::load(Some(&storage));
     monitor.monitor_configured = true;
-    monitor.prefs.monitor_interval = 7;
+    monitor.prefs.monitor_interval = 4.5;
     monitor.pending = true;
     monitor.store(&mut storage);
-    assert_eq!(State::load(Some(&storage)).prefs.monitor_interval, 7);
+    assert_eq!(State::load(Some(&storage)).prefs.monitor_interval, 4.5);
     assert_eq!(
         storage.0.get("project_toolbar_pins").map(String::as_str),
         Some(legacy)

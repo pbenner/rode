@@ -2,6 +2,55 @@
 use super::*;
 
 #[test]
+fn fractional_sampling_intervals_stay_finite_and_within_bounds() {
+    for (seconds, millis) in [
+        (0.1, 100),
+        (0.2, 200),
+        (0.9, 900),
+        (2.5, 2500),
+        (5.0, 5000),
+        (0.0, 100),
+        (-1.0, 100),
+        (30.0, 5000),
+        (f64::NAN, 1000),
+        (f64::INFINITY, 1000),
+        (f64::NEG_INFINITY, 1000),
+    ] {
+        assert_eq!(sampling_interval(seconds), Duration::from_millis(millis));
+    }
+}
+
+#[test]
+fn sampling_controls_fit_narrow_panels_at_both_ends_of_the_range() {
+    for width in [180., 240., 320., 800.] {
+        for mut seconds in [0.1, 5.0] {
+            let ctx = egui::Context::default();
+            for _ in 0..3 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 200.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let bounds = ui.max_rect();
+                            sampling_control(ui, &mut seconds);
+                            assert!(
+                                ui.min_rect().right() <= bounds.right() + 1.,
+                                "Sampling control overflow at {width} points"
+                            );
+                        });
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn animation_only_runs_for_visible_started_scrolling_charts() {
     for (active, visible, mode, animated) in [
         (true, true, timeline::Mode::Scrolling, true),
@@ -238,11 +287,14 @@ fn rates_need_recent_successful_samples_and_history_is_bounded() {
     state.record(sample(1), now + interval * 151, interval);
     assert!(state.history.back().unwrap().cpu.is_none());
     let mut bounded = State::default();
+    let fastest = sampling_interval(0.1);
+    assert_eq!(fastest, Duration::from_millis(100));
+    assert_eq!(HISTORY_LIMIT, 6003);
     for index in 0..HISTORY_LIMIT + 20 {
         bounded.record(
             sample(index as u64 * 100),
-            now + Duration::from_secs(index as u64),
-            Duration::from_secs(1),
+            now + fastest * index as u32,
+            fastest,
         );
     }
     assert_eq!(bounded.history.len(), HISTORY_LIMIT);

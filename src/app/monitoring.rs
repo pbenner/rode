@@ -12,9 +12,28 @@ mod dashboard;
 mod timeline;
 pub(in crate::app) use timeline::View as ChartView;
 
-// Inclusive one-second samples for the longest window plus two preceding
+/// Sampling limits and default shared by controls, stored preferences and polling.
+pub(super) const MIN_INTERVAL: Duration = Duration::from_millis(100);
+pub(super) const MAX_INTERVAL: Duration = Duration::from_secs(5);
+pub(super) const DEFAULT_INTERVAL: Duration = Duration::from_secs(1);
+
+// Inclusive samples at the fastest rate for the longest window plus two preceding
 // samples to preserve cubic tangents at the left edge while history scrolls.
-const HISTORY_LIMIT: usize = timeline::MAX_SECONDS as usize + 3;
+const HISTORY_LIMIT: usize = (Duration::from_secs(timeline::MAX_SECONDS).as_millis()
+    / MIN_INTERVAL.as_millis()) as usize
+    + 3;
+
+/// Clamp old/user-edited preferences before creating a duration. Nonfinite
+/// values must never reach `Duration::from_secs_f64` or poison rate calculations.
+pub(super) fn sampling_interval(seconds: f64) -> Duration {
+    if seconds.is_finite() {
+        Duration::from_secs_f64(
+            seconds.clamp(MIN_INTERVAL.as_secs_f64(), MAX_INTERVAL.as_secs_f64()),
+        )
+    } else {
+        DEFAULT_INTERVAL
+    }
+}
 
 #[derive(Default)]
 /// Bounded successful telemetry snapshots and derived rate baselines. Request timing
@@ -176,6 +195,38 @@ fn percent_label(value: Option<f32>) -> String {
     value.map_or_else(|| "Unavailable".into(), |v| format!("{v:.1}%"))
 }
 
+/// Use the same saved sampling control in the monitor and application settings.
+/// Wrapping keeps the label and native slider usable in narrow detached windows.
+pub(super) fn sampling_control(ui: &mut egui::Ui, seconds: &mut f64) -> bool {
+    ui.horizontal_wrapped(|ui| {
+        let label = ui.label("Sample every");
+        // Slider contains its own horizontal layout, so reserve its number field
+        // and move it to the next row before drawing when the label leaves too little room.
+        let value_width = ui.painter().layout_no_wrap(
+            format!("{:.1} s", MAX_INTERVAL.as_secs_f64()), ui.style().drag_value_text_style.resolve(ui.style()),
+            ui.visuals().text_color(),
+        ).size().x + ui.spacing().button_padding.x * 2.;
+        let reserved = value_width.max(ui.spacing().interact_size.x) + ui.spacing().item_spacing.x;
+        // available_width includes a possible new row; this needs the current row's remainder.
+        if ui.available_size_before_wrap().x < ui.spacing().slider_width + reserved {
+            ui.end_row();
+        }
+        ui.spacing_mut().slider_width = ui.spacing().slider_width
+            .min((ui.available_size_before_wrap().x - reserved).max(0.));
+        let interval = ui
+            .add(crate::keyboard::named(
+                "Monitor sampling interval",
+                egui::Slider::new(seconds, MIN_INTERVAL.as_secs_f64()..=MAX_INTERVAL.as_secs_f64())
+                    .step_by(MIN_INTERVAL.as_secs_f64()).fixed_decimals(1).suffix(" s"),
+            ))
+            .labelled_by(label.id)
+            .on_hover_text("Time between host readings. Lower values sample more often; changes apply while monitoring is running.");
+        ui_probe::button(ui, "monitor-sampling-interval", &interval);
+        ui_probe::value(ui, "monitor-sampling-interval-value", &interval, &seconds.to_string());
+        interval.changed()
+    }).inner
+}
+
 impl EditorApp {
     /// Schedule only an explicitly started collector, independently of project
     /// readiness or panel visibility. The busy guard admits one captured host poll.
@@ -188,7 +239,7 @@ impl EditorApp {
             && !self.exit_pending()
             && self.monitor_host_ready()
         {
-            let interval = Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30));
+            let interval = sampling_interval(self.areas.prefs.monitor_interval);
             if !self.host_tools.monitoring.monitor_busy
                 && self
                     .host_tools
@@ -225,7 +276,7 @@ impl EditorApp {
                 self.host_tools.monitoring.record(
                     sample,
                     Instant::now(),
-                    Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30)),
+                    sampling_interval(self.areas.prefs.monitor_interval),
                 );
             }
             Err(error) => self.host_tools.monitoring.monitor_error = error,
@@ -307,6 +358,7 @@ impl EditorApp {
             self.areas.prefs.monitor_chart = view;
             self.areas.pending = true;
         }
+        self.areas.pending |= sampling_control(ui, &mut self.areas.prefs.monitor_interval);
         let state = &self.host_tools.monitoring;
         if !state.monitor_error.is_empty() {
             ui.colored_label(palette.error, &state.monitor_error);
@@ -343,7 +395,7 @@ impl EditorApp {
                 duration_label(latest.at.elapsed().as_secs_f32())
             ));
         });
-        let interval = Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30));
+        let interval = sampling_interval(self.areas.prefs.monitor_interval);
         ui.add_space(12.);
         dashboard::show(ui, state, interval, view, palette);
         if sample.gpus.is_empty() || !sample.gpu_note.is_empty() {

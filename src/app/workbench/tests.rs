@@ -860,7 +860,7 @@ fn settings_categories_keep_drafts_and_save_only_validated_selected_fields() {
     assert_eq!(app.workbench.draft.monitor_interval, 25);
     assert_eq!(app.workbench.draft.monitor_chart.seconds, 300);
     // Legacy monitoring drafts no longer affect application-wide host settings.
-    assert_eq!(app.areas.prefs.monitor_interval, 2);
+    assert_eq!(app.areas.prefs.monitor_interval, 1.0);
     assert_eq!(app.areas.prefs.monitor_chart.seconds, 120);
     assert!(
         app.workbench.draft.latex.program.is_empty(),
@@ -900,16 +900,25 @@ fn settings_links_select_their_category_without_closing_the_tab_or_losing_edits(
 #[test]
 fn legacy_monitor_preferences_import_once_and_project_changes_keep_application_settings() {
     let root = tempfile::tempdir().unwrap();
-    let (mut app, _ctx) = app(root.path());
-    app.workbench.prefs.monitor_interval = 7;
-    app.workbench.prefs.monitor_chart.seconds = 300;
-    app.initialize_host_tool(Panel::Monitor);
-    assert!(app.areas.monitor_configured && app.areas.pending);
-    assert_eq!(app.areas.prefs.monitor_interval, 7);
-    assert_eq!(app.areas.prefs.monitor_chart.seconds, 300);
-    app.workbench.prefs.monitor_interval = 19;
-    app.workbench.prefs.monitor_chart.seconds = 30;
-    app.migrate_monitor_preferences();
-    assert_eq!(app.areas.prefs.monitor_interval, 7);
-    assert_eq!(app.areas.prefs.monitor_chart.seconds, 300);
+    // Missing legacy fields must not overwrite the faster application default.
+    let old: Preferences = serde_json::from_str("{}").unwrap();
+    assert_eq!(old.monitor_interval, 1);
+    for (interval, seconds, expected) in [
+        (old.monitor_interval, 120, 1.0),
+        (7, 300, 5.0),
+        (0, 60, 0.1),
+    ] {
+        let (mut app, _ctx) = app(root.path());
+        app.workbench.prefs.monitor_interval = interval;
+        app.workbench.prefs.monitor_chart.seconds = seconds;
+        app.initialize_host_tool(Panel::Monitor);
+        assert!(app.areas.monitor_configured && app.areas.pending);
+        assert_eq!(app.areas.prefs.monitor_interval, expected);
+        assert_eq!(app.areas.prefs.monitor_chart.seconds, seconds);
+        app.workbench.prefs.monitor_interval = 19;
+        app.workbench.prefs.monitor_chart.seconds = 30;
+        app.migrate_monitor_preferences();
+        assert_eq!(app.areas.prefs.monitor_interval, expected);
+        assert_eq!(app.areas.prefs.monitor_chart.seconds, seconds);
+    }
 }
