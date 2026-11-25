@@ -317,7 +317,9 @@ retains the implicit origin separately from explicit file/directory arguments.
 The candidate carries `PreparationPolicy` through worker and transition admission:
 implicit CWD neither restores sandbox grants nor overwrites saved policies;
 explicit `--sandbox`, CLI targets and SSH preparation retain their normal checks.
-Deselecting Projects changes only the area; its documents, tool selection and service owners remain intact. Explorer and Project tools are always
+The Welcome command, exposed by the RODE logo, View menu and command palette,
+changes only the area; its documents, tool selection and service owners remain
+intact. It is idempotent rather than a toggle. Explorer and Project tools are always
 present in the root rail and can enter the project view directly. Connections
 is a sidebar destination: it retains the central area rather than replacing it.
 The presentation controller selects Explorer, Connections or neither;

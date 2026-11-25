@@ -350,7 +350,7 @@ def main():
                 if not any(
                     button["name"] == "welcome-screen" for button in native.layout()["buttons"]
                 ):
-                    native.click("activity:Projects")
+                    native.click("welcome-home")
                 native.control("welcome-screen")
                 native.absent("pane-Explorer")
                 native.control("open-project")

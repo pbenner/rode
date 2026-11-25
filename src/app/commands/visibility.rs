@@ -88,7 +88,7 @@ impl EditorApp {
             // Keep this list exhaustive so adding a command requires an explicit
             // ownership decision instead of silently exposing a disabled feature.
             Command::KeyboardHints
-            | Command::Projects
+            | Command::Welcome
             | Command::Connections
             | Command::AppSettings
             | Command::Environment

@@ -66,9 +66,17 @@ impl EditorApp {
     /// Disable row edits while a preference write is awaiting acknowledgement.
     pub(super) fn saved_connections_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
+        // Highlight the live SSH identity, independently of form drafts, display
+        // names and project paths. Disconnected workspaces have no selected row.
+        let active = self
+            .workspace
+            .as_ref()
+            .filter(|workspace| workspace.connected)
+            .and_then(|workspace| workspace.remote.as_ref())
+            .map(|remote| &remote.profile);
         let intent = ui
             .add_enabled_ui(!self.connection_profiles.saving(), |ui| {
-                connection_rows(ui, &self.connection_profiles.profiles, palette)
+                connection_rows(ui, &self.connection_profiles.profiles, active, palette)
             })
             .inner;
         if self.connection_profiles.saving() {
@@ -102,6 +110,7 @@ impl EditorApp {
 fn connection_rows(
     ui: &mut egui::Ui,
     profiles: &[Profile],
+    active: Option<&Profile>,
     palette: theme::Palette,
 ) -> Option<Intent> {
     let mut intent = None;
@@ -113,7 +122,9 @@ fn connection_rows(
                 .add_sized(
                     size,
                     IconButton::new(Icon::Remote, &label)
-                        .color(palette.accent)
+                        .selected(active.is_some_and(|current| {
+                            project_bookmarks::Project::same_connection(current, profile)
+                        }))
                         .truncate()
                         .sense(Sense::click_and_drag()),
                 )

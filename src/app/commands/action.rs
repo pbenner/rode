@@ -6,7 +6,7 @@ use super::super::*;
 /// presentation, while this enum selects behavior.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::app) enum Command {
-    Projects,
+    Welcome,
     Connections,
     AppSettings,
     KeyboardHints,
@@ -108,7 +108,7 @@ impl Definition {
 
 impl Command {
     pub(in crate::app) const PALETTE: &'static [Self] = &[
-        Self::Projects,
+        Self::Welcome,
         Self::Connections,
         Self::AppSettings,
         Self::New,
@@ -215,8 +215,8 @@ impl Command {
     pub(in crate::app) fn definition(self) -> Definition {
         match self {
             Self::Panel(panel) => panel.definition().command,
-            Self::Projects => {
-                Definition::new("Projects", Icon::Workspace).palette("Application: Projects")
+            Self::Welcome => {
+                Definition::new("Welcome", Icon::Workspace).palette("Application: Show Welcome")
             }
             Self::Connections => {
                 Definition::new("Connections", Icon::Remote).palette("Connections: Manage hosts")
@@ -463,7 +463,7 @@ impl EditorApp {
     /// local to that editor host.
     pub(in crate::app) fn command_selected(&self, command: Command, ctx: &egui::Context) -> bool {
         match command {
-            Command::Projects => self.presentation.area == areas::Area::Projects,
+            Command::Welcome => self.presentation.area == areas::Area::Welcome,
             Command::Connections => {
                 self.connections_visible() || self.tab_detached(ToolTab::Connections)
             }
@@ -508,7 +508,7 @@ impl EditorApp {
     /// window/tab mutations use the shared input-ordered coordinator.
     pub(in crate::app) fn execute_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
-            Command::Projects => self.toggle_projects(ctx),
+            Command::Welcome => self.open_area(areas::Area::Welcome, ctx),
             Command::Connections => self.toggle_connections(ctx),
             Command::AppSettings => self.open_area(areas::Area::Settings, ctx),
             Command::KeyboardHints => self.start_keyboard_controls(false, ctx),

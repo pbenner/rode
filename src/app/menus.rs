@@ -221,6 +221,7 @@ impl EditorApp {
             ui.close();
         }
         section(ui, "WORKSPACE", false);
+        self.menu_commands(ui, ctx, &[Command::Welcome]);
         submenu(ui, Icon::Environment, "Workspace panels", |ui| {
             self.menu_commands(ui, ctx, &Command::panels())
         });

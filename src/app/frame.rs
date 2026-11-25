@@ -6,40 +6,76 @@
 
 use super::*;
 
-/// The rail mixes a project destination, a sidebar and host tools. It is not a
-/// catalogue of central pages: Connections leaves the central view intact.
-pub(super) const ACTIVITY: [Command; 4] = [
-    Command::Projects,
+/// Order by presentation role: keep the two sidebar choices adjacent, followed
+/// by project tools and then application views. Connections retains the central
+/// view even though its saved locations are independent of the current project.
+pub(super) const ACTIVITY: [Command; 5] = [
+    Command::Explorer,
     Command::Connections,
+    Command::Sidebar,
     Command::Panel(Panel::Monitor),
     Command::Panel(Panel::Transfers),
 ];
 
 impl EditorApp {
+    /// The brand is a native, keyboard-discoverable Welcome action, including
+    /// in narrow windows. Visiting Welcome leaves project and service owners intact.
+    fn welcome_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, minimal: bool) {
+        let palette = self.themes.active().palette;
+        let mark = ui.next_auto_id().with("rode-mark");
+        let atom = egui::Atom::custom(mark, egui::vec2(26., 26.));
+        let button = if minimal {
+            egui::Button::new(atom)
+        } else {
+            egui::Button::new((
+                atom,
+                RichText::new("RODE")
+                    .strong()
+                    .size(15.)
+                    .color(palette.heading_color()),
+            ))
+        };
+        let output = ui
+            .add_enabled_ui(!self.foreign_modal(ctx), |ui| {
+                ui.spacing_mut().button_padding = egui::vec2(4., 2.);
+                button
+                    .frame(false)
+                    .stroke(Stroke::NONE)
+                    .sense(keyboard::button_sense(ui, "Welcome", Sense::click()))
+                    .atom_ui(ui)
+            })
+            .inner;
+        if let Some(rect) = output.rect(mark) {
+            ui.painter()
+                .rect_filled(rect, 7, palette.accent.gamma_multiply(0.12));
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "[r]",
+                FontId::monospace(13.),
+                palette.accent,
+            );
+        }
+        let response = output.response.on_hover_text("Show Welcome");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), "Welcome")
+        });
+        theme::button_focus(ui, &response, None);
+        keyboard::target(ui, "Welcome", &response);
+        ui_probe::button(ui, "welcome-home", &response);
+        if response.clicked() {
+            keyboard::consume_activation(&response);
+            self.execute_command(Command::Welcome, ctx);
+        }
+    }
+
     /// Menus and workspace search share the header space left by fixed actions.
     /// Keep their existing widget identities while the parent clips or scrolls this region.
     fn titlebar_navigation(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, minimal: bool) {
         let palette = self.themes.active().palette;
         ui.horizontal_centered(|ui| {
-            if !minimal {
-                let (mark, _) = ui.allocate_exact_size(egui::vec2(26., 26.), Sense::hover());
-                ui.painter()
-                    .rect_filled(mark, 7, palette.accent.gamma_multiply(0.12));
-                ui.painter().text(
-                    mark.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "[r]",
-                    FontId::monospace(13.),
-                    palette.accent,
-                );
-                ui.label(
-                    RichText::new("RODE")
-                        .strong()
-                        .size(15.)
-                        .color(palette.heading_color()),
-                );
-                ui.add_space(14.);
-            }
+            self.welcome_button(ui, ctx, minimal);
+            ui.add_space(if minimal { 4. } else { 14. });
             self.menus(ui, ctx);
             ui.add_space(if minimal { 4. } else { 12. });
             let workspace_width = ui.available_width().clamp(0., 360.);
@@ -210,15 +246,14 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.;
                 ui.spacing_mut().button_padding = egui::vec2(0., 2.);
-                let mut commands = Vec::new();
-                for command in ACTIVITY {
-                    if self.command_visible(command) {
-                        commands.push(command);
-                        if command == Command::Projects && project_controls {
-                            commands.extend([Command::Explorer, Command::Sidebar]);
-                        }
-                    }
-                }
+                let commands: Vec<_> = ACTIVITY
+                    .into_iter()
+                    .filter(|command| {
+                        self.command_visible(*command)
+                            && (project_controls
+                                || !matches!(*command, Command::Explorer | Command::Sidebar))
+                    })
+                    .collect();
                 // Keep the footer outside the scroll clip. At high zoom a fixed
                 // minimum button size cannot fit every area above those controls.
                 let area_height = (ui.available_height() - 112.).max(0.);
@@ -326,13 +361,6 @@ impl EditorApp {
             });
         }
         let selected = self.command_selected(command, ctx);
-        if command == Command::Projects {
-            hint.push_str(if selected {
-                "\nClick to return to Welcome"
-            } else {
-                "\nShow the project workspace"
-            });
-        }
         let response = ui.add_sized(
             [36.0, button_height],
             IconButton::icon(definition.icon, &hint)

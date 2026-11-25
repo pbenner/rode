@@ -126,7 +126,7 @@ with fixture_directory(prefix="rode-panels-") as base:
         ui.click("extension-settings")
         ui.click("extension-action:start")
         ui.control("extension-action:stop")
-        ui.click("activity:Projects")
+        ui.project_editor()
         ui.click("extension-panel:test.panel")
         ui.control("extension-action:stop")
         assert sum(call["action"] == "open" for call in calls()) == 1

@@ -6,9 +6,9 @@
 use super::*;
 use crate::extensions::Feature;
 mod model;
-pub(in crate::app) use model::Bookmark;
 pub(super) use model::State;
-use model::{Project, Restoration, RestoreStage};
+pub(in crate::app) use model::{Bookmark, Project};
+use model::{Restoration, RestoreStage};
 
 const FEATURE: Feature = Feature::ProjectBookmarks;
 const SETTING: &str = "projects";

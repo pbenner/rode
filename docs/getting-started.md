@@ -13,7 +13,7 @@ rode /path/to/project
 rode /path/to/project/main.py
 ```
 
-A directory opens as a project. Launching `rode` without a path opens the current working directory in **Normal** mode; saved sandbox settings are retained but are not applied to this implicit startup. Add `--sandbox` to request isolation explicitly. The window starts on Welcome with Explorer hidden. Select **Projects** to enter the workspace, or select **Explorer** or **Project tools** directly in the left activity bar. Clicking Projects again returns to Welcome without closing files or stopping work.
+A directory opens as a project. Launching `rode` without a path opens the current working directory in **Normal** mode; saved sandbox settings are retained but are not applied to this implicit startup. Add `--sandbox` to request isolation explicitly. The window starts on Welcome with Explorer hidden. Select **Explorer** or **Project tools** in the left activity bar to enter the workspace. Click the RODE logo, choose **View → Welcome**, or run **Application: Show Welcome** in the command palette to return to Welcome without closing files or stopping work.
 
 A file argument opens immediately in its normal editor or preview, normally with its containing directory as the workspace. Relative paths work too, such as `rode main.py`; quote paths containing spaces. Saved sandbox settings for that directory still apply, and `--sandbox` requests isolation for it explicitly.
 

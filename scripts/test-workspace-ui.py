@@ -367,7 +367,6 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             control("pane-outline-Tools", chat_window)
             driver().absent("pane-outline-Tools", after_pass=root_pass)
             focus(window)
-            activate("activity:Projects")
             ui.project_editor()
             disabled_tab("Chat")
             activate("source-editor")

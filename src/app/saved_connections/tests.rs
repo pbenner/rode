@@ -26,7 +26,7 @@ fn frame(ctx: &egui::Context, events: Vec<egui::Event>) -> (egui::FullOutput, Op
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                intent = connection_rows(ui, &profiles(), theme::Palette::default());
+                intent = connection_rows(ui, &profiles(), None, theme::Palette::default());
             });
         },
     );

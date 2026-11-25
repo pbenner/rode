@@ -74,7 +74,7 @@ fn disabling_features_removes_their_activity_menu_and_palette_entries_and_reenab
             );
         }
         for name in [
-            "activity:Projects",
+            "welcome-home",
             "activity:Connections",
             "activity:App settings",
             "activity:Extensions…",
@@ -84,6 +84,7 @@ fn disabling_features_removes_their_activity_menu_and_palette_entries_and_reenab
         ] {
             assert!(names.contains(name), "{name}: {snapshot}");
         }
+        assert!(!names.contains("activity:Projects"));
     }
 }
 

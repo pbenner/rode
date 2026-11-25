@@ -233,9 +233,8 @@ fn implicit_cwd_opens_normal_without_restoring_or_saving_sandbox_grants() {
                 "Implicit startup must not rewrite saved grants"
             );
             assert!(app.terminal.is_none() && !app.agents.chat.busy);
-            app.toggle_projects(&ctx);
-            assert_eq!(app.presentation.area, areas::Area::Projects);
             app.set_explorer_visible(egui::ViewportId::ROOT, true);
+            assert_eq!(app.presentation.area, areas::Area::Projects);
             assert!(app.explorer_visible(egui::ViewportId::ROOT));
             assert!(
                 app.explorer_state

@@ -596,15 +596,10 @@ class NativeUI:
         )
 
     def project_editor(self):
-        """Enter Projects or close its tools view, preserving the selected tool tab."""
+        """Focus the project editor without changing the sidebar or remembered tool."""
         names = {button["name"] for button in self.layout()["buttons"]}
-        if "pane-Editor" not in names and not any(
-            name.startswith("workspace-tab:") for name in names
-        ):
-            self.click("activity:Projects")
-            names = {button["name"] for button in self.layout()["buttons"]}
         if "pane-Editor" not in names:
-            self.click("workspace-sidebar")
+            self.command("Navigation: Focus editor")
         return self.control("pane-Editor")
 
     def absent(self, name, after_pass=None):

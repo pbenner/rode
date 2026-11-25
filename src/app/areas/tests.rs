@@ -105,7 +105,8 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
         for name in ["pane-Explorer", "source-editor", "agent-composer"] {
             assert!(!names.contains(name), "Hidden {name} is exposed: {state}");
         }
-        assert!(!app.command_selected(Command::Projects, &ctx));
+        assert!(app.command_selected(Command::Welcome, &ctx));
+        assert!(!names.contains("activity:Projects"));
     };
     render(&mut app);
     app.execute_command(Command::Explorer, &ctx);
@@ -116,7 +117,7 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
     let document = app.documents[0].id;
     app.toggle_panel(Panel::Agent, &ctx);
     app.agents.chat.notice("retained conversation");
-    app.execute_command(Command::Projects, &ctx);
+    app.execute_command(Command::Welcome, &ctx);
     assert_eq!(app.presentation.area, Area::Welcome);
     assert!(!app.explorer_visible(egui::ViewportId::ROOT));
     render(&mut app);
@@ -132,8 +133,10 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
         "unsaved source"
     );
     assert!(app.documents.by_id(document).unwrap().dirty());
-    app.execute_command(Command::Projects, &ctx);
-    app.execute_command(Command::Projects, &ctx);
+    app.execute_command(Command::Welcome, &ctx);
+    app.execute_command(Command::Welcome, &ctx);
+    assert_eq!(app.presentation.area, Area::Welcome);
+    app.execute_command(Command::Sidebar, &ctx);
     assert!(app.tools_visible());
     assert!(app.project_ready());
 }
@@ -467,8 +470,8 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                 };
                 let mut previous = None;
                 for name in [
-                    "activity:Projects",
                     "workspace-explorer",
+                    "activity:Connections",
                     "workspace-sidebar",
                 ] {
                     let bounds = rect(
@@ -618,7 +621,6 @@ fn compact_activity_areas_do_not_overlap_the_fixed_footer() {
                 b["name"].as_str().is_some_and(|name| {
                     frame::ACTIVITY
                         .into_iter()
-                        .chain([Command::Explorer, Command::Sidebar])
                         .any(|command| name == format!("activity:{}", command.definition().label))
                 })
             }) {

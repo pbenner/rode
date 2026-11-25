@@ -345,10 +345,9 @@ with fixture_directory(prefix="rode-cwd-ui-") as base:
             ui.control("welcome-screen")
             ui.absent("pane-Explorer")
             ui.value("status-access-value", "Normal")
-            ui.click("activity:Projects")
+            ui.click("workspace-explorer")
             ui.absent("welcome-screen")
             ui.control("pane-Editor")
-            ui.click("workspace-explorer")
             ui.control(f"explorer-row:{source}")
             ui.open_file(source.name)
             ui.source("current directory contents\n")
@@ -358,5 +357,5 @@ with fixture_directory(prefix="rode-cwd-ui-") as base:
             value = re.search(r'"' + key_name + r'"\s*:\s*("(?:\\.|[^"\\])*")', stored)
             assert value and json.loads(decode_ron_string(value[1])) == expected, (key_name, stored)
     print(
-        "Implicit CWD startup in HOME/project, Normal mode, Projects/Explorer activation and unchanged sandbox preferences passed."
+        "Implicit CWD startup in HOME/project, Normal mode, Explorer activation and unchanged sandbox preferences passed."
     )

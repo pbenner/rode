@@ -24,7 +24,8 @@ pub(super) enum Area {
 impl Area {
     pub fn command(self) -> Command {
         match self {
-            Self::Welcome | Self::Projects => Command::Projects,
+            Self::Welcome => Command::Welcome,
+            Self::Projects => Command::Explorer,
             Self::Monitor => Command::Panel(Panel::Monitor),
             Self::Transfers => Command::Panel(Panel::Transfers),
             Self::Extension => Command::Panel(Panel::Extension),
@@ -132,19 +133,6 @@ impl State {
 }
 
 impl EditorApp {
-    /// Welcome is a presentation choice, never a project close. Keep document,
-    /// tool and detached-window owners intact when deselecting Projects.
-    pub(super) fn toggle_projects(&mut self, ctx: &egui::Context) {
-        self.open_area(
-            if self.presentation.area == Area::Projects {
-                Area::Welcome
-            } else {
-                Area::Projects
-            },
-            ctx,
-        );
-    }
-
     pub(in crate::app) fn area_tab(&self, area: Area) -> Option<ToolTab> {
         if area == Area::Extension {
             self.extension_panels.tab(&self.extension_panels.selected)

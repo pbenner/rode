@@ -221,7 +221,6 @@ def run(remote=False, scenario="all"):
                     ui.value("monitor-history-count", "0", enabled=False)
                     ui.absent("monitor-sample")
                     ui.control("monitor-start")
-                    ui.click("activity:Projects")
                     ui.project_editor()
                     command("System: Monitor")
                     ui.control("monitor-start")
