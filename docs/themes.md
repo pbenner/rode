@@ -125,7 +125,7 @@ silver-gray ink. The visual direction draws on Japanese
 [iron, silver and gold sword fittings](https://www.metmuseum.org/art/collection/search/29535).
 
 The editor shows the warrior landscape; Explorer shows the silver-gray kabuto
-beneath the file tree; the welcome and empty-editor screens show the castle.
+beneath the file tree; the shared Welcome page shows the castle.
 There are no round sword-guard ornaments. Source artwork keeps its viewport-based
 size and anchor while scrolling vertically or horizontally. Overlapping code
 hides it instead of shrinking it; resizing the editor can change its size.
@@ -158,7 +158,7 @@ palette.
 
 Three original ink-wash illustrations share the light/dark palette: pine and a
 crane at the source editor's lower right, bamboo and a small bird below the
-Explorer's file tree, and plum blossom on the welcome and empty-editor screens.
+Explorer's file tree, and plum blossom on the shared Welcome page.
 They use spare space, shrink or disappear when content needs it, and stay visible
 while text is selected. Code, carets, gutters, previews and terminal output retain
 their existing backgrounds. Embedded textures are cached across editor windows,

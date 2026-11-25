@@ -436,7 +436,8 @@ def run(remote=False, fallback=False):
                     ui.disconnected(explorer=False, closed=True)
                     ui.control("pane-Connections")
                     ui.control("workspace-sidebar-closed")
-                    ui.absent("welcome-screen")
+                    ui.control("welcome-screen")
+                    ui.control("pane-Editor")
                     ui.layout(
                         lambda state: any(
                             b["name"] == "pane-Connections"

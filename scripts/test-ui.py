@@ -346,7 +346,7 @@ with fixture_directory(prefix="rode-cwd-ui-") as base:
             ui.absent("pane-Explorer")
             ui.value("status-access-value", "Normal")
             ui.click("workspace-explorer")
-            ui.absent("welcome-screen")
+            ui.control("welcome-screen")
             ui.control("pane-Editor")
             ui.control(f"explorer-row:{source}")
             ui.open_file(source.name)

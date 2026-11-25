@@ -79,6 +79,7 @@ mod transfers;
 mod tunnels;
 mod ui_probe;
 mod vaults;
+mod welcome;
 mod workbench;
 mod workers;
 mod workspace;

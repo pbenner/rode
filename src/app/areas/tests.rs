@@ -99,19 +99,37 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
             .iter()
             .map(|button| button["name"].as_str().unwrap().to_owned())
             .collect();
+        names
+    };
+    let explicit_welcome = |app: &mut EditorApp| {
+        let names = render(app);
         for name in ["welcome-screen", "workspace-explorer", "workspace-sidebar"] {
-            assert!(names.contains(name), "Missing {name}: {state}");
+            assert!(names.contains(name), "Missing {name}: {names:?}");
         }
         for name in ["pane-Explorer", "source-editor", "agent-composer"] {
-            assert!(!names.contains(name), "Hidden {name} is exposed: {state}");
+            assert!(!names.contains(name), "Hidden {name} is exposed: {names:?}");
         }
         assert!(app.command_selected(Command::Welcome, &ctx));
         assert!(!names.contains("activity:Projects"));
     };
-    render(&mut app);
+    explicit_welcome(&mut app);
     app.execute_command(Command::Explorer, &ctx);
     assert_eq!(app.presentation.area, Area::Projects);
     assert!(app.explorer_visible(egui::ViewportId::ROOT));
+    let names = render(&mut app);
+    for name in [
+        "welcome-screen",
+        "pane-Editor",
+        "pane-Explorer",
+        "editor-empty-new",
+        "editor-empty-open",
+    ] {
+        assert!(names.contains(name), "Missing {name}: {names:?}");
+    }
+    assert_eq!(app.presentation.area, Area::Projects);
+    assert!(!app.command_selected(Command::Welcome, &ctx));
+    assert!(app.documents.active().is_none());
+    assert!(app.project_ready());
     app.new_file();
     app.documents[0].fixture_content().text = "unsaved source".into();
     let document = app.documents[0].id;
@@ -120,7 +138,7 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
     app.execute_command(Command::Welcome, &ctx);
     assert_eq!(app.presentation.area, Area::Welcome);
     assert!(!app.explorer_visible(egui::ViewportId::ROOT));
-    render(&mut app);
+    explicit_welcome(&mut app);
     app.execute_command(Command::Sidebar, &ctx);
     assert_eq!(app.presentation.area, Area::Projects);
     assert!(app.tools_visible());

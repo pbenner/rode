@@ -14,61 +14,6 @@ pub(super) mod gutter;
 pub(super) mod source_layout;
 
 impl EditorApp {
-    /// Keep the empty state independent of tab-strip cursor placement and pane width.
-    fn empty_editor(&mut self, ui: &mut egui::Ui) {
-        let palette = self.themes.active().palette;
-        let canvas = ui.available_rect_before_wrap();
-        let top = ((ui.available_height() - 230.) / 2.).max(20.);
-        let occupied = egui::ScrollArea::vertical()
-            .id_salt("empty-editor")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.add_space(top);
-                ui.vertical_centered(|ui| {
-                    let title = ui.label(
-                        RichText::new("Start editing")
-                            .size(24.)
-                            .strong()
-                            .color(palette.heading),
-                    );
-                    ui.add_space(8.);
-                    let hint = ui.label(palette.tag("Choose a file in Explorer to start editing."));
-                    ui.add_space(16.);
-                    let shortcuts = ui.label(palette.tag(format!(
-                        "{} · Open file    {} · New file",
-                        self.command_hint(Command::Open),
-                        self.command_hint(Command::New)
-                    )));
-                    title.rect.union(hint.rect).union(shortcuts.rect)
-                })
-                .inner
-            });
-        palette.paint_welcome_artwork(ui, canvas, occupied.inner);
-    }
-
-    /// Keep the landing page's document actions in one aligned group.
-    pub(super) fn empty_editor_actions(&mut self, ui: &mut egui::Ui) -> egui::Rect {
-        let width = (ui.available_width() - 32.).clamp(0., 320.);
-        let ctx = ui.ctx().clone();
-        let new = ui.add_sized(
-            egui::vec2(width, 32.),
-            IconButton::new(Icon::NewFile, "New file").shortcut("Ctrl+N"),
-        );
-        ui_probe::button(ui, "editor-empty-new", &new);
-        if new.clicked() {
-            self.execute_command(Command::New, &ctx);
-        }
-        let open = ui.add_sized(
-            egui::vec2(width, 32.),
-            IconButton::new(Icon::Search, "Open file…").shortcut("Ctrl+O"),
-        );
-        ui_probe::button(ui, "editor-empty-open", &open);
-        if open.clicked() {
-            self.set_dialog(Dialog::Open);
-        }
-        new.rect.union(open.rect)
-    }
-
     /// Render the active specialized or source document, retaining native edit/cursor/undo
     /// state and updating buffer versions only for accepted source changes.
     pub(super) fn editor(&mut self, ctx: &egui::Context) {
@@ -90,7 +35,9 @@ impl EditorApp {
             .frame(layout::pane_frame(palette.background))
             .show(ctx, |ui| {
                 palette.paint_panel(ui);
-                palette.paint_editor_background(ui);
+                if self.documents.active().is_some() {
+                    palette.paint_editor_background(ui);
+                }
                 if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() { ui.disable(); }
                 let mut content = self.pane_ui(ui, navigation::Pane::Editor);
                 let ui = &mut content;
@@ -98,9 +45,9 @@ impl EditorApp {
                     return;
                 }
                 if self.documents.active().is_none() {
-                    // Welcome belongs to the Welcome area. Projects must show
-                    // a distinct editor even before its first file is opened.
-                    self.empty_editor(ui);
+                    // Share the landing page without changing this viewport
+                    // or the selected project/sidebar presentation.
+                    self.welcome(ui);
                     return;
                 }
                 self.tab_strip(ui, ctx);
