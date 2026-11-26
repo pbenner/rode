@@ -12,6 +12,7 @@ mod tests;
 pub(super) enum Action {
     Show,
     Attach,
+    TakeOver,
     End,
 }
 
@@ -28,16 +29,28 @@ pub(super) struct Context<'a> {
 struct Attachment {
     current: bool,
     enabled: bool,
+    takeover: bool,
     summary: &'static str,
     explanation: String,
 }
 
 impl Context<'_> {
+    /// Recheck the current window before a delayed confirmation replaces its chat.
+    pub(super) fn permits(&self, info: &Info, takeover: bool) -> bool {
+        let attachment = self.attachment(info);
+        if takeover {
+            attachment.takeover
+        } else {
+            attachment.enabled && !attachment.current
+        }
+    }
     /// Check project, policy, controlling-lease and current-turn constraints before enabling Attach.
     fn attachment(&self, info: &Info) -> Attachment {
         let current = self.current == Some(info.id.as_str());
         let compatible = info.root == self.root && info.policy == self.policy;
         let enabled = current || (compatible && !info.attached && self.can_leave);
+        let takeover =
+            !current && compatible && info.attached && info.controller.is_some() && self.can_leave;
         let summary = if current {
             "Open in this window"
         } else if enabled {
@@ -68,15 +81,23 @@ impl Context<'_> {
                 }
             }
             if info.attached {
-                reasons.push("Controlled by another RODE window: detach it there before attaching here. Hiding the chat panel does not detach it.".to_owned());
+                reasons.push(if info.controller.is_some() {
+                    "Controlled by another RODE window. Take over after confirmation to disconnect that view and keep the agent running. Hiding a chat panel does not detach it."
+                } else {
+                    "Controlled by another RODE window. This existing host service predates safe takeover. Detach the original window, or let its work finish before upgrading the service. The service is not restarted automatically."
+                }.to_owned());
             }
             if !self.can_leave {
                 reasons.push("Your current chat is working with Persist off. Enable Persist or stop its current turn before switching to this agent.".to_owned());
             }
         }
+        if let Some(controller) = &info.controller {
+            reasons.push(format!("Controlling desktop: {}", controller.owner.label()));
+        }
         Attachment {
             current,
             enabled,
+            takeover,
             summary,
             explanation: reasons.join("\n\n"),
         }
@@ -180,7 +201,16 @@ fn row(
             .on_hover_text(&metadata);
             field(ui, "Project", &info.root, palette);
             field(ui, "Mode", &info.mode, palette);
-            field(ui, "Status", &info.status, palette);
+            let status = info
+                .controller
+                .as_ref()
+                .map(|c| format!("{} · {}", info.status, c.owner.label()));
+            field(
+                ui,
+                "Status",
+                status.as_deref().unwrap_or(&info.status),
+                palette,
+            );
             ui.add(
                 egui::Label::new(RichText::new(attachment.summary).size(12.).color(
                     if attachment.enabled {
@@ -233,11 +263,13 @@ fn buttons(
         action = Some(Action::End);
     }
     let attach = ui
-        .add_enabled_ui(attachment.enabled, |ui| {
+        .add_enabled_ui(attachment.enabled || attachment.takeover, |ui| {
             ui.add_sized(
                 [104., height],
                 crate::keyboard::Button::new(if attachment.current {
                     "Show chat"
+                } else if attachment.takeover {
+                    "Take over"
                 } else {
                     "Attach"
                 }),
@@ -249,6 +281,8 @@ fn buttons(
     if attach.clicked() {
         action = Some(if attachment.current {
             Action::Show
+        } else if attachment.takeover {
+            Action::TakeOver
         } else {
             Action::Attach
         });

@@ -48,9 +48,10 @@ def project_args(project, *, remote=False, sandbox=False):
     return args
 
 
-def project_ui(process, environment, project, log_path):
+def project_ui(process, environment, project, log_path, *, window=None):
     """Attach observations only after this process has mapped and prepared its project."""
-    window = wait_for_window(process, log_path)
+    if window is None:
+        window = wait_for_window(process, log_path)
     wait_for_project(
         window, process, log_path, project, state_path=environment["RODE_UI_TEST_STATE"]
     )
@@ -125,8 +126,8 @@ def native_session(args, environment, project, label, *, cwd=None):
     with log_path.open("w") as log:
         process = subprocess.Popen(args, cwd=cwd, env=environment, stdout=log, stderr=log)
         try:
-            ui = project_ui(process, environment, project, log_path)
-            window = ui.window
+            window = wait_for_window(process, log_path)
+            ui = project_ui(process, environment, project, log_path, window=window)
             yield ui
             if process.poll() is None:
                 close_window(window, process)

@@ -988,3 +988,35 @@ impl EditorApp {
         });
     }
 }
+
+impl EditorApp {
+    /// Reattach only captured terminal IDs; absent sessions stay ended and no shell is created.
+    pub(in crate::app) fn restore_workspace_terminals(
+        &mut self,
+        reply: service::Reply,
+        ids: &[String],
+        selected: Option<&str>,
+        ctx: &egui::Context,
+    ) -> Vec<String> {
+        let rode_session::Response::Sessions(items) = &reply.response else {
+            return ids.to_vec();
+        };
+        let mut missing = Vec::new();
+        let items = items.clone();
+        self.sessions.backend = Some(reply);
+        for id in ids {
+            if let Some(info) = items
+                .iter()
+                .find(|i| i.id == *id && i.alive && self.compatible_session(i))
+            {
+                self.attach_info(info.clone(), ctx, false);
+            } else {
+                missing.push(id.clone());
+            }
+        }
+        if let Some(selected) = selected {
+            self.sessions.select(&mut self.terminal, selected);
+        }
+        missing
+    }
+}

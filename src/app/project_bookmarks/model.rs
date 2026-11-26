@@ -78,7 +78,7 @@ impl Project {
     pub fn same_connection(a: &Profile, b: &Profile) -> bool {
         connection(a) == connection(b)
     }
-    fn validate(&self) -> Result<()> {
+    pub(in crate::app) fn validate(&self) -> Result<()> {
         ensure!(
             !self.root().is_empty() && self.root().len() <= 4096 && !self.root().contains('\0'),
             "Invalid bookmarked project path"

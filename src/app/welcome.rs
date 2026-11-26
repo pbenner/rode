@@ -12,7 +12,7 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         let canvas = ui.available_rect_before_wrap();
         let compact = ui.available_height() < 620.;
-        let top = if compact {
+        let top = if compact || self.workspace_sessions.is_some() {
             16.
         } else {
             ((ui.available_height() - 500.) / 2.).max(24.)
@@ -68,6 +68,7 @@ impl EditorApp {
                         self.set_dialog(Dialog::Folder);
                     }
                     let documents = self.welcome_document_actions(ui);
+                    let sessions = self.workspace_sessions_ui(ui);
                     ui.add_space(if compact { 16. } else { 28. });
                     let privacy = ui.label(
                         RichText::new("Your SSH config. Your keys. Your machine.")
@@ -91,6 +92,7 @@ impl EditorApp {
                         connect.rect,
                         folder.rect,
                         documents,
+                        sessions,
                         privacy.rect,
                         shortcuts.rect,
                     ]

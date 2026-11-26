@@ -52,6 +52,8 @@ pub const CAPABILITIES: &[&str] = &[
     // Desktop heartbeats must reach the agent bridge even if an intermediate
     // stdio supervisor survives the original desktop process.
     "agent_attachment_leases",
+    // Desktop owner metadata and generation-checked takeover bridge arguments.
+    "agent_takeover",
     "agent_auto_persist",
     "private_home_tmp",
     // Encrypted mounts must share the desktop's host-scoped private temp root.
@@ -329,6 +331,14 @@ mod tests {
             .validate(std::env::consts::OS, std::env::consts::ARCH, 20)
             .unwrap_err();
         assert!(error.contains("connection_heartbeats"), "{error}");
+    }
+
+    #[test]
+    fn helpers_without_takeover_bridge_arguments_require_an_upgrade() {
+        let mut info = Info::current("test", 26);
+        info.capabilities.retain(|cap| cap != "agent_takeover");
+        let error = info.validate(&info.os, &info.architecture, 26).unwrap_err();
+        assert!(error.contains("agent_takeover"), "{error}");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Disposable desktop attachments to native host-owned notebook/debugger controllers.
-use crate::{files, process, project, sandbox, sessions, ssh};
+use crate::{process, sandbox, sessions, ssh};
 use anyhow::{Result, ensure};
 use rode_runtime_core::service::{Command, Envelope, Info, Spec, State, Update};
 use std::{
@@ -21,21 +21,7 @@ pub fn request(
         mise: plan.environment.mise,
         request: Box::new(request),
     };
-    if let Some(remote) = remote {
-        let reply = remote.request(&files::Request::Tool {
-            request: project::Request::Sessions {
-                root: plan.root.clone(),
-                operation,
-                directory: std::env::var("RODE_SESSION_DIR").ok(),
-            },
-        })?;
-        match reply.tool {
-            Some(project::Response::Sessions(reply)) => Ok(reply),
-            _ => anyhow::bail!("Missing runtime service response"),
-        }
-    } else {
-        sessions::local(&operation)
-    }
+    sessions::on_host(plan, remote, operation)
 }
 /// End a discovered runtime and wait for its owned processes to be reaped.
 pub fn end(plan: &sandbox::Plan, remote: Option<&ssh::Remote>, info: &Info) -> Result<()> {

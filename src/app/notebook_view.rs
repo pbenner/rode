@@ -94,6 +94,10 @@ pub(super) struct View {
     reveal: bool,
 }
 impl View {
+    /// Restore presentation on a newly loaded workspace buffer; no kernel is started.
+    pub(in crate::app) fn restore_source_mode(&mut self, source: bool) {
+        self.source_mode = source;
+    }
     /// Report whether the ordinary text editor currently owns the raw notebook JSON.
     pub(in crate::app) fn source_mode(&self) -> bool {
         self.source_mode

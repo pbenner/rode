@@ -1146,3 +1146,44 @@ The helper cache, project, tools and granted paths must therefore be available o
 Shared contract tests exercise desktop and headless entry points. Direct/ProxyJump SSH tests and a fixture without Python on PATH cover the remote transport. `tests/native_host.rs` exercises concurrent responses, context identity, handshake rejection, verified deployment and cancellation. Sandbox suites exercise actual kernel enforcement when available and fail when their required-enforcement flags are set.
 
 Linux x86_64 is the locally validated architecture. Artifact selection supports aarch64 but does not establish execution coverage there. Slurm integration requires a shared helper path; per-node staging is not implemented. Real Jupyter, debugger, FUSE and site Slurm validation requires the corresponding installed tools and host capabilities. Fixture coverage does not establish performance or compatibility on every cluster.
+
+### Desktop loss and native agent controllers
+
+The native entry point watches a duplicated display connection independently of
+the UI thread. X11/Wayland connection loss requests a bounded draft flush and
+terminates the GUI, releasing host attachments even if toolkit event processing
+is blocked. Healthy idle or unmapped windows remain attached. Host-side
+heartbeats still handle half-open transport connections and silent peers.
+
+Agent attachments carry an owner description and a generation-scoped lease.
+Confirmed takeover compares the observed generation before replacing the socket;
+old input and old attachment cleanup cannot affect its successor. Existing
+services without the advertised takeover capability remain usable without an
+unsafe restart. Running agents reports the current controller and separates
+confirmed takeover from ordinary attachment and explicit termination.
+
+Crash recovery stores only bounded ordinary source/notebook and unsent composer
+drafts in private atomic checkpoints with per-window live locks. Restoration is
+explicit and opens unbound buffers that require Save As. Encrypted and binary
+buffers are excluded, including retained encrypted buffers after disconnect.
+Normal admitted close clears its own checkpoint; failures and desktop loss leave
+it available for recovery.
+
+### Saved workspace ownership
+
+`app::workspace_sessions` owns opt-in desktop checkpoints independently from host
+execution. Its versioned model contains project/SSH/sandbox metadata, document
+revisions and drafts, layout and host-service IDs. Capture reuses document crash
+checkpoint projection and the composer's shared encrypted-draft privacy rule.
+A bounded filesystem worker coalesces saves and acknowledges durable publication;
+the transition controller admits only the exact checkpointed dirty versions.
+
+Each record uses an adjacent transaction lock and a generation-specific live
+owner lock. Confirmed takeover compares the observed generation, publishes a new
+one atomically and revokes old writers on every subsequent save. Catalogue and
+ownership polling cache summaries by inode and modification metadata, avoiding
+repeated draft decoding. Corrupt entries remain on disk and do not hide healthy
+entries. Restoring first prepares the project through existing connection/vault
+and sandbox guards, then reads files through ordinary workers, checks revisions,
+and finally discovers existing host sessions. It creates no replacement jobs and
+never resumes a workspace merely because Welcome renders its catalogue.

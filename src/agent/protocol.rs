@@ -461,6 +461,14 @@ impl Chat {
             }
         }
     }
+    /// Informational attachment generation for a saved workspace's confirmed takeover.
+    pub fn native_controller(&self) -> Option<String> {
+        self.native
+            .as_ref()
+            .and_then(|c| c.state.as_ref())
+            .and_then(|s| s.info.controller.as_ref())
+            .map(|c| c.id.clone())
+    }
     /// Reattach a live worker without sending a model prompt.
     pub fn attach(
         &mut self,
@@ -468,10 +476,22 @@ impl Chat {
         info: rode_agent_core::service::Info,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) {
+        self.attach_client(info.persistent, Client::attach(launch, info, wake));
+    }
+    /// Explicitly take over the exact attachment generation shown in Running agents.
+    pub fn take_over(
+        &mut self,
+        launch: Launch,
+        info: rode_agent_core::service::Info,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        self.attach_client(info.persistent, Client::take_over(launch, info, wake));
+    }
+    fn attach_client(&mut self, persistent: super::Persistence, client: Client) {
         self.undo_pending = None;
         self.managed = true;
-        self.desired = info.persistent;
-        self.native = Some(Client::attach(launch, info, wake));
+        self.desired = persistent;
+        self.native = Some(client);
         self.inner.busy = true;
         self.inner.status = "Reattaching agent…".into();
     }

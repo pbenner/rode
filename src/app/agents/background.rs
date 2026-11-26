@@ -15,7 +15,13 @@ pub(super) struct Running {
     pub(super) mutating: bool,
     last: Option<Instant>,
     error: String,
-    confirm: Option<Info>,
+    confirm: Option<Confirmation>,
+}
+/// Confirmation captures the observed lease, so a refresh cannot redirect an action.
+#[derive(Clone)]
+enum Confirmation {
+    End(Info),
+    TakeOver(Info),
 }
 impl Running {
     /// Discovery belongs to the selected project. An approved mutation keeps its
@@ -129,31 +135,57 @@ impl EditorApp {
             .on_hover_text(&root);
         ui.add(egui::Label::new(RichText::new("Auto finishes detached work, then exits. On also retains idle chats.").small().color(palette.muted)).wrap())
             .on_hover_text("Only one window can control a chat. Pending prompts and permission requests remain available until you reattach; they are never automatically approved.");
-        if let Some(info) = self.agents.running.confirm.clone() {
-            ui.separator();
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
+        let mut attach = None;
+        if let Some(confirmation) = self.agents.running.confirm.clone() {
+            let (info, label, message) = match &confirmation {
+                Confirmation::End(info) => (
+                    info,
+                    "Confirm end",
+                    format!(
                         "End agent '{}' in {}? This stops its current task and tools.",
                         info.name, info.root
-                    ))
-                    .color(palette.error),
-                )
-                .wrap(),
-            );
+                    ),
+                ),
+                Confirmation::TakeOver(info) => (
+                    info,
+                    "Confirm takeover",
+                    format!(
+                        "Take over '{}' from {}? That window will lose control. The current task, conversation and sandbox remain active.",
+                        info.name,
+                        info.controller
+                            .as_ref()
+                            .map(|c| c.owner.label())
+                            .unwrap_or_default()
+                    ),
+                ),
+            };
+            ui.separator();
+            ui.add(egui::Label::new(RichText::new(message).color(palette.error)).wrap());
             ui.horizontal(|ui| {
                 if crate::keyboard::button(ui, "Cancel").clicked() {
                     self.agents.running.confirm = None;
                 }
-                if ui
-                    .add_enabled(
-                        self.agents.running.pending.is_none(),
-                        crate::keyboard::Button::new("Confirm end"),
-                    )
-                    .clicked()
-                {
+                let confirm = ui.add_enabled(
+                    self.agents.running.pending.is_none(),
+                    crate::keyboard::Button::new(label),
+                );
+                ui_probe::button(
+                    ui,
+                    if matches!(confirmation, Confirmation::TakeOver(_)) {
+                        "agent-running-confirm-takeover"
+                    } else {
+                        "agent-running-confirm-end"
+                    },
+                    &confirm,
+                );
+                if confirm.clicked() {
                     self.agents.running.confirm = None;
-                    self.refresh_background_agents(Some(info), ctx);
+                    match confirmation.clone() {
+                        Confirmation::End(_) => {
+                            self.refresh_background_agents(Some(info.clone()), ctx)
+                        }
+                        Confirmation::TakeOver(_) => attach = Some((info.clone(), true)),
+                    }
                 }
             });
         }
@@ -161,12 +193,14 @@ impl EditorApp {
             ui.colored_label(palette.error, &self.agents.running.error);
         }
         let policy = crate::sessions::fingerprint(&launch.plan);
+        let current = self
+            .agents
+            .chat
+            .native_id()
+            .filter(|_| self.agents.chat.connected() || self.agents.chat.busy)
+            .map(str::to_owned);
         let context = rows::Context {
-            current: self
-                .agents
-                .chat
-                .native_id()
-                .filter(|_| self.agents.chat.connected() || self.agents.chat.busy),
+            current: current.as_deref(),
             root: &root,
             policy: &policy,
             mode,
@@ -189,7 +223,6 @@ impl EditorApp {
                 rows::show(ui, &self.agents.running.items, &context, palette)
             })
             .inner;
-        let mut attach = None;
         if let Some((id, action)) = selected {
             match action {
                 rows::Action::Show => {
@@ -206,37 +239,61 @@ impl EditorApp {
                         .items
                         .iter()
                         .find(|info| info.id == id)
-                        .cloned();
+                        .cloned()
+                        .map(|info| (info, false));
                 }
-                rows::Action::End => {
+                rows::Action::TakeOver | rows::Action::End => {
                     self.agents.running.confirm = self
                         .agents
                         .running
                         .items
                         .iter()
                         .find(|info| info.id == id)
-                        .cloned();
+                        .cloned()
+                        .map(|info| {
+                            if action == rows::Action::TakeOver {
+                                Confirmation::TakeOver(info)
+                            } else {
+                                Confirmation::End(info)
+                            }
+                        });
                 }
             }
         }
-        if let Some(info) = attach {
-            let launch = self.agent_launch();
-            let wake = ctx.clone();
-            self.agents.browser = None;
-            self.agents.history_open = false;
-            self.agents.history_delete = None;
-            self.agents.replace_chat();
-            self.agents
-                .chat
-                .attach(launch, info, Arc::new(move || wake.request_repaint()));
-            self.agents.attaching = true;
-            self.agents.focus = true;
-            self.dialog = Dialog::None;
-            self.reveal_panel(Panel::Agent, ctx);
+        if let Some((info, takeover)) = attach {
+            if !context.permits(&info, takeover) {
+                self.agents.running.error = "The project, policy or current chat changed. Refresh Running agents before attaching.".into();
+            } else {
+                self.attach_workspace_agent(info, takeover, ctx);
+                self.dialog = Dialog::None;
+                self.reveal_panel(Panel::Agent, ctx);
+            }
         }
         if crate::keyboard::button(ui, "Close").clicked() {
             self.dialog = Dialog::None;
         }
+    }
+    /// Shared attachment path for explicit Running actions and saved workspace restoration.
+    pub(in crate::app) fn attach_workspace_agent(
+        &mut self,
+        info: Info,
+        takeover: bool,
+        ctx: &egui::Context,
+    ) {
+        let launch = self.agent_launch();
+        let wake = ctx.clone();
+        self.agents.browser = None;
+        self.agents.history_open = false;
+        self.agents.history_delete = None;
+        self.agents.replace_chat();
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || wake.request_repaint());
+        if takeover {
+            self.agents.chat.take_over(launch, info, wake);
+        } else {
+            self.agents.chat.attach(launch, info, wake);
+        }
+        self.agents.attaching = true;
+        self.agents.focus = true;
     }
 }
 

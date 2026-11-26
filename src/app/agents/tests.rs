@@ -939,3 +939,17 @@ fn project_preferences_restore_without_persisting_conversation_content() {
     );
     assert!(!storage.0["agent_preferences"].contains("private conversation content"));
 }
+
+#[test]
+fn encrypted_composer_taint_is_shared_by_checkpoint_consumers_until_the_draft_is_empty() {
+    let mut agents = Agents::load(None);
+    agents.draft = "Private unsent text".into();
+    assert!(agents.checkpoint_draft(true).is_none());
+    assert!(agents.checkpoint_draft(false).is_none());
+    agents.draft.push_str(" after disconnect");
+    assert!(agents.checkpoint_draft(false).is_none());
+    agents.draft.clear();
+    assert_eq!(agents.checkpoint_draft(false), Some(""));
+    agents.draft = "Ordinary draft".into();
+    assert_eq!(agents.checkpoint_draft(false), Some("Ordinary draft"));
+}

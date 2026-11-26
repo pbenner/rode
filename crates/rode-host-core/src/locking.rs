@@ -60,6 +60,8 @@ pub fn open_private_key(path: &Path) -> std::io::Result<File> {
 /// Creation/write mode for an owner-only regular runtime or configuration file.
 #[derive(Clone, Copy)]
 pub enum PrivateFile {
+    /// Open an existing private file, refusing missing paths without creating an entry.
+    Existing,
     /// Reuse or create a stable read/write lock without truncating its contents.
     Lock,
     /// Reuse or create a log, appending every write to its end.
@@ -81,6 +83,7 @@ pub fn open_private(path: &Path, mode: PrivateFile) -> std::io::Result<File> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC);
     match mode {
+        PrivateFile::Existing => {}
         PrivateFile::New => {
             options.create_new(true);
         }

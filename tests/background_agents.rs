@@ -141,11 +141,22 @@ impl Fixture {
         self.attach_transport(info, false)
     }
     fn attach_transport(&self, info: &Info, heartbeat: bool) -> View {
+        self.attach_options(info, heartbeat, None)
+    }
+    fn attach_options(
+        &self,
+        info: &Info,
+        heartbeat: bool,
+        attachment: Option<rode_agent_core::service::Attachment>,
+    ) -> View {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"));
         if heartbeat {
             command.arg("--process");
         } else {
             command.args(["attach-agent", "--heartbeat", &info.id, &info.policy]);
+            if let Some(attachment) = &attachment {
+                command.arg(serde_json::to_string(attachment).unwrap());
+            }
         }
         let mut child = command
             .env("RODE_SESSION_DIR", &self.runtime)
@@ -156,15 +167,30 @@ impl Fixture {
             .unwrap();
         let mut input = child.stdin.take().unwrap();
         if heartbeat {
-            writeln!(input, "{}", serde_json::json!({
-                "heartbeat": true,
-                "environment": {},
-                "root": self.root,
-                "prefix": [],
-                "argv": [env!("CARGO_BIN_EXE_rode-sessiond"), "attach-agent", "--heartbeat", &info.id, &info.policy],
-                "python": "off",
-                "python_program": false
-            })).unwrap();
+            let mut argv = vec![
+                env!("CARGO_BIN_EXE_rode-sessiond").to_owned(),
+                "attach-agent".into(),
+                "--heartbeat".into(),
+                info.id.clone(),
+                info.policy.clone(),
+            ];
+            if let Some(attachment) = &attachment {
+                argv.push(serde_json::to_string(attachment).unwrap());
+            }
+            writeln!(
+                input,
+                "{}",
+                serde_json::json!({
+                    "heartbeat": true,
+                    "environment": {},
+                    "root": self.root,
+                    "prefix": [],
+                    "argv": argv,
+                    "python": "off",
+                    "python_program": false
+                })
+            )
+            .unwrap();
         }
         let stdout = child.stdout.take().unwrap();
         let (tx, events) = mpsc::channel();
@@ -2009,5 +2035,84 @@ fn queued_prompts_dispatch_without_any_desktop_view_and_keep_captured_files_and_
         }
         view.send(Action::End);
         view.until(|s| !s.info.alive);
+    }
+}
+
+/// Transfer ownership without an idle-Auto gap or allowing an old destructor,
+/// stale confirmation or mismatched policy to displace the new controller.
+#[test]
+fn confirmed_takeover_preserves_the_backend_and_rejects_stale_or_wrong_policy_claims() {
+    use rode_agent_core::service::{Attachment, ViewOwner};
+    for supervised in [false, true] {
+        let fixture = Fixture::new();
+        fs::write(fixture.root.join("continue"), "").unwrap();
+        let info = fixture.create(Provider::Codex, Persistence::Auto, "first task");
+        let options = |host: &str, replace| Attachment {
+            owner: ViewOwner {
+                host: host.into(),
+                display: ":17".into(),
+            },
+            replace,
+        };
+        let first = fixture.attach_options(&info, supervised, Some(options("old-desktop", None)));
+        let state = first.until(|s| s.chat.completed == 1 && !s.chat.busy);
+        let old = state.info.controller.as_ref().unwrap().clone();
+        assert_eq!(old.owner.host, "old-desktop");
+        let pid = fs::read_to_string(fixture.root.join("agent.pid")).unwrap();
+        let mut second = fixture.attach_options(
+            &info,
+            supervised,
+            Some(options("new-desktop", Some(old.id.clone()))),
+        );
+        let state = second.until(|s| {
+            s.info
+                .controller
+                .as_ref()
+                .is_some_and(|c| c.owner.host == "new-desktop")
+        });
+        let successor = state.info.controller.unwrap().id;
+        assert_ne!(successor, old.id);
+        drop(first); // An old lease's destructor must not clear its successor.
+        for (policy, expected) in [
+            (info.policy.as_str(), old.id.as_str()),
+            ("wrong-policy", successor.as_str()),
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"))
+                .args([
+                    "attach-agent",
+                    "--heartbeat",
+                    &info.id,
+                    policy,
+                    &serde_json::to_string(&options("stale-desktop", Some(expected.into())))
+                        .unwrap(),
+                ])
+                .env("RODE_SESSION_DIR", &fixture.runtime)
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(
+                !output.status.success(),
+                "A stale/wrong-policy takeover succeeded"
+            );
+        }
+        let current = fixture
+            .infos()
+            .into_iter()
+            .find(|i| i.id == info.id)
+            .unwrap();
+        assert_eq!(current.controller.unwrap().id, successor);
+        assert!(current.alive && current.attached);
+        second.send(Action::Submit {
+            text: "second task".into(),
+            attachments: vec![],
+            config: Box::new(state.chat.config),
+        });
+        second.until(|s| s.chat.completed == 2 && !s.chat.busy);
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("agent.pid")).unwrap(),
+            pid
+        );
+        drop(second);
+        wait(|| fixture.infos().is_empty());
     }
 }

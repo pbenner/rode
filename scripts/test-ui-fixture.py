@@ -26,6 +26,7 @@ class SessionLifetimeTests(unittest.TestCase):
         for name, value in [
             ("ARTIFACTS", self.base),
             ("subprocess.Popen", Mock(return_value=self.process)),
+            ("wait_for_window", Mock(return_value=123)),
             ("project_ui", Mock(return_value=self.ui)),
             ("close_window", Mock()),
             ("stop_process", Mock()),
@@ -48,6 +49,17 @@ class SessionLifetimeTests(unittest.TestCase):
         self.assertEqual((self.base / "fixture-failure.json").read_bytes(), self.state.read_bytes())
         self.stop_process.assert_called_once_with(self.process)
         self.close_window.assert_not_called()
+
+    def test_unmapped_startup_failure_keeps_logs_without_attempting_a_screenshot(self):
+        self.wait_for_window.side_effect = AssertionError("window never mapped")
+        with self.assertRaisesRegex(AssertionError, "window never mapped"):
+            with self.session():
+                self.fail("Unmapped process reached the scenario")
+        self.screenshot.assert_not_called()
+        self.project_ui.assert_not_called()
+        self.stop_process.assert_called_once_with(self.process)
+        report = json.loads((self.base / "fixture-failure-diagnostics.json").read_text())
+        self.assertIn("skipped", report["screenshot"])
 
     def test_capture_failure_does_not_replace_the_original_assertion(self):
         self.screenshot.side_effect = RuntimeError("display vanished")

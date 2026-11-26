@@ -2,7 +2,8 @@
 //! hooks or file I/O. Fixtures still use real X11 input and observe real effects;
 //! this reports controls' geometry, focus, native pointer and edit revisions, plus opaque IDs in
 //! the open session manager, the current SSH endpoint and bounded debugger diagnostics,
-//! never chat or document text.
+//! never chat or document text. Opt-in fixtures may also request an acknowledged,
+//! bounded UI-thread stall to exercise cleanup independently of event processing.
 use eframe::egui::{self, Id};
 use serde::Serialize;
 use std::{
@@ -168,6 +169,20 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
                 "project": project,
             });
             let destination = viewport_path(&path, ctx.viewport_id());
+            // Only opt-in fixtures can request a bounded UI-thread stall. This
+            // proves that display-loss cleanup does not need egui/event progress.
+            let pause = destination.with_extension("pause");
+            if pause.exists() {
+                let _ = publish(
+                    &destination.with_extension("paused"),
+                    &serde_json::json!({"pid": std::process::id()}),
+                );
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                while pause.exists() && std::time::Instant::now() < until {
+                    std::thread::park_timeout(std::time::Duration::from_millis(100));
+                }
+            }
+
             if let Err(error) = publish(&destination, &value) {
                 eprintln!(
                     "Cannot publish native UI fixture state to {}: {error}",

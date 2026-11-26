@@ -2,6 +2,29 @@
 use anyhow::{Context, Result, ensure};
 pub use rode_session::workspace::{Operation, Reply, fingerprint, initial_input};
 use std::path::PathBuf;
+/// Execute a native service operation on the already selected project host.
+/// This never creates a replacement SSH connection or changes sandbox authority.
+pub fn on_host(
+    plan: &crate::sandbox::Plan,
+    remote: Option<&crate::ssh::Remote>,
+    operation: Operation,
+) -> Result<Reply> {
+    if let Some(remote) = remote {
+        let response = remote.request(&crate::files::Request::Tool {
+            request: crate::project::Request::Sessions {
+                root: plan.root.clone(),
+                operation,
+                directory: std::env::var("RODE_SESSION_DIR").ok(),
+            },
+        })?;
+        match response.tool {
+            Some(crate::project::Response::Sessions(reply)) => Ok(reply),
+            _ => anyhow::bail!("Missing native session service response"),
+        }
+    } else {
+        local(&operation)
+    }
+}
 /// Use the matching service executable without replacing existing jobs.
 pub fn local(operation: &Operation) -> Result<Reply> {
     let exe = rode_session::current_executable()

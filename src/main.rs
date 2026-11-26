@@ -306,18 +306,32 @@ fn main() -> eframe::Result {
         vsync: true,
         ..Default::default()
     };
+    let display_guard = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let monitor = display_guard.clone();
     let result = eframe::run_native(
         "RODE",
         options,
         Box::new(move |cc| {
             let _ = wake.set(cc.egui_ctx.clone());
-            Ok(Box::new(rode::app::EditorApp::new_native(
-                cc,
-                startup,
-                preferences,
-            )))
+            let app = rode::app::EditorApp::new_native(cc, startup, preferences);
+            let checkpoint = app.recovery_barrier();
+            match rode::desktop::Guard::watch(cc, move || {
+                // Never depend on the failed UI thread or filesystem for exit.
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    unsafe { libc::_exit(70) };
+                });
+                eprintln!("Native display disconnected; releasing desktop attachments.");
+                checkpoint();
+                unsafe { libc::_exit(70) };
+            }) {
+                Ok(guard) => *monitor.lock().unwrap() = guard,
+                Err(error) => eprintln!("Native display monitoring unavailable: {error:#}"),
+            }
+            Ok(Box::new(app))
         }),
     );
+    drop(display_guard.lock().unwrap().take());
     drop(native_state);
     #[cfg(target_os = "linux")]
     if matches!(

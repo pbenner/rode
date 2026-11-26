@@ -36,6 +36,7 @@ fn fixture() -> Vec<Info> {
             } else {
                 "Ready".into()
             },
+            controller: None,
             attached: index == 0 || index == 3,
             persistent: (index != 1).into(),
             created: 0,
@@ -267,4 +268,30 @@ fn blocked_attachments_keep_their_full_explanations() {
     assert_eq!(mismatch.summary, "Sandbox policy mismatch");
     assert!(mismatch.explanation.contains("older RODE builds"));
     assert!(mismatch.explanation.contains("remain running"));
+}
+
+#[test]
+fn takeover_requires_support_original_policy_and_permission_to_leave_the_current_chat() {
+    use rode_agent_core::service::{Controller, ViewOwner};
+    let mut info = fixture()[2].clone();
+    info.attached = true;
+    let mut context = context();
+    assert!(
+        !context.permits(&info, true),
+        "Older services must never receive a silent ordinary attach"
+    );
+    info.controller = Some(Controller {
+        id: "lease-generation".into(),
+        owner: ViewOwner {
+            host: "desktop".into(),
+            display: ":12".into(),
+        },
+    });
+    assert!(context.permits(&info, true));
+    assert!(!context.permits(&info, false));
+    context.can_leave = false;
+    assert!(!context.permits(&info, true));
+    context.can_leave = true;
+    context.policy = "changed-policy";
+    assert!(!context.permits(&info, true));
 }

@@ -102,6 +102,53 @@ pub struct Spec {
     /// Immutable file contents for the first prompt.
     pub attachments: Vec<crate::attachment::Attachment>,
 }
+/// Public desktop identity, supplied by the frontend rather than its remote bridge.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ViewOwner {
+    /// Desktop hostname; never an SSH credential or authority check.
+    pub host: String,
+    /// Native display label for distinguishing desktop logins.
+    pub display: String,
+}
+impl ViewOwner {
+    /// Reject oversized/control-bearing metadata before publishing it to another view.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            [&self.host, &self.display]
+                .iter()
+                .all(|s| s.len() <= 256 && !s.chars().any(char::is_control)),
+            "Invalid desktop owner identity"
+        );
+        Ok(())
+    }
+    /// Readable identity; older clients may not supply a hostname or display.
+    pub fn label(&self) -> String {
+        match (self.host.is_empty(), self.display.is_empty()) {
+            (true, _) => "another RODE window".into(),
+            (false, true) => self.host.clone(),
+            (false, false) => format!("{} ({})", self.host, self.display),
+        }
+    }
+}
+
+/// One server-issued controlling lease. Its ID prevents stale takeover confirmations.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Controller {
+    /// Unique attachment generation, replaced on every successful attachment.
+    pub id: String,
+    /// Informational identity of its desktop.
+    pub owner: ViewOwner,
+}
+
+/// Attach parameters carried by the disposable stdio bridge.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Attachment {
+    /// Informational identity of the new desktop.
+    pub owner: ViewOwner,
+    /// Previously observed lease to replace, only after explicit confirmation.
+    pub replace: Option<String>,
+}
+
 /// Discoverable live agent metadata, separate from backend-owned saved chats.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Info {
@@ -127,6 +174,9 @@ pub struct Info {
     pub status: String,
     /// Whether a controlling desktop is attached.
     pub attached: bool,
+    /// Controlling lease, absent for detached agents and services predating takeover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<Controller>,
     /// Lifetime after that view closes.
     pub persistent: Persistence,
     /// Creation time in Unix seconds.

@@ -628,8 +628,21 @@ fn handle(
     if let Request::AttachRuntime { id, policy } = &request {
         return server.runtimes.attach(stream, id, policy);
     }
-    if let Request::AttachAgent { id, policy } = &request {
-        return server.agents.attach(stream, id, policy);
+    if let Request::AttachAgent { id, policy, owner } = &request {
+        return server
+            .agents
+            .attach(stream, id, policy, owner.clone(), None);
+    }
+    if let Request::TakeOverAgent {
+        id,
+        policy,
+        expected,
+        owner,
+    } = &request
+    {
+        return server
+            .agents
+            .attach(stream, id, policy, owner.clone(), Some(expected));
     }
     if let Request::Attach { id, policy } = &request {
         let session = server.find(id, policy)?;
@@ -751,7 +764,7 @@ fn handle(
                 server.agents.end(&id, &policy)?;
                 Response::Ok
             }
-            Request::AttachAgent { .. } => unreachable!(),
+            Request::AttachAgent { .. } | Request::TakeOverAgent { .. } => unreachable!(),
             Request::List => {
                 let sessions = server.sessions.lock().unwrap();
                 let mut infos: Vec<_> = sessions.values().map(|session| session.info()).collect();
@@ -1171,9 +1184,14 @@ pub fn cli(args: &[String]) -> Result<()> {
             Ok(())
         }
         Some("attach-runtime") if args.len() == 3 => runtimes::bridge(&args[1], &args[2]),
-        Some("attach-agent") if args.len() == 3 => agents::bridge(&args[1], &args[2], false),
+        Some("attach-agent") if args.len() == 3 => {
+            agents::bridge(&args[1], &args[2], false, Default::default())
+        }
         Some("attach-agent") if args.len() == 4 && args[1] == "--heartbeat" => {
-            agents::bridge(&args[2], &args[3], true)
+            agents::bridge(&args[2], &args[3], true, Default::default())
+        }
+        Some("attach-agent") if args.len() == 5 && args[1] == "--heartbeat" => {
+            agents::bridge(&args[2], &args[3], true, serde_json::from_str(&args[4])?)
         }
         Some("attach") if args.len() == 3 => attach(&args[1], &args[2], false),
         Some("attach") if args.len() == 4 && args[1] == "--framed" => {

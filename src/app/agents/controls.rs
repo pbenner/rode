@@ -18,15 +18,24 @@ pub(super) fn personality(ui: &mut egui::Ui, config: &mut Config, enabled: bool)
     ui.add_enabled_ui(enabled, |ui| {
         let (response, _) = crate::keyboard::MenuButton::from_button(
             egui::Button::new(selected.button()).selected(selected != Personality::Default), "Response personality").ui(ui, |ui| {
-            ui.set_max_width(270.);
-            ui.strong("Response personality");
+            ui.set_width(270.);
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.strong("Response personality");
+            });
             for choice in Personality::ALL {
                 let response = crate::keyboard::selectable_value(ui, &mut config.personality, choice, choice.label())
                     .on_hover_text(choice.description());
                 crate::app::ui_probe::button(ui, &format!("agent-tone-choice-{}", choice.id()), &response);
             }
             ui.separator();
-            ui.add(egui::Label::new("Reply-style hint. Model, tools, permissions and project settings stay unchanged. Applies to the next message.").wrap());
+            // Menu rows justify their contents to fill the click target. Keep
+            // explanatory prose in a separate, naturally spaced text layout.
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.small("Applies to the next message.");
+                ui.add(egui::Label::new(egui::RichText::new(
+                    "Changes reply style only. Model, tools, permissions and project settings stay unchanged.",
+                ).small().weak()).wrap());
+            });
         });
         let response = response.on_hover_text(format!("Response personality: {}\n{}", selected.label(), selected.description()));
         crate::app::ui_probe::button(ui, "agent-tone", &response);

@@ -900,6 +900,28 @@ fn password_field(ui: &mut egui::Ui, value: &mut String, id: &str, label: &str) 
     output.state.store(ui.ctx(), output.response.id);
 }
 
+impl State {
+    /// Save encryption location and connection metadata, never credentials or mount ownership.
+    pub(in crate::app) fn workspace_location(
+        &self,
+        sandbox: &sandbox::Options,
+    ) -> Option<workspace_sessions::Location> {
+        let client = self.active.as_ref()?;
+        let info = client.info.as_ref()?;
+        let remote = client.remote.as_ref().map(|r| {
+            let mut profile = r.profile.clone();
+            profile.root = "~".into();
+            profile.sandbox = Default::default();
+            Box::new(profile)
+        });
+        Some(workspace_sessions::Location::Encrypted {
+            cipherdir: info.cipherdir.clone(),
+            remote,
+            sandbox: sandbox.clone(),
+        })
+    }
+}
+
 #[cfg(test)]
 pub(in crate::app) mod tests {
     use super::*;

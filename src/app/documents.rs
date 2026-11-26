@@ -4,8 +4,11 @@
 //! their metadata before returning; views cannot mutate those facts independently.
 //! Structural tab ownership and selected IDs stay here across workspace changes.
 use super::*;
+mod crash;
 mod edit;
 mod lifecycle;
+mod session;
+pub(super) use session::Restore;
 mod view;
 pub(super) use edit::Edit;
 use view::Representation;
@@ -50,8 +53,8 @@ impl Changes {
 struct Recovery {
     path: String,
     revision: Option<String>,
-    connection: workspace::ConnectionId,
-    encrypted: bool,
+    /// Absent for crash snapshots: their paths cannot be rebound on reconnect.
+    connection: Option<workspace::ConnectionId>,
 }
 
 /// One stable tab identity and source/save baseline with one primary representation.
@@ -61,6 +64,9 @@ pub struct Document {
     view: Representation,
     content: Content,
     recovery: Option<Recovery>,
+    /// Source retained from an encrypted project stays out of desktop checkpoints,
+    /// including untitled buffers after a forced disconnect.
+    encrypted_source: bool,
     /// Cached dirty state, including structured notebook or binary edits.
     modified: bool,
     /// Source identity for worker results; acknowledging a save does not advance it.
@@ -361,6 +367,7 @@ impl Document {
                 saving: false,
             },
             recovery: None,
+            encrypted_source: false,
             modified: true,
             edit_version: 0,
             last_cursor: usize::MAX,
@@ -501,12 +508,12 @@ impl Documents {
         encrypted: bool,
     ) {
         for doc in &mut self.items {
+            doc.encrypted_source |= encrypted;
             if let Some(path) = doc.content.path.take() {
                 doc.recovery = Some(Recovery {
                     path,
                     revision: doc.content.revision.take(),
-                    connection: connection.clone(),
-                    encrypted,
+                    connection: Some(connection.clone()),
                 });
             }
             if let Some(image) = doc.image_mut() {
@@ -527,7 +534,8 @@ impl Documents {
     ) {
         for doc in &mut self.items {
             if doc.recovery.as_ref().is_some_and(|origin| {
-                &origin.connection == connection && (!origin.encrypted || encrypted_ready)
+                origin.connection.as_ref() == Some(connection)
+                    && (!doc.encrypted_source || encrypted_ready)
             }) {
                 let origin = doc.recovery.take().unwrap();
                 doc.content.path = Some(origin.path);

@@ -10,6 +10,7 @@ use rode_agent_core::{
 };
 use serde_json::Value;
 use std::sync::{Condvar, atomic::AtomicUsize};
+mod attachment;
 mod transport;
 mod undo;
 
@@ -24,7 +25,7 @@ pub(super) struct Store {
 struct Shared {
     state: State,
     revision: u64,
-    attached: bool,
+    controller: Option<attachment::Connection>,
     ever_attached: bool,
     finished: bool,
     changed: Instant,
@@ -163,6 +164,7 @@ impl Store {
             busy: true,
             status: "Starting agent…".into(),
             attached: false,
+            controller: None,
             persistent: spec.persistent,
             created: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
         };
@@ -191,7 +193,7 @@ impl Store {
                     error: String::new(),
                 },
                 revision: 0,
-                attached: false,
+                controller: None,
                 ever_attached: false,
                 finished: false,
                 changed: Instant::now(),
@@ -204,110 +206,6 @@ impl Store {
         let registry = Arc::downgrade(&self.jobs);
         std::thread::spawn(move || run(job, commands, spec, registry));
         Ok(info)
-    }
-    /// Serve a blocking bidirectional attachment under one exclusive controlling lease.
-    /// A second controller is rejected; disconnect releases the lease and applies the
-    /// record's persistence policy rather than transferring process ownership to the view.
-    pub fn attach(&self, mut stream: UnixStream, id: &str, policy: &str) -> Result<()> {
-        let job = self.find(id, policy)?;
-        {
-            let mut shared = job.shared.lock().unwrap();
-            ensure!(
-                !shared.attached,
-                "This agent already has a controlling RODE window. Detach it there before attaching here."
-            );
-            shared.attached = true;
-            shared.ever_attached = true;
-            shared.state.info.attached = true;
-        }
-        struct Lease(Arc<Job>);
-        impl Drop for Lease {
-            fn drop(&mut self) {
-                let mut shared = self.0.shared.lock().unwrap();
-                shared.attached = false;
-                shared.state.info.attached = false;
-                drop(shared);
-                let _ = self.0.input.try_send(Work::Detached);
-            }
-        }
-        let _lease = Lease(job.clone());
-        let _ = job.input.try_send(Work::Wake);
-        stream.set_read_timeout(None)?;
-        let mut writer = stream.try_clone()?;
-        let writing = job.clone();
-        let stopped = Arc::new(AtomicBool::new(false));
-        let stop = stopped.clone();
-        std::thread::spawn(move || {
-            let mut revision = u64::MAX;
-            let mut previous = HashMap::<String, rode_agent_core::protocol::Message>::new();
-            let mut previous_input_history = None;
-            loop {
-                let shared = writing.shared.lock().unwrap();
-                let shared = writing
-                    .changed
-                    .wait_timeout_while(shared, Duration::from_secs(1), |s| {
-                        s.revision == revision && !stop.load(Ordering::Acquire)
-                    })
-                    .unwrap()
-                    .0;
-                if stop.load(Ordering::Acquire) {
-                    break;
-                }
-                if shared.revision == revision {
-                    continue;
-                }
-                revision = shared.revision;
-                let mut state = shared.state.clone();
-                let finished = shared.finished;
-                drop(shared);
-                let order = state.chat.messages.iter().map(|m| m.id.clone()).collect();
-                // Compare the complete item, including tool lifecycle. An empty
-                // command can finish without changing either its title or body.
-                let changed: VecDeque<_> = state
-                    .chat
-                    .messages
-                    .iter()
-                    .filter(|m| previous.get(&m.id).is_none_or(|old| old != *m))
-                    .cloned()
-                    .collect();
-                previous = state
-                    .chat
-                    .messages
-                    .iter()
-                    .map(|m| (m.id.clone(), m.clone()))
-                    .collect();
-                state.chat.messages = changed;
-                // Prompts change only on submission/replay; streaming output
-                // should not retransmit the whole recall buffer each frame.
-                if state.chat.input_history == previous_input_history {
-                    state.chat.input_history = None;
-                } else {
-                    previous_input_history = state.chat.input_history.clone();
-                }
-                if send_json(
-                    &mut writer,
-                    &rode_agent_core::service::Update { state, order },
-                )
-                .is_err()
-                    || finished
-                {
-                    break;
-                }
-            }
-            let _ = writer.shutdown(std::net::Shutdown::Both);
-        });
-        while let Ok(action) = recv_json::<_, Action>(&mut stream) {
-            if matches!(action, Action::Heartbeat) {
-                continue;
-            }
-            if job.input.try_send(Work::Action(Box::new(action))).is_err() {
-                break;
-            }
-        }
-        stopped.store(true, Ordering::Release);
-        job.changed.notify_all();
-        let _ = stream.shutdown(std::net::Shutdown::Both);
-        Ok(())
     }
 }
 fn run(
@@ -391,7 +289,7 @@ fn run(
             BTreeMap::new()
         };
         let mut shared = job.shared.lock().unwrap();
-        let view = shared.attached;
+        let view = shared.controller.is_some();
         let auto_finished = shared.state.info.persistent == Persistence::Auto
             && matches!(incoming, Err(mpsc::TryRecvError::Empty))
             && !chat.busy
@@ -709,7 +607,7 @@ fn history_owners(
             {
                 owners.insert(
                     shared.state.chat.conversation.clone(),
-                    if shared.attached {
+                    if shared.controller.is_some() {
                         Owner::Attached
                     } else {
                         Owner::Detached
@@ -768,15 +666,27 @@ fn configure(
 /// Bridge bounded stdio messages through the current service's authenticated
 /// local socket; require the original policy. Only desktops opting into the
 /// heartbeat contract expire, preserving legacy interactive attachment streams.
-pub(super) fn bridge(id: &str, policy: &str, leased: bool) -> Result<()> {
+pub(super) fn bridge(
+    id: &str,
+    policy: &str,
+    leased: bool,
+    attachment: rode_agent_core::service::Attachment,
+) -> Result<()> {
     let mut stream = connect_control(&directory()?)?;
-    send_json(
-        &mut stream,
-        &Request::AttachAgent {
+    let request = match attachment.replace {
+        Some(expected) => Request::TakeOverAgent {
             id: id.into(),
             policy: policy.into(),
+            expected,
+            owner: attachment.owner,
         },
-    )?;
+        None => Request::AttachAgent {
+            id: id.into(),
+            policy: policy.into(),
+            owner: attachment.owner,
+        },
+    };
+    send_json(&mut stream, &request)?;
     stream.set_read_timeout(None)?;
     super::attachment::forward_commands::<Action>(
         stream.try_clone()?,

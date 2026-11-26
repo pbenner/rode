@@ -78,20 +78,27 @@ with fixture_directory(prefix="rode-panels-") as base:
             "Host JSON settings did not reach the provider"
         )
         # Real header dragging, with frame acknowledgements rather than delays.
-        initial_width = column_width(ui.layout())
         grip = "extension-table-column-resize:test.panel:0:0"
         start = ui.control(grip, hovered=True)
-        scale = ui.layout()["pixels_per_point"]
+        baseline = ui.layout()
+        initial_width = column_width(baseline)
+        scale = baseline["pixels_per_point"]
         end = (round(start[0] + 120 * scale), start[1])
         mouse_button(*start, 1, True)
         try:
+            # Keep press and motion acknowledgements separate; a queued press
+            # must reach its grip before testing cumulative drag displacement.
+            ui.layout(
+                lambda state: state["input"]["presses"] > baseline["input"]["presses"],
+                "Column grip did not acknowledge its press",
+            )
             ui.move_pointer(round(start[0] + 60 * scale), start[1])
             ui.move_pointer(*end)
         finally:
             mouse_button(*end, 1, False)
         ui.layout(
             lambda state: abs(column_width(state) - initial_width - 120) <= 2,
-            "Dragging the column edge did not resize it",
+            f"Dragging the column edge did not resize its initial width {initial_width} by 120 points",
         )
         ui.control(grip, focused=True)
         key("Left")

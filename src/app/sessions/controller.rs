@@ -149,7 +149,7 @@ impl Sessions {
     }
 
     /// Return presentation snapshots in stable creation order without exposing attachment mutation.
-    pub(super) fn tabs(&self) -> Vec<Meta> {
+    pub(in crate::app) fn tabs(&self) -> Vec<Meta> {
         let mut tabs: Vec<_> = self
             .other
             .iter()

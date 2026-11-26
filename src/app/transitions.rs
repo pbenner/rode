@@ -28,6 +28,7 @@ pub(in crate::app) enum Action {
     LockEncrypted,
     Bookmark(Box<project_bookmarks::Bookmark>),
     DisableTransfers,
+    WorkspaceSession(Box<workspace_sessions::Resume>),
 }
 
 impl EditorApp {
@@ -45,6 +46,7 @@ impl EditorApp {
                 | Action::Remote(_)
                 | Action::Reconnect(_)
                 | Action::Bookmark(_)
+                | Action::WorkspaceSession(_)
         ) && !matches!(action, Action::Bookmark(bookmark) if self.bookmark_is_current(bookmark));
         let changes_shares = match action {
             Action::CloseTab(_) => false,
@@ -55,6 +57,7 @@ impl EditorApp {
             _ => true,
         };
         let vault = match action {
+            Action::WorkspaceSession(selection) => self.workspace_session_transition(selection),
             Action::Bookmark(bookmark) => {
                 valid &= self.feature(crate::extensions::Feature::ProjectBookmarks);
                 preserve_buffers = self.bookmark_preserves_buffers(bookmark);
@@ -113,18 +116,27 @@ impl EditorApp {
             (replacing || matches!(action, Action::Disconnect | Action::CloseProject))
                 && (self.runtime_work_pending() || self.agent_installation_pending())
         };
+        let changes = self.documents.changes_for(document);
+        let leaving = !matches!(action, Action::CloseTab(_) | Action::DisableTransfers);
+        let (retained, saving_session) = if leaving {
+            self.workspace_session_retains(&changes)
+        } else {
+            (false, false)
+        };
+        preserve_buffers |= retained || self.workspace_resume_approval(action, &changes);
         (
             Policy {
                 valid,
                 source_pending: self.editor_operations.collecting()
-                    || self.editor_input_pending(ctx),
+                    || self.editor_input_pending(ctx)
+                    || saving_session,
                 files_pending: self.explorer_state.busy,
                 runtime_pending,
                 shares_pending: changes_shares && self.shared_folders.pending(),
                 vault: self.vaults.admission(vault),
                 preserve_buffers,
             },
-            self.documents.changes_for(document),
+            changes,
         )
     }
     /// Submit a potentially destructive action through the shared transition controller.
@@ -261,7 +273,14 @@ impl EditorApp {
     }
     /// Execute only effects accepted by the shared transition controller.
     fn perform(&mut self, action: Action, ctx: &egui::Context) {
+        if !matches!(action, Action::CloseTab(_) | Action::DisableTransfers) {
+            self.checkpoint_workspace_session(ctx);
+            if let Some(state) = self.workspace_sessions.as_mut() {
+                state.freeze_for_transition();
+            }
+        }
         match action {
+            Action::WorkspaceSession(selection) => self.start_workspace_resume(*selection, ctx),
             Action::PreparedProject { id } => {
                 if let Some(prepared) = self.workspace.take_prepared(id) {
                     let previous = self.workers.generation();

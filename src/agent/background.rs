@@ -2,7 +2,7 @@
 //! helper deployment and control operations run off the GUI thread. Dropping a
 //! view closes only its bridge; the host decides last-view lifetime.
 use super::{Config, Launch};
-use crate::{files, project, sessions as service};
+use crate::sessions as service;
 use anyhow::{Context, Result, ensure};
 use rode_agent_core::service::{Command, Info, Persistence, Spec, State};
 use std::{
@@ -20,21 +20,7 @@ pub fn request(launch: &Launch, request: rode_session::Request) -> Result<servic
         mise: launch.plan.environment.mise && !launch.config.native_tools(),
         request: Box::new(request),
     };
-    if let Some(remote) = &launch.remote {
-        let response = remote.request(&files::Request::Tool {
-            request: project::Request::Sessions {
-                root: launch.plan.root.clone(),
-                operation,
-                directory: std::env::var("RODE_SESSION_DIR").ok(),
-            },
-        })?;
-        match response.tool {
-            Some(project::Response::Sessions(reply)) => Ok(reply),
-            _ => anyhow::bail!("Missing background-agent service reply"),
-        }
-    } else {
-        service::local(&operation)
-    }
+    service::on_host(&launch.plan, launch.remote.as_ref(), operation)
 }
 struct Preparing {
     pending: AtomicBool,
@@ -70,6 +56,7 @@ pub struct Client {
     requested_style: super::Personality,
     /// Reattachments adopt their first saved setting instead of the workspace default.
     adopt_style: bool,
+    replace: Option<String>,
     /// A requested explicit End is distinct from detaching a persistent view.
     pub ending: bool,
     closed: bool,
@@ -203,6 +190,7 @@ impl Client {
         Self {
             requested_style: launch.config.personality,
             adopt_style: false,
+            replace: None,
             launch,
             ready,
             preparing: Arc::new(Preparing {
@@ -223,6 +211,25 @@ impl Client {
     }
     /// Attach an existing controller without submitting a model prompt.
     pub fn attach(launch: Launch, info: Info, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self::attach_with(launch, info, wake, None)
+    }
+    /// Replace only the controlling lease explicitly confirmed by the user.
+    pub fn take_over(launch: Launch, info: Info, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+        let replace = Some(
+            info.controller
+                .as_ref()
+                .map(|c| c.id.clone())
+                .unwrap_or_default(),
+        );
+        Self::attach_with(launch, info, wake, replace)
+    }
+
+    fn attach_with(
+        launch: Launch,
+        info: Info,
+        wake: Arc<dyn Fn() + Send + Sync>,
+        replace: Option<String>,
+    ) -> Self {
         let mut client = Self::pending(
             launch.clone(),
             info.id.clone(),
@@ -230,6 +237,7 @@ impl Client {
             wake.clone(),
         );
         client.adopt_style = true;
+        client.replace = replace;
         let (tx, rx) = mpsc::channel();
         client.ready = rx;
         let preparing = client.preparing.clone();
@@ -255,6 +263,10 @@ impl Client {
             "--heartbeat".into(),
             info.id,
             info.policy,
+            serde_json::to_string(&rode_agent_core::service::Attachment {
+                owner: crate::desktop::owner(),
+                replace: self.replace.clone(),
+            })?,
         ]);
         let control = crate::sandbox::Plan {
             root: self.launch.plan.root.clone(),

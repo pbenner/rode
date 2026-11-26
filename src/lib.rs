@@ -24,6 +24,8 @@
 //! separate because its jobs must outlive GUI/SSH attachments.
 #![warn(missing_docs)]
 
+pub mod desktop;
+
 pub mod agent;
 pub mod app;
 pub mod binary;

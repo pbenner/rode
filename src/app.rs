@@ -33,6 +33,7 @@ mod binary_view;
 mod chrome;
 mod commands;
 mod connections;
+mod crash_recovery;
 mod debugging;
 mod dialogs;
 mod diff_view;
@@ -83,6 +84,7 @@ mod welcome;
 mod workbench;
 mod workers;
 mod workspace;
+mod workspace_sessions;
 use commands::Command;
 use eframe::egui::{self, Align, FontId, Key, Layout, RichText, Sense, Stroke};
 use icons::{Icon, IconButton};
@@ -183,6 +185,8 @@ enum Dialog {
 /// generation-tagged events, and context changes invalidate old host work before it can mutate
 /// current state.
 pub struct EditorApp {
+    crash_recovery: Option<crash_recovery::State>,
+    workspace_sessions: Option<workspace_sessions::State>,
     vaults: vaults::State,
     latex: latex_tools::State,
     markdown_images: Arc<markdown::Images>,
@@ -267,6 +271,8 @@ impl EditorApp {
     ) -> Self {
         let mut app = Self::from_storage(cc, startup, Some(&preferences));
         app.persistence = Some(preferences);
+        app.init_crash_recovery();
+        app.init_workspace_sessions(&cc.egui_ctx);
         app
     }
 
@@ -309,6 +315,8 @@ impl EditorApp {
         let markdown_images = Arc::new(markdown::Images::default());
         cc.egui_ctx.add_texture_loader(markdown_images.clone());
         let mut app = Self {
+            crash_recovery: None,
+            workspace_sessions: None,
             vaults: Default::default(),
             latex: Default::default(),
             markdown_images,
@@ -803,6 +811,7 @@ impl eframe::App for EditorApp {
 
         self.session_tick(ctx);
         self.tunnel_tick(ctx);
+        self.poll_workspace_sessions(ctx);
         if ctx.input(|i| i.focused)
             && self.presentation.area == areas::Area::Projects
             && (self.editor.pdf_fullscreen.is_some()
@@ -841,6 +850,9 @@ impl eframe::App for EditorApp {
         self.detached_tools(ctx);
         self.detached_tabs(ctx);
         self.detached_editors(ctx);
+        self.checkpoint_workspace_session(ctx);
+        self.crash_recovery_ui(ctx);
+        self.checkpoint_drafts();
         self.handle_close_request(ctx);
         self.finish_editor_frame(ctx);
         self.activate_editor(egui::ViewportId::ROOT);
@@ -917,6 +929,7 @@ impl eframe::App for EditorApp {
 
 impl Drop for EditorApp {
     fn drop(&mut self) {
+        self.finish_crash_recovery();
         self.connection_profiles.join_writer();
         self.reset_workspace(workspace::LeaveReason::WindowClosed);
     }

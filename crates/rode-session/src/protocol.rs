@@ -94,6 +94,21 @@ pub enum Request {
         id: String,
         /// Original policy fingerprint.
         policy: String,
+        /// Informational desktop identity; older clients omit it.
+        #[serde(default)]
+        owner: rode_agent_core::service::ViewOwner,
+    },
+    /// Atomically replace exactly the controlling lease the user confirmed.
+    /// A distinct operation makes older services reject takeover safely.
+    TakeOverAgent {
+        /// Native agent identity.
+        id: String,
+        /// Original policy fingerprint.
+        policy: String,
+        /// Server-issued lease observed before confirmation.
+        expected: String,
+        /// Informational identity of the new controlling desktop.
+        owner: rode_agent_core::service::ViewOwner,
     },
     /// Explicitly terminate one agent and its scoped process tree.
     EndAgent {

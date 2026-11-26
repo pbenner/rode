@@ -4794,6 +4794,7 @@ dependencies = [
  "portable-pty",
  "pulldown-cmark",
  "rand 0.10.3",
+ "raw-window-handle",
  "rdocx",
  "rode-agent-core",
  "rode-extension-api",
