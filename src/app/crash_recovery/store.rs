@@ -219,6 +219,16 @@ impl Drop for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// tempfile's default directory mode follows the caller's umask. Recovery
+    /// fixtures must be private even under ordinary CI or shell permissions.
+    fn private_directory() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    }
 
     fn entry(text: &str) -> Entry {
         Entry {
@@ -230,7 +240,7 @@ mod tests {
 
     #[test]
     fn active_and_claimed_checkpoints_are_exclusive_and_changes_coalesce() {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_directory();
         let (store, old) = Store::open(root.path()).unwrap();
         assert!(old.is_empty());
         for version in 0..20 {
@@ -280,7 +290,7 @@ mod tests {
 
     #[test]
     fn a_failed_checkpoint_keeps_the_last_durable_copy_and_reports_the_error() {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_directory();
         let (store, _) = Store::open(root.path()).unwrap();
         store.submit(vec![entry("last safe version")]);
         assert!(store.shared.flush(Duration::from_secs(3)));
@@ -300,7 +310,7 @@ mod tests {
     fn interrupted_shutdown_keeps_pending_drafts_and_corrupt_files_do_not_disable_new_checkpoints()
     {
         use std::io::Write;
-        let root = tempfile::tempdir().unwrap();
+        let root = private_directory();
         let broken = root
             .path()
             .join(format!("{}.json", rode_session::new_id().unwrap()));
@@ -326,5 +336,26 @@ mod tests {
             candidate.discard().unwrap();
         }
         next.clear_on_exit();
+    }
+
+    #[test]
+    fn new_roots_are_private_and_shared_or_symlinked_roots_are_rejected_without_repair() {
+        let root = private_directory();
+        let private = root.path().join("recovery");
+        let (store, candidates) = Store::open(&private).unwrap();
+        assert!(candidates.is_empty());
+        assert_eq!(fs::metadata(&private).unwrap().mode() & 0o777, 0o700);
+        drop(store);
+
+        let shared = root.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(Store::open(&shared).is_err());
+        assert_eq!(fs::metadata(&shared).unwrap().mode() & 0o777, 0o755);
+        assert!(fs::read_dir(&shared).unwrap().next().is_none());
+
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&private, &alias).unwrap();
+        assert!(Store::open(&alias).is_err());
     }
 }
