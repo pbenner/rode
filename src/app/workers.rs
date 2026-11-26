@@ -392,16 +392,6 @@ impl EditorApp {
         viewport: egui::ViewportId,
         ctx: &egui::Context,
     ) {
-        self.read_workspace_file(path, viewport, ctx, true);
-    }
-    /// Use the ordinary protected reader while batch restoration keeps its final focus intent.
-    pub(in crate::app) fn read_workspace_file(
-        &mut self,
-        path: String,
-        viewport: egui::ViewportId,
-        ctx: &egui::Context,
-        reveal: bool,
-    ) {
         if let Some(index) = self
             .documents
             .iter()
@@ -410,9 +400,7 @@ impl EditorApp {
             self.focus_document(self.documents[index].id, ctx);
             return;
         }
-        if reveal {
-            self.editor_intent_in(viewport);
-        }
+        self.editor_intent_in(viewport);
         if self.documents.begin_open_in(path.clone(), viewport) {
             let request = if let Some(format) = crate::pdf::Format::for_path(&path) {
                 self.status = format!("Opening {} preview…", format.label());

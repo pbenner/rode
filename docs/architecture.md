@@ -1168,22 +1168,3 @@ explicit and opens unbound buffers that require Save As. Encrypted and binary
 buffers are excluded, including retained encrypted buffers after disconnect.
 Normal admitted close clears its own checkpoint; failures and desktop loss leave
 it available for recovery.
-
-### Saved workspace ownership
-
-`app::workspace_sessions` owns opt-in desktop checkpoints independently from host
-execution. Its versioned model contains project/SSH/sandbox metadata, document
-revisions and drafts, layout and host-service IDs. Capture reuses document crash
-checkpoint projection and the composer's shared encrypted-draft privacy rule.
-A bounded filesystem worker coalesces saves and acknowledges durable publication;
-the transition controller admits only the exact checkpointed dirty versions.
-
-Each record uses an adjacent transaction lock and a generation-specific live
-owner lock. Confirmed takeover compares the observed generation, publishes a new
-one atomically and revokes old writers on every subsequent save. Catalogue and
-ownership polling cache summaries by inode and modification metadata, avoiding
-repeated draft decoding. Corrupt entries remain on disk and do not hide healthy
-entries. Restoring first prepares the project through existing connection/vault
-and sandbox guards, then reads files through ordinary workers, checks revisions,
-and finally discovers existing host sessions. It creates no replacement jobs and
-never resumes a workspace merely because Welcome renders its catalogue.

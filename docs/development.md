@@ -1353,17 +1353,3 @@ and installs SSHFS/FUSE, so successful kernel mounts cannot silently be skipped.
 `scripts/test-desktop-lifetime-ui.py` creates and kills only its own authenticated Xvfb server. It checks healthy unmapped windows across a heartbeat interval, Off cleanup, both busy and idle Auto behavior, On reattachment metadata, and recovery of unsaved Unicode source without overwriting the original file. It deliberately stalls each GUI thread through the opt-in layout probe before killing the display, requires exit through the independent monitor, then opens a fresh private display to exercise recovery and confirmed takeover between two live windows. A fixture requests the bounded 30-second stall by creating a `.pause` sibling of its `RODE_UI_TEST_STATE` file and waits for the `.paused` acknowledgement; removing the request resumes ordinary UI processing. Normal launches install neither probe nor stall hooks. The agents CI suite runs it with its usual 240-second deadline. On hosts denying Xvfb's Unix socket paths, `RODE_TEST_XVFB_TCP=1` selects an authenticated private TCP display; this never reuses an inherited desktop. Logs are in `target/desktop-lifetime-ui/` or the validation run's relocated UI artifact directory.
 
 `cargo test --test background_agents confirmed_takeover` exercises generation-checked transfer over direct and supervised attachment bridges: the original backend PID survives, old-view cleanup cannot release its successor, stale confirmations and wrong policies fail, and Auto still exits after the replacement detaches. Unit checks cover native socket loss without consuming toolkit events, cancellation during orderly shutdown, checkpoint exclusivity/coalescing/write failures, and unbound notebook/source restoration with encrypted-buffer exclusion.
-
-### Workspace session regressions
-
-`scripts/test-workspace-sessions-ui.py` runs in the agents CI lane. Private native
-windows capture unsaved source and composer text, close normally, explicitly
-resume on Welcome, and reattach the original persistent fake agent. The check
-also covers rename, two-window confirmed takeover, old-writer rejection,
-changed-on-disk draft recovery, hard-kill recovery, retained terminal identity and removing only the saved entry. The remote-smoke lane repeats remote draft restoration over both SSH backends. Store tests
-exercise atomic size-limit failures, generation compare-and-swap, active-owner
-removal refusal, corrupted-catalogue isolation, encrypted-buffer exclusion and
-focus requests. Document tests cover matching and conflicting baselines, Unicode
-cursor offsets, incomplete notebook JSON kept in source mode and edits made in
-a destination buffer during restoration. Checkpoint tests also cover prompt
-reversion while a different write is pending, and saves arriving with a claim.

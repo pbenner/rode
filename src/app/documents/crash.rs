@@ -19,14 +19,23 @@ impl Documents {
                 excluded = true;
                 continue;
             }
-            if let Some(entry) = doc.checkpoint_entry()? {
-                bytes = bytes.saturating_add(entry.text.len());
-                anyhow::ensure!(
-                    bytes <= crate::persistence::LIMIT,
-                    "Unsaved work exceeds the 8 MiB desktop recovery limit; save it explicitly"
-                );
-                entries.push(entry);
-            }
+            let text = match doc.notebook() {
+                Some(view) if !view.source_mode() => view.book.serialize()?,
+                _ => doc.text.clone(),
+            };
+            bytes = bytes.saturating_add(text.len());
+            anyhow::ensure!(
+                bytes <= crate::persistence::LIMIT,
+                "Unsaved work exceeds the 8 MiB desktop recovery limit; save it explicitly"
+            );
+            entries.push(super::crash_recovery::Entry {
+                name: doc
+                    .display_path()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| doc.name()),
+                text,
+                notebook: doc.notebook().is_some(),
+            });
         }
         Ok((entries, excluded))
     }

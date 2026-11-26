@@ -8,7 +8,7 @@ use crate::extensions::Feature;
 use eframe::egui;
 
 /// Tool identity independent of its docked or detached presentation owner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(in crate::app) enum Panel {
     Transfers,
     SharedFolders,
@@ -159,7 +159,7 @@ impl Panel {
 }
 
 /// Detachable view identity; selecting a view never creates a second controller.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(in crate::app) enum ToolTab {
     Terminal,
     Panel(Panel),

@@ -264,7 +264,7 @@ impl EditorApp {
             if !context.permits(&info, takeover) {
                 self.agents.running.error = "The project, policy or current chat changed. Refresh Running agents before attaching.".into();
             } else {
-                self.attach_workspace_agent(info, takeover, ctx);
+                self.attach_running_agent(info, takeover, ctx);
                 self.dialog = Dialog::None;
                 self.reveal_panel(Panel::Agent, ctx);
             }
@@ -273,13 +273,8 @@ impl EditorApp {
             self.dialog = Dialog::None;
         }
     }
-    /// Shared attachment path for explicit Running actions and saved workspace restoration.
-    pub(in crate::app) fn attach_workspace_agent(
-        &mut self,
-        info: Info,
-        takeover: bool,
-        ctx: &egui::Context,
-    ) {
+    /// Attach or take over the controller explicitly selected in Running agents.
+    fn attach_running_agent(&mut self, info: Info, takeover: bool, ctx: &egui::Context) {
         let launch = self.agent_launch();
         let wake = ctx.clone();
         self.agents.browser = None;

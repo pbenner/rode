@@ -435,7 +435,7 @@ impl EditorApp {
         self.agents.dispatch_queue(&environment, allowed, ctx);
     }
 
-    pub(in crate::app) fn agent_launch(&self) -> Launch {
+    fn agent_launch(&self) -> Launch {
         self.agents.launch(&self.agent_environment())
     }
 
@@ -607,7 +607,7 @@ mod tests;
 
 impl Agents {
     /// Taint follows an unsent encrypted-project draft until it is emptied.
-    /// Both desktop checkpoint consumers use this single privacy decision.
+    /// Desktop crash recovery uses this privacy decision before checkpointing.
     pub(super) fn checkpoint_draft(&mut self, encrypted: bool) -> Option<&str> {
         self.draft_private = !self.draft.is_empty() && (self.draft_private || encrypted);
         (!self.draft_private).then_some(self.draft.as_str())
@@ -615,12 +615,5 @@ impl Agents {
     /// Unsaved composer text only; transcripts and accepted prompts stay on the host.
     pub(super) fn recovery_draft(&self) -> &str {
         &self.draft
-    }
-
-    /// Restore unsent text without submitting it or changing the backend configuration.
-    pub(in crate::app) fn restore_workspace_draft(&mut self, draft: String) {
-        self.draft = draft;
-        self.draft_private = false;
-        self.composer.reset_recall();
     }
 }

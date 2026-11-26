@@ -11,7 +11,6 @@ pub(super) struct State {
     versions: Vec<(u64, u64)>,
     draft: String,
     encrypted: bool,
-    workspace: bool,
     warned: bool,
     current: bool,
 }
@@ -28,7 +27,6 @@ impl EditorApp {
                     versions: Vec::new(),
                     draft: String::new(),
                     encrypted: false,
-                    workspace: false,
                     warned: false,
                     current: true,
                 })
@@ -40,11 +38,7 @@ impl EditorApp {
     /// it before exiting on display loss; ordinary close retains its own guards.
     pub fn recovery_barrier(&self) -> Box<dyn FnOnce() + Send> {
         let shared = self.crash_recovery.as_ref().map(|s| s.store.shared.clone());
-        let workspace = self.workspace_sessions.as_ref().map(|s| s.barrier());
         Box::new(move || {
-            if let Some(workspace) = workspace {
-                let _ = workspace.flush(Duration::from_secs(1));
-            }
             if let Some(shared) = shared {
                 let _ = shared.flush(Duration::from_secs(1));
             }
@@ -63,7 +57,6 @@ impl EditorApp {
         let versions = self.documents.changes().dirty_versions;
         let permitted_draft = self.agents.checkpoint_draft(encrypted).map(str::to_owned);
         let draft = self.agents.recovery_draft();
-        let workspace = self.workspace_drafts_durable(&versions, draft);
         let Some(state) = self.crash_recovery.as_mut() else {
             return false;
         };
@@ -71,23 +64,13 @@ impl EditorApp {
             self.notify(format!("Draft checkpoint failed: {error}"), true);
             return false;
         }
-        if versions == state.versions
-            && draft == state.draft
-            && encrypted == state.encrypted
-            && workspace == state.workspace
-        {
+        if versions == state.versions && draft == state.draft && encrypted == state.encrypted {
             return state.current;
         }
         state.current = false;
         state.versions = versions;
         state.draft = draft.to_owned();
         state.encrypted = encrypted;
-        state.workspace = workspace;
-        if workspace {
-            state.store.submit(Vec::new());
-            state.current = true;
-            return true;
-        }
         let (mut entries, excluded) = match self.documents.crash_entries(encrypted) {
             Ok(snapshot) => snapshot,
             Err(e) => {

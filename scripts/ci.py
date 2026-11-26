@@ -161,7 +161,6 @@ SUITES = {
         ui("agent-attachments"),
         ui("agent-persistence"),
         ui("desktop-lifetime"),
-        ui("workspace-sessions"),
         ui("agent-undo"),
     ],
     "terminals": [ui("sessions"), ui("slurm"), ui("codex-install")],
@@ -202,7 +201,6 @@ SUITES = {
         ),
     ],
     "remote-smoke": [
-        ui("workspace-sessions", RODE_WORKSPACE_SESSIONS_REMOTE="1"),
         ui("agent-undo", RODE_AGENT_UNDO_REMOTE="1"),
         ui("agent-undo", RODE_AGENT_UNDO_REMOTE="1", RODE_AGENT_UNDO_SSH_BACKEND="openssh"),
         ui("shared-folders"),

@@ -2,7 +2,7 @@
 //! selection prevents Explorer and Connections from competing for the same edge.
 use super::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum View {
     Explorer,
     Connections,

@@ -7,8 +7,6 @@ use super::*;
 mod crash;
 mod edit;
 mod lifecycle;
-mod session;
-pub(super) use session::Restore;
 mod view;
 pub(super) use edit::Edit;
 use view::Representation;

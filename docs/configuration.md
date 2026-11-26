@@ -10,7 +10,6 @@ Shared configuration stays in the existing locations:
 | --- | --- |
 | `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron` | Theme/font/interface scale, project/agent/extension preferences, bookmarks, sandbox defaults and saved window/layout state |
 | `${XDG_DATA_HOME:-~/.local/share}/rode/recovery/` | Private crash checkpoints for unsaved source/notebooks and composer text; separate from preferences |
-| `${XDG_DATA_HOME:-~/.local/share}/rode/workspace-sessions/` | Opt-in saved workspace metadata and ordinary unsaved drafts, with per-generation window ownership |
 | `${XDG_CONFIG_HOME:-~/.config}/rode/connections.json` | Named SSH connection profiles |
 | `${XDG_CONFIG_HOME:-~/.config}/rode/themes/` | Custom interface/terminal theme JSON files, read at startup |
 | `${XDG_CONFIG_HOME:-~/.config}/rode/syntax-themes/` | Custom syntax theme JSON files, read at startup |
@@ -118,45 +117,3 @@ RODE checkpoints unsaved source buffers, structured notebooks and agent composer
 After an interrupted window, the next launch offers **Recover drafts** or **Discard drafts**. Recovery opens unsaved buffers, including notebook cells, with their original names for reference. It does not reconnect SSH, restart jobs or write the original files. Choose a destination with Save As when ready. A live window's checkpoints cannot be claimed by another window; advisory locks also prevent two windows from restoring the same checkpoint at once. A confirmed ordinary exit removes that window's checkpoint, while crashes and failed event-loop shutdowns retain it.
 
 Encrypted-project buffers and composer drafts entered while an encrypted project is active are excluded from desktop checkpoints. Retained disconnected encrypted buffers remain excluded after returning to an ordinary project. RODE reports this restriction when such edits are present. Save encrypted and binary edits explicitly. Recovery covers the latest completed checkpoint; edits still being processed when a process is killed may not yet have reached storage.
-
-## Workspace sessions
-
-Choose **Welcome → Keep workspace** to retain this window's prepared project,
-open files, cursor positions, editor groups, tool/sidebar arrangement and unsent
-agent prompt. RODE checkpoints changes in private files and keeps the saved entry
-when the window closes or its desktop disappears. Startup still opens Welcome;
-**Resume** explicitly reopens the selected workspace. **Rename** changes its label.
-Turning off **Keep workspace** pauses updates. Turning it back on in the same
-window, project and sandbox policy updates the same entry; it does not restore its older contents.
-If another window has claimed it, use the session list to switch or confirm takeover.
-**Remove** deletes an inactive saved entry and its drafts, without deleting project files or ending jobs.
-
-For ordinary text and notebooks, closing a kept workspace waits for the current
-unsaved versions to be checkpointed. Resume restores those drafts over their
-original file binding only if the host file still has the saved revision. If the
-file changed or cannot be read, RODE opens the draft separately and requires
-**Save As**, preserving the host's version. Edits made in a destination buffer while
-restoration is pending are kept; any saved draft is recovered separately. Binary edits still use the usual
-save/discard prompt. Checkpoints have an 8 MiB limit; write failures keep the last
-successful record and ordinary unsaved-file checks remain available.
-
-**Keep workspace** is independent of host-side **Persist**. Resume reattaches
-referenced agent, terminal and supported notebook/debugger sessions that still
-exist; it never resubmits a prompt, restarts a shell or launches a kernel. Use
-**Persist: On** on the corresponding host session if idle work must survive
-closing the GUI. **Auto** still finishes accepted agent work and exits, and
-**Off** still stops on disconnect. Missing host sessions are not recreated.
-
-An open entry offers **Switch to window** on the same desktop. **Take over**
-requires confirmation and transfers the saved-workspace generation; the original
-window keeps its buffers but cannot overwrite the resumed entry. A matching
-native agent controller can move with it. Agents whose controller changed since
-the snapshot, and notebook/debugger sessions still attached elsewhere, require
-their existing session controls instead of being silently stolen.
-
-Encrypted workspaces save only their encrypted location and presentation/file
-references. Resume requires explicit unlocking. Decrypted file contents and
-unsent encrypted-project prompts never enter ordinary workspace storage, even
-if their buffers survive a disconnect. Save those edits before leaving. Ordinary
-workspace drafts are private user-readable files, not encrypted archives; saved
-SSH profiles contain configuration paths, never key contents, tickets or tokens.

@@ -138,29 +138,6 @@ impl Controller {
     }
 }
 
-impl Controller {
-    /// Restore a validated workspace layout through its single presentation owner.
-    pub(in crate::app) fn restore_workspace(&mut self, mut selection: Selection) {
-        selection.area = Area::Projects;
-        selection.panel = selection.panel.filter(|p| p.scope() == Scope::Project);
-        selection.last_tool = selection
-            .last_tool
-            .filter(|tab| tab.scope() == Scope::Project);
-        if selection.surface == Surface::Tools && selection.panel.is_none() {
-            selection.surface = Surface::Editor;
-        }
-        let mut seen = std::collections::HashSet::new();
-        selection.floating_tabs.retain(|tab| seen.insert(*tab));
-        self.0 = selection;
-        if self
-            .selected_tool()
-            .is_some_and(|tab| self.floating_tabs.contains(&tab))
-        {
-            self.select_editor();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
