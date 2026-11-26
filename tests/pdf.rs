@@ -201,6 +201,43 @@ fn custom_powerpoint_page_sizes_fit_the_admitted_raster_at_every_resolution() {
 }
 
 #[test]
+fn powerpoint_missing_desktop_fonts_are_reported_by_the_private_worker() {
+    let deck = betteroffice_pptx::Presentation::open(PPTX).unwrap();
+    let snapshot = deck.snapshot().unwrap();
+    let story = &snapshot.slides[0].shapes[0].text_stories[0];
+    deck.format_text(
+        &betteroffice_pptx::EditCtx::local("font regression"),
+        &story.id,
+        0,
+        story.length,
+        &betteroffice_pptx::TextStylePatch {
+            font_family: Some("RODE Missing Corporate Font 72f4b02b".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let original = deck.save().unwrap();
+    let budget = Arc::new(Budget::default());
+    let loaded = pdf::load_format_cancellable(
+        &STANDARD.encode(&original),
+        pdf::Format::Pptx,
+        1,
+        &budget,
+        512,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(loaded.source.warnings.iter().any(|warning| {
+        warning.contains("RODE Missing Corporate Font 72f4b02b")
+            && warning.contains("Inter")
+            && warning.contains("desktop")
+    }));
+    assert_eq!(loaded.pixels.pixels.size, [512, 288]);
+    drop(loaded);
+    assert_eq!(budget.used(), 0);
+}
+
+#[test]
 fn native_powerpoint_slides_preserve_source_cache_pixels_and_report_missing_images() {
     let budget = Arc::new(Budget::default());
     let root = tempfile::tempdir().unwrap();

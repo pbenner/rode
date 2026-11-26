@@ -4,6 +4,7 @@
 import io
 import os
 import re
+import shutil
 import subprocess
 import zipfile
 from pathlib import Path
@@ -40,14 +41,14 @@ def green_slide(ui, label):
     return green > 150 and red < 80 and blue < 120
 
 
-def recolor(original):
-    """Replace one slide's fill without using any presentation application."""
+def replace_parts(original, old, new, *, only=None):
+    """Change fixture XML without using any presentation application."""
     output = io.BytesIO()
     with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(output, "w") as target:
         for item in source.infolist():
             contents = source.read(item.filename)
-            if item.filename == "ppt/slides/slide1.xml":
-                contents = contents.replace(b"E82525", b"20BD55")
+            if item.filename.endswith(".xml") and (only is None or item.filename == only):
+                contents = contents.replace(old, new)
             target.writestr(item, contents)
     return output.getvalue()
 
@@ -59,11 +60,21 @@ def run(remote=False):
         root = base / "project"
         root.mkdir()
         presentation = root / "lecture.PPTX"
-        original = FIXTURE.read_bytes()
+        original = replace_parts(
+            FIXTURE.read_bytes(), b'typeface="Inter"', b'typeface="JetBrains Mono"'
+        )
         presentation.write_bytes(original)
         notes = root / "notes.txt"
         notes.write_text("Keep this note.\n")
         environment = fixture_environment(base)
+        # Exercise real desktop discovery with a repository-owned font. The
+        # private XDG directory keeps this independent of developer/CI fonts.
+        fonts = Path(environment["XDG_DATA_HOME"]) / "fonts"
+        fonts.mkdir(parents=True)
+        shutil.copyfile(
+            FIXTURE.parents[2] / "assets/fonts/JetBrainsMono-Regular.ttf",
+            fonts / "JetBrainsMono-Regular.ttf",
+        )
         environment["RODE_UI_TEST_STATE"] = str(base / "state.json")
         with native_session(
             project_args(root, remote=remote, sandbox=True), environment, root, label
@@ -77,6 +88,7 @@ def run(remote=False):
             ui.control("preview-format:PPTX")
             ui.control("pdf-current-page:1")
             ui.control("pdf-page-ready:1")
+            ui.absent("document-preview-warning")
             ui.absent("source-editor")
             ui.click("image-preview")
             ui.control("image-preview", focused=True)
@@ -115,7 +127,7 @@ def run(remote=False):
             ui.click("image-preview")
             key("Home")
             ui.control("pdf-current-page:1")
-            updated = recolor(original)
+            updated = replace_parts(original, b"E82525", b"20BD55", only="ppt/slides/slide1.xml")
             presentation.write_bytes(updated)
             ui.command("PPTX: Reload preview")
             ui.control("pdf-page-ready:1")
@@ -126,6 +138,14 @@ def run(remote=False):
             ui.command("Theme: Matrix")
             ui.control("preview-format:PPTX")
             assert green_slide(ui, label), "The editor theme tinted the slide"
+            presentation.write_bytes(
+                replace_parts(updated, b"JetBrains Mono", b"RODE Missing Corporate Font 72f4b02b")
+            )
+            ui.command("PPTX: Reload preview")
+            ui.control("document-preview-warning")
+            presentation.write_bytes(updated)
+            ui.command("PPTX: Reload preview")
+            ui.absent("document-preview-warning")
             presentation.write_bytes(b"broken PPTX package")
             ui.command("PPTX: Reload preview")
             ui.control("notice-dismiss")

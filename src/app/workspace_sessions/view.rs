@@ -116,7 +116,7 @@ impl EditorApp {
             if keep {
                 self.enable_workspace_session(&ctx);
             } else if let Some(state) = &mut self.workspace_sessions {
-                state.release();
+                state.pause();
                 state.refresh();
             }
         }

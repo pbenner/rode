@@ -23,6 +23,7 @@ struct Stamp {
     dirty: Vec<(u64, u64)>,
     eligible: bool,
 }
+#[derive(Clone)]
 struct Owned {
     key: Key,
     location: String,
@@ -32,6 +33,7 @@ pub(super) struct State {
     worker: worker::Worker,
     rows: Vec<Row>,
     own: Option<Owned>,
+    paused: Option<Owned>,
     serial: u64,
     submitted: Option<(u64, Stamp)>,
     acknowledged: Option<Stamp>,
@@ -62,6 +64,7 @@ impl State {
             worker,
             rows: Vec::new(),
             own: None,
+            paused: None,
             serial: 0,
             submitted: None,
             acknowledged: None,
@@ -115,6 +118,15 @@ impl State {
             }
         }
     }
+    /// Pausing stops writes and releases the live lease, while retaining this
+    /// window's entry for a later explicit enable in the same project/policy.
+    fn pause(&mut self) {
+        let previous = self.own.clone();
+        self.release();
+        if self.own.is_none() {
+            self.paused = previous;
+        }
+    }
     fn release(&mut self) {
         if let Some(own) = &self.own
             && let Err(error) = self.worker.command(Request::Release(own.key.clone()))
@@ -123,6 +135,7 @@ impl State {
             return;
         }
         self.own = None;
+        self.paused = None;
         self.acknowledged = None;
         self.submitted = None;
         self.enabling = false;
@@ -164,7 +177,8 @@ impl EditorApp {
                     state.rows = rows;
                     state.listing = false;
                 }
-                Event::Created { record, serial } => {
+                Event::Kept { record, serial } => {
+                    state.paused = None;
                     state.enabling = false;
                     state.failed = None;
                     state.error.clear();
@@ -220,11 +234,11 @@ impl EditorApp {
                 Event::Error { operation, message } => {
                     let checkpoint = matches!(
                         operation,
-                        worker::Operation::Save(..) | worker::Operation::Create(..)
+                        worker::Operation::Save(..) | worker::Operation::Keep(..)
                     );
                     match operation {
                         worker::Operation::List => state.listing = false,
-                        worker::Operation::Create(serial) => {
+                        worker::Operation::Keep(serial) => {
                             state.enabling = false;
                             if state
                                 .submitted

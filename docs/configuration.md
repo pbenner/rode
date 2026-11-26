@@ -126,8 +126,10 @@ open files, cursor positions, editor groups, tool/sidebar arrangement and unsent
 agent prompt. RODE checkpoints changes in private files and keeps the saved entry
 when the window closes or its desktop disappears. Startup still opens Welcome;
 **Resume** explicitly reopens the selected workspace. **Rename** changes its label.
-Turning off **Keep workspace** stops further updates; **Remove** deletes an
-inactive saved entry and its drafts, without deleting project files or ending jobs.
+Turning off **Keep workspace** pauses updates. Turning it back on in the same
+window, project and sandbox policy updates the same entry; it does not restore its older contents.
+If another window has claimed it, use the session list to switch or confirm takeover.
+**Remove** deletes an inactive saved entry and its drafts, without deleting project files or ending jobs.
 
 For ordinary text and notebooks, closing a kept workspace waits for the current
 unsaved versions to be checkpointed. Resume restores those drafts over their

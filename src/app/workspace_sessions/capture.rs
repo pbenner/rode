@@ -184,6 +184,13 @@ impl EditorApp {
         Ok(snapshot)
     }
     pub(in crate::app) fn enable_workspace_session(&mut self, ctx: &egui::Context) {
+        if self
+            .workspace_sessions
+            .as_ref()
+            .is_none_or(|s| s.own.is_some() || s.enabling || s.restore.is_some())
+        {
+            return;
+        }
         let Some(location) = self.workspace_session_location() else {
             return;
         };
@@ -193,8 +200,15 @@ impl EditorApp {
                 .workspace_sessions
                 .as_mut()
                 .ok_or_else(|| anyhow::anyhow!("Workspace storage is unavailable"))?;
+            let previous = state
+                .paused
+                .as_ref()
+                .filter(|old| {
+                    old.location == snapshot.location.identity() && old.policy == snapshot.policy
+                })
+                .map(|old| old.key.clone());
             state.serial += 1;
-            state.worker.create(state.serial, snapshot)?;
+            state.worker.keep(previous, state.serial, snapshot)?;
             state.submitted = Some((state.serial, stamp));
             state.enabling = true;
             state.failed = None;

@@ -4,9 +4,12 @@
 use super::renderer::Raster;
 use super::*;
 
+mod fonts;
+
 pub(super) struct Presentation {
     deck: betteroffice_pptx::Presentation,
     size: [f32; 2],
+    warnings: Vec<String>,
 }
 impl Presentation {
     pub(super) fn open(bytes: &[u8]) -> Result<Self> {
@@ -28,18 +31,18 @@ impl Presentation {
                 .all(|n| n.is_finite() && (0.01..=1_000_000.).contains(n)),
             "Invalid PowerPoint slide dimensions."
         );
-        // An explicit bundled face makes fontless compute/desktop installations
-        // deterministic. Unknown Office fonts fall back to Inter, never a download.
-        deck.register_font(
-            "Inter",
-            false,
-            false,
-            include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
-        )?;
-        Ok(Self { deck, size })
+        let warnings = fonts::register(&mut deck)?;
+        Ok(Self {
+            deck,
+            size,
+            warnings,
+        })
     }
     pub(super) fn sizes(&self) -> Vec<[f32; 2]> {
         vec![self.size; self.deck.slides().len()]
+    }
+    pub(super) fn warnings(&self) -> Vec<String> {
+        self.warnings.clone()
     }
     pub(super) fn render(&self, page: usize, side: usize) -> Result<Raster> {
         ensure!(

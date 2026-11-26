@@ -110,6 +110,35 @@ def run():
                     "Unsaved draft\n"
                 )
                 assert source.read_text() == "Saved original\n"
+                ui.click("workspace-session-rename:" + identity)
+                ui.edit("workspace-session-name", "Pinned workspace")
+                ui.click("workspace-session-save-name")
+                wait(lambda: record()["name"] == "Pinned workspace", "Initial rename was not saved")
+                for index in range(3):
+                    previous = record()["owner"]["generation"]
+                    ui.click("workspace-session-keep")
+                    ui.absent("workspace-session-kept")
+                    ui.click("workspace-tab:Chat")
+                    ui.edit("agent-composer", f"Edited while paused {index}")
+                    ui.command("Application: Show Welcome")
+                    ui.click("workspace-session-keep")
+                    ui.control("workspace-session-kept")
+                    current = wait(record, "Toggle created duplicate workspace entries")
+                    assert current["id"] == identity, "Keep created another saved workspace"
+                    assert current["name"] == "Pinned workspace", (
+                        "Re-enabling lost the workspace name"
+                    )
+                    assert current["owner"]["generation"] != previous
+                    assert current["snapshot"]["draft"] == f"Edited while paused {index}"
+                ui.click("workspace-tab:Chat")
+                ui.value("agent-composer-value", "Edited while paused 2")
+                ui.edit("agent-composer", "Unsent workspace prompt")
+                ui.command("Application: Show Welcome")
+                ui.control("workspace-session-kept")
+                wait(
+                    lambda: record()["snapshot"]["draft"] == "Unsent workspace prompt",
+                    "Latest prompt was not saved",
+                )
                 screenshot(ui.window, "saved-workspace.png")
             wait(
                 lambda: any(
@@ -268,6 +297,13 @@ def remote_smoke():
                 folder = base / "data/rode/workspace-sessions"
                 saved = json.loads(next(folder.glob("s-*.json")).read_text())
                 identity = saved["id"]
+                ui.click("workspace-session-keep")
+                ui.absent("workspace-session-kept")
+                ui.click("workspace-session-keep")
+                ui.control("workspace-session-kept")
+                entries = list(folder.glob("s-*.json"))
+                assert len(entries) == 1
+                assert json.loads(entries[0].read_text())["id"] == identity
             with native_session(args, env, root, backend + "-resume") as ui:
                 ui.control("welcome-screen")
                 ui.click("workspace-session-resume:" + identity)

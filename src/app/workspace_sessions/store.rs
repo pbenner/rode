@@ -229,8 +229,31 @@ impl Store {
         })?;
         Ok((record, lease))
     }
+    /// Re-enable a paused entry with the current window state, without restoring
+    /// its older contents or taking ownership away from another window.
+    pub fn keep(&self, previous: Option<&Key>, snapshot: Snapshot) -> Result<(Record, Lease)> {
+        snapshot.validate()?;
+        match previous {
+            Some(key) => self.claim_with(key, false, Some(snapshot)),
+            None => self.create(snapshot),
+        }
+    }
     pub fn claim(&self, key: &Key, takeover: bool) -> Result<(Record, Lease)> {
-        persistence::transaction(&self.path(&key.id)?, |_| {
+        self.claim_with(key, takeover, None)
+    }
+    fn claim_with(
+        &self,
+        key: &Key,
+        takeover: bool,
+        snapshot: Option<Snapshot>,
+    ) -> Result<(Record, Lease)> {
+        persistence::transaction(&self.path(&key.id)?, |exists| {
+            let snapshot = match (exists, snapshot) {
+                // An explicitly removed entry no longer exists to reuse. A new
+                // Keep request may create its replacement, never a duplicate.
+                (false, Some(snapshot)) => return self.create(snapshot),
+                (_, snapshot) => snapshot,
+            };
             let mut record = self.record(&key.id)?;
             ensure!(
                 record.owner.generation == key.generation,
@@ -240,6 +263,14 @@ impl Store {
                 takeover || !self.active(key)?,
                 "This workspace is open in another window. Switch to it or confirm Take over."
             );
+            if let Some(snapshot) = snapshot {
+                ensure!(
+                    snapshot.location.identity() == record.snapshot.location.identity()
+                        && snapshot.policy == record.snapshot.policy,
+                    "The paused workspace belongs to a different project or policy"
+                );
+                record.snapshot = snapshot;
+            }
             let generation = rode_session::new_id()?;
             let lease = self.lease(Key {
                 id: key.id.clone(),

@@ -104,6 +104,7 @@ impl EditorApp {
                 queued
             })
             .collect();
+        state.paused = None;
         state.own = Some(Owned {
             key: record.key(),
             location: record.snapshot.location.identity(),

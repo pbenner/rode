@@ -165,3 +165,74 @@ fn focus_requests_are_scoped_to_the_current_generation_and_desktop() {
     assert!(!store.requested_focus(&owner).unwrap());
     drop(old);
 }
+
+#[test]
+fn pausing_and_reenabling_reuses_one_entry_and_keeps_its_name_and_current_drafts() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open(temp.path().to_owned()).unwrap();
+    let (record, mut owner) = store.keep(None, snapshot()).unwrap();
+    let id = record.id.clone();
+    let mut key = record.key();
+    store.rename(&key, "Research workspace".into()).unwrap();
+    for index in 0..12 {
+        drop(owner);
+        let mut current = snapshot();
+        current.draft = format!("Edited while paused {index}");
+        let (record, next) = store.keep(Some(&key), current).unwrap();
+        assert_eq!(record.id, id);
+        assert_eq!(record.name, "Research workspace");
+        assert_eq!(
+            record.snapshot.draft,
+            format!("Edited while paused {index}")
+        );
+        assert_ne!(record.key(), key);
+        let catalogue = store.list().unwrap();
+        assert_eq!(catalogue.rows.len(), 1);
+        assert!(catalogue.rows[0].active);
+        key = record.key();
+        owner = next;
+    }
+}
+
+#[test]
+fn reenable_cannot_take_another_windows_entry_or_change_its_project_or_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open(temp.path().to_owned()).unwrap();
+    let (record, owner) = store.keep(None, snapshot()).unwrap();
+    drop(owner);
+    let mut other_policy = snapshot();
+    other_policy.policy = "b".repeat(64);
+    assert!(store.keep(Some(&record.key()), other_policy).is_err());
+    let mut other_project = snapshot();
+    other_project.location = Location::Project {
+        project: Project::Local {
+            root: "/another/project".into(),
+            sandbox: Default::default(),
+        },
+    };
+    assert!(store.keep(Some(&record.key()), other_project).is_err());
+    let (current, owner) = store.claim(&record.key(), false).unwrap();
+    assert!(store.keep(Some(&record.key()), snapshot()).is_err());
+    assert!(store.keep(Some(&current.key()), snapshot()).is_err());
+    assert!(store.owns(&owner).unwrap());
+    assert_eq!(store.list().unwrap().rows.len(), 1);
+}
+
+#[test]
+fn failed_reenable_retains_the_previous_entry_and_explicit_removal_allows_replacement() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open(temp.path().to_owned()).unwrap();
+    let (record, owner) = store.keep(None, snapshot()).unwrap();
+    drop(owner);
+    let mut oversized = snapshot();
+    oversized.draft = "x".repeat(persistence::LIMIT);
+    assert!(store.keep(Some(&record.key()), oversized).is_err());
+    assert_eq!(store.record(&record.id).unwrap().key(), record.key());
+    let (next, owner) = store.keep(Some(&record.key()), snapshot()).unwrap();
+    assert_eq!(next.id, record.id);
+    drop(owner);
+    store.remove(&next.key(), next.revision).unwrap();
+    let (replacement, _owner) = store.keep(Some(&next.key()), snapshot()).unwrap();
+    assert_ne!(replacement.id, record.id);
+    assert_eq!(store.list().unwrap().rows.len(), 1);
+}

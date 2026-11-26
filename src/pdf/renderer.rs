@@ -473,7 +473,7 @@ impl Backend {
     fn warnings(&self) -> Vec<String> {
         match self {
             Self::Pdf(_, warnings) => warnings.clone(),
-            Self::Pptx(_) => Vec::new(),
+            Self::Pptx(deck) => deck.warnings(),
         }
     }
 }

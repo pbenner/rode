@@ -13,7 +13,8 @@ use std::{
 
 pub(super) enum Command {
     List,
-    Create {
+    Keep {
+        previous: Option<Key>,
         serial: u64,
         snapshot: Box<Snapshot>,
     },
@@ -37,7 +38,7 @@ pub(super) enum Event {
         rows: Vec<Row>,
         warnings: Vec<String>,
     },
-    Created {
+    Kept {
         record: Box<Record>,
         serial: u64,
     },
@@ -60,7 +61,7 @@ pub(super) enum Event {
 #[derive(Clone)]
 pub(super) enum Operation {
     List,
-    Create(u64),
+    Keep(u64),
     Claim,
     Save(Key, u64),
     Change,
@@ -143,12 +144,17 @@ impl Worker {
             .try_send(command)
             .map_err(|_| anyhow::anyhow!("Workspace session operations are busy; try again"))
     }
-    pub fn create(&self, serial: u64, snapshot: Snapshot) -> Result<()> {
-        self.command(Command::Create {
+    pub fn keep(&self, previous: Option<Key>, serial: u64, snapshot: Snapshot) -> Result<()> {
+        // Publish the request and its progress under one lock. A fast failed
+        // acknowledgement must not be cleared by bookkeeping after try_send.
+        let mut progress = self.barrier.state.lock().unwrap();
+        self.command(Command::Keep {
+            previous,
             serial,
             snapshot: Box::new(snapshot),
         })?;
-        self.barrier.requested(serial);
+        progress.requested = serial;
+        progress.failed = false;
         Ok(())
     }
     pub fn save(&self, key: Key, serial: u64, snapshot: Snapshot) {
@@ -214,11 +220,11 @@ fn run(
     loop {
         let command = receive();
         // A save can arrive while recv_timeout is waiting. Drain it before any
-        // ownership-changing command, including Create and Claim.
+        // ownership-changing command, including Keep and Claim.
         save_pending(&store, &mut lease, &latest, &progress, &send);
         let operation = match &command {
             Ok(Command::List) => Operation::List,
-            Ok(Command::Create { serial, .. }) => Operation::Create(*serial),
+            Ok(Command::Keep { serial, .. }) => Operation::Keep(*serial),
             Ok(Command::Claim { .. }) => Operation::Claim,
             _ => Operation::Change,
         };
@@ -231,12 +237,20 @@ fn run(
                     warnings: catalogue.warnings,
                 })
             }),
-            Ok(Command::Create { serial, snapshot }) => {
-                let result = store.create(*snapshot);
+            Ok(Command::Keep {
+                previous,
+                serial,
+                snapshot,
+            }) => {
+                let result = if lease.is_some() {
+                    Err(anyhow::anyhow!("This window already keeps a workspace"))
+                } else {
+                    store.keep(previous.as_ref(), *snapshot)
+                };
                 progress.complete(serial, result.is_ok());
                 result.map(|(record, owner)| {
                     lease = Some(owner);
-                    send(Event::Created {
+                    send(Event::Kept {
                         record: Box::new(record),
                         serial,
                     });
@@ -310,8 +324,8 @@ mod tests {
     fn release_drains_the_latest_checkpoint_before_releasing_ownership() {
         let temp = tempfile::tempdir().unwrap();
         let worker = Worker::start(temp.path().to_owned(), Arc::new(|| {})).unwrap();
-        worker.create(1, snapshot()).unwrap();
-        let Event::Created { record, .. } =
+        worker.keep(None, 1, snapshot()).unwrap();
+        let Event::Kept { record, .. } =
             worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
         else {
             panic!("Creation failed")
@@ -343,6 +357,35 @@ mod tests {
         );
     }
     #[test]
+    fn repeated_keep_requests_cannot_create_entries_while_the_worker_already_owns_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let worker = Worker::start(temp.path().to_owned(), Arc::new(|| {})).unwrap();
+        worker.keep(None, 1, snapshot()).unwrap();
+        assert!(matches!(
+            worker.events.recv_timeout(Duration::from_secs(3)).unwrap(),
+            Event::Kept { .. }
+        ));
+        worker.keep(None, 2, snapshot()).unwrap();
+        assert!(matches!(
+            worker.events.recv_timeout(Duration::from_secs(3)).unwrap(),
+            Event::Error {
+                operation: Operation::Keep(2),
+                ..
+            }
+        ));
+        assert!(worker.barrier.state.lock().unwrap().failed);
+        assert_eq!(
+            Store::open(temp.path().to_owned())
+                .unwrap()
+                .list()
+                .unwrap()
+                .rows
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn a_save_arriving_with_a_claim_is_durable_before_the_old_lease_is_replaced() {
         use std::cell::RefCell;
         let temp = tempfile::tempdir().unwrap();
@@ -356,7 +399,8 @@ mod tests {
         let receive = || {
             turn += 1;
             Ok(match turn {
-                1 => Command::Create {
+                1 => Command::Keep {
+                    previous: None,
                     serial: 1,
                     snapshot: Box::new(snapshot()),
                 },
@@ -378,7 +422,7 @@ mod tests {
             })
         };
         run(store, receive, latest.clone(), progress.clone(), |event| {
-            if let Event::Created { record, .. } = event {
+            if let Event::Kept { record, .. } = event {
                 *first.borrow_mut() = Some(record.key());
             }
         });
