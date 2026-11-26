@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native PowerPoint viewing, diagnostics, fullscreen and protected source over local/SSH files."""
+"""Native slides, text selection/search and protected source over local/SSH files."""
 
 import io
 import os
@@ -16,6 +16,7 @@ from ui_harness import (
     fixture_directory,
     fixture_environment,
     key,
+    mouse_button,
     screenshot,
     text,
 )
@@ -90,6 +91,43 @@ def run(remote=False):
             ui.control("pdf-page-ready:1")
             ui.absent("document-preview-warning")
             ui.absent("source-editor")
+            ui.control("pdf-text-ready:1")
+            bounds = next(
+                b["rect"] for b in ui.layout()["buttons"] if b["name"] == "pdf-text-bounds:1"
+            )
+            scale = ui.layout()["pixels_per_point"]
+            start = (
+                round((bounds[0] + 1) * scale),
+                round((bounds[1] + bounds[3]) * 0.5 * scale),
+            )
+            end = (round((bounds[2] - 1) * scale), start[1])
+            mouse_button(*start, 1, True)
+            ui.move_pointer(*end)
+            ui.value("pdf-selection", "RODE — PowerPoint slide 1")
+            mouse_button(*end, 1, False)
+            ui.control("image-preview", focused=True)
+            key("c", ("Control_L",))
+            ui.wait(
+                lambda: ui.clipboard() == "RODE — PowerPoint slide 1",
+                "PowerPoint text drag/copy failed",
+            )
+            screenshot(ui.window, label + "-selection.png")
+            key("f", ("Control_L",))
+            ui.control("pdf-find-input", focused=True)
+            ui.fill("pdf-find-input", "powerpoint")
+            ui.control("pdf-find-count:3")
+            ui.press("pdf-find-input", "Return")
+            ui.control("pdf-current-page:2")
+            ui.control("pdf-page-ready:2")
+            screenshot(ui.window, label + "-search.png")
+            ui.press("pdf-find-input", "Return", ("Shift_L",))
+            ui.control("pdf-current-page:1")
+            ui.click("pdf-find-case")
+            ui.control("pdf-find-count:0")
+            ui.click("pdf-find-case")
+            ui.control("pdf-find-count:3")
+            key("Escape")
+            ui.absent("pdf-find-input")
             ui.click("image-preview")
             ui.control("image-preview", focused=True)
             key("Right")
@@ -104,6 +142,13 @@ def run(remote=False):
             key("End")
             ui.control("pdf-current-page:3")
             ui.control("pdf-page-ready:3")
+            ui.control("pdf-text-ready:3")
+            key("a", ("Control_L",))
+            key("c", ("Control_L",))
+            ui.wait(
+                lambda: ui.clipboard() == "RODE — PowerPoint slide 3",
+                "Fullscreen copied the wrong slide",
+            )
             ui.control("presentation-missing-images")
             screenshot(ui.window, label + "-fullscreen.png")
             key("Escape")
@@ -114,6 +159,13 @@ def run(remote=False):
             key("Home")
             ui.control("pdf-current-page:1")
             ui.control("pdf-page-ready:1")
+            ui.control("pdf-text-ready:1")
+            key("a", ("Control_L",))
+            key("c", ("Control_L",))
+            ui.wait(
+                lambda: ui.clipboard() == "RODE — PowerPoint slide 1",
+                "Continuous view copied the wrong slide",
+            )
             ui.click("image-fit-width")
             screenshot(ui.window, label + "-continuous.png")
             ui.command("Save file")
@@ -128,12 +180,23 @@ def run(remote=False):
             key("Home")
             ui.control("pdf-current-page:1")
             updated = replace_parts(original, b"E82525", b"20BD55", only="ppt/slides/slide1.xml")
+            updated = replace_parts(
+                updated, b"slide 1", b"reloaded 1", only="ppt/slides/slide1.xml"
+            )
             presentation.write_bytes(updated)
             ui.command("PPTX: Reload preview")
             ui.control("pdf-page-ready:1")
             ui.wait(
                 lambda: green_slide(ui, label),
                 "Reloaded presentation did not show new slide pixels",
+            )
+            ui.control("pdf-text-ready:1")
+            ui.click("image-preview")
+            key("a", ("Control_L",))
+            key("c", ("Control_L",))
+            ui.wait(
+                lambda: ui.clipboard() == "RODE — PowerPoint reloaded 1",
+                "Reload kept stale PowerPoint text",
             )
             ui.command("Theme: Matrix")
             ui.control("preview-format:PPTX")
@@ -163,7 +226,7 @@ def run(remote=False):
             assert presentation.read_bytes() == b"broken PPTX package"
         print(
             label
-            + ": Native PPTX slides, images, diagnostics, navigation, fullscreen, reload and protected buffers passed."
+            + ": Native PPTX slides, selection/copy, search, diagnostics, navigation, fullscreen, reload and protected buffers passed."
         )
 
 

@@ -361,7 +361,7 @@ impl PdfView {
         let controls = self.toolbar(ui, palette, display);
         let mut page = controls.page;
         let selectable =
-            self.source.format == pdf::Format::Pdf && matches!(display, Display::Document { .. });
+            self.source.format.supports_text() && matches!(display, Display::Document { .. });
         if selectable && !self.suspended {
             let mut visible = vec![self.page];
             visible.extend(
@@ -411,7 +411,8 @@ impl PdfView {
             let loading = self.image.loading;
             let mut overlay = |ui: &mut egui::Ui, rect, response: &egui::Response| {
                 if !loading {
-                    self.text.paint(ui, self.image_page, rect, response);
+                    self.text
+                        .paint(ui, self.image_page, rect, response, self.source.format);
                 }
             };
             let response = self.image.pdf_ui(
@@ -556,7 +557,7 @@ impl PdfView {
             .id_salt(("pdf-continuous", id))
             .auto_shrink([false, false])
             .scroll_source(egui::scroll_area::ScrollSource {
-                drag: self.source.format != pdf::Format::Pdf,
+                drag: !self.source.format.supports_text(),
                 ..Default::default()
             });
         if reposition {
@@ -622,8 +623,9 @@ impl PdfView {
                 if response.clicked() || response.drag_started() {
                     ui.memory_mut(|m| m.request_focus(image_view::ImageView::focus_id(id)));
                 }
-                if self.source.format == pdf::Format::Pdf && ready {
-                    self.text.paint(ui, page, rect, &response);
+                if self.source.format.supports_text() && ready {
+                    self.text
+                        .paint(ui, page, rect, &response, self.source.format);
                 }
                 document_response = document_response.union(response.clone());
                 if ready {
@@ -654,7 +656,7 @@ impl PdfView {
             }
             self.wanted = selected;
         });
-        if self.source.format == pdf::Format::Pdf {
+        if self.source.format.supports_text() {
             image_view::middle_pan(ui, ctx, &mut output);
         }
         self.offset = output.state.offset;

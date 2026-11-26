@@ -24,7 +24,7 @@ impl PdfView {
         };
         let limit = ui.ctx().input(|i| i.max_texture_side);
         let selectable =
-            self.source.format == pdf::Format::Pdf && matches!(display, Display::Document { .. });
+            self.source.format.supports_text() && matches!(display, Display::Document { .. });
         let mut page = None;
         let mut toggle_fullscreen = false;
         let mut reload_requested = false;
@@ -140,7 +140,7 @@ impl PdfView {
                 });
             }
             if selectable {
-                self.text.search_ui(ui);
+                self.text.search_ui(ui, self.source.format);
             }
         });
         ui_probe::button(ui, "pdf-toolbar", &toolbar.response);

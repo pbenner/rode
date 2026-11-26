@@ -62,6 +62,10 @@ impl Format {
             Self::Docx => "DOCX",
         }
     }
+    /// Formats exposing positioned text for selection and document search.
+    pub fn supports_text(self) -> bool {
+        matches!(self, Self::Pdf | Self::Pptx)
+    }
 }
 
 /// Maximum accepted number of pages in a document.
@@ -248,11 +252,12 @@ impl Source {
             .take();
         drop(renderer);
     }
-    /// Open a private text reader on a background thread. No host tools or files are consulted.
+    /// Open an independent private text reader on a background thread. PPTX uses
+    /// desktop fonts like its raster worker; no project-host tools are consulted.
     pub fn text_reader(&self, cancel: &AtomicBool) -> Result<TextReader> {
         ensure!(
-            self.format == Format::Pdf,
-            "Text selection is available for PDF files."
+            self.format.supports_text(),
+            "Text selection is available for PDF and PowerPoint files."
         );
         Ok(TextReader(
             renderer::Renderer::open(&self.bytes, self.format, cancel)?.0,

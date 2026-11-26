@@ -1,4 +1,4 @@
-//! Window-local PDF selection and find presentation. The worker owns indexing;
+//! Window-local document selection and find presentation. The worker owns indexing;
 //! snapshots contain immutable Unicode cells, never source edits or host paths.
 use super::*;
 mod worker;
@@ -59,7 +59,7 @@ impl State {
             self.open();
         }
     }
-    pub fn search_ui(&mut self, ui: &mut egui::Ui) {
+    pub fn search_ui(&mut self, ui: &mut egui::Ui, format: pdf::Format) {
         if !self.open {
             return;
         }
@@ -81,13 +81,21 @@ impl State {
                     0
                 };
             let input = ui.add(crate::keyboard::named(
-                "Find in PDF",
+                if format == pdf::Format::Pptx {
+                    "Find in PowerPoint"
+                } else {
+                    "Find in PDF"
+                },
                 egui::TextEdit::singleline(&mut self.query)
                     .id(id)
                     // Match navigation handles Enter; IME confirmation must
                     // retain focus rather than taking TextEdit's default exit.
                     .return_key(None)
-                    .hint_text("Find in PDF…")
+                    .hint_text(if format == pdf::Format::Pptx {
+                        "Find in PowerPoint…"
+                    } else {
+                        "Find in PDF…"
+                    })
                     .desired_width((ui.available_width() - 320.).clamp(120., 320.))
                     .char_limit(1024),
             ));
@@ -321,6 +329,7 @@ impl State {
         page: usize,
         rect: egui::Rect,
         response: &egui::Response,
+        format: pdf::Format,
     ) {
         let Some(text) = self.page(page) else {
             return;
@@ -485,7 +494,12 @@ impl State {
                 }
                 ui.close();
             }
-            if crate::keyboard::button(ui, "Select page text").clicked() {
+            let label = if format == pdf::Format::Pptx {
+                "Select slide text"
+            } else {
+                "Select page text"
+            };
+            if crate::keyboard::button(ui, label).clicked() {
                 self.select_page(page);
                 ui.close();
             }
@@ -557,7 +571,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        ui.add_enabled_ui(enabled, |ui| state.search_ui(ui));
+                        ui.add_enabled_ui(enabled, |ui| state.search_ui(ui, pdf::Format::Pdf));
                     });
                 },
             );

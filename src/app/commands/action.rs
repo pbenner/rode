@@ -555,7 +555,7 @@ impl EditorApp {
             }
             Command::Find => {
                 if let Some(view) = self.documents.active_mut().and_then(|doc| doc.pdf_mut())
-                    && view.source.format == crate::pdf::Format::Pdf
+                    && view.source.format.supports_text()
                 {
                     view.find_text();
                     return;

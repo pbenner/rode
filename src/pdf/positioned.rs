@@ -9,8 +9,8 @@ use hayro::{
 use serde::{Deserialize, Serialize};
 
 pub(super) const FRAME_LIMIT: usize = 8 * 1024 * 1024;
-const GLYPH_LIMIT: usize = 100_000;
-const TEXT_LIMIT: usize = 1024 * 1024;
+pub(super) const GLYPH_LIMIT: usize = 100_000;
+pub(super) const TEXT_LIMIT: usize = 1024 * 1024;
 
 /// One Unicode glyph or ligature and its cell in normalized, rotated page coordinates.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub struct TextCell {
 /// Immutable text layer, independent of raster resolution, theme and zoom.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct PageText {
-    /// Text in PDF drawing order, with inferred spaces and line breaks between runs.
+    /// Text in document drawing order, with spaces and line breaks between runs.
     pub text: String,
     /// Cells in the same order as their UTF-8 ranges.
     pub cells: Vec<TextCell>,
@@ -35,7 +35,7 @@ impl PageText {
     pub(super) fn validate(&self) -> Result<()> {
         ensure!(
             self.text.len() <= TEXT_LIMIT && self.cells.len() <= GLYPH_LIMIT,
-            "PDF page text exceeds its limit."
+            "Document page text exceeds its limit."
         );
         let mut end = 0;
         for cell in &self.cells {
@@ -53,14 +53,14 @@ impl PageText {
                         .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
                     && x0 < x1
                     && y0 < y1,
-                "Invalid PDF text geometry."
+                "Invalid document text geometry."
             );
             ensure!(
                 cell.direction
                     .iter()
                     .all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
                     && cell.direction != [0., 0.],
-                "Invalid PDF text direction."
+                "Invalid document text direction."
             );
             end = next;
         }

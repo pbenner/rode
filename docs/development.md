@@ -1074,6 +1074,15 @@ Build the desktop executable before focused tests (`cargo build --profile ci --b
 
 For native local and SSH viewing: `RODE_TEST_BINARY="$PWD/target/release/rode" RODE_PDF_UI=1 xvfb-run -a -s "-screen 0 1600x1100x24" bash scripts/test-ssh.sh`. This checks pages, wheel scrolling within/across pages, zoom, source reload preserving the selected page, failed-reload preservation, themes, read-only saves and dirty code buffers. `scripts/test-pdf-ui.py` can run locally on its own. Screenshots/logs go to `target/pdf-ui/`. The two-page vector fixture at `tests/fixtures/pages.pdf` is generated test data with colored shapes and built-in Helvetica text, requiring no PDF-generation library.
 
+PowerPoint uses the same `pdf` Rust tests, including independent text/raster workers,
+Unicode text, cancellation and budget release. `--lib pdf::pptx::text` additionally
+checks shaping clusters, UTF-16 offsets, bullets, rotation, flips, clipping and
+bounded nesting. `scripts/test-pptx-ui.py` checks slide selection/copy, presentation
+search, fullscreen/continuous viewing, reload invalidation and protected source
+buffers. Run it through `scripts/ui_display.py --`; set `RODE_PPTX_UI_CASE=ssh`
+inside `scripts/test-ssh.sh` for the same checks over SSH. Artifacts go to
+`target/pptx-ui/`, or the configured CI results directory.
+
 ## Native terminals and Slurm
 
 `cargo test --test sessions --test slurm` exercises native PTY persistence after views exit, in-place persistence changes shared across views, last-view cleanup for nonpersistent sessions, two simultaneous views sharing input/output, per-session cleanup, concurrent service creation, fresh caller environments, login-startup activation without reactivation on attach, and real bwrap lifetime/access checks. The native supervisor keeps bwrap's spawning thread alive; closing the request channel must not trigger `--die-with-parent`. Slurm tests use fake queue/cancel executables to check TRES counts, pending/unknown resources, desktop/headless parity, exact allocation IDs, UID filtering, and removal of inherited cancellation overrides. They never allocate or cancel real jobs.

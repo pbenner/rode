@@ -5,6 +5,7 @@ use super::renderer::Raster;
 use super::*;
 
 mod fonts;
+mod text;
 
 pub(super) struct Presentation {
     deck: betteroffice_pptx::Presentation,
@@ -43,6 +44,17 @@ impl Presentation {
     }
     pub(super) fn warnings(&self) -> Vec<String> {
         self.warnings.clone()
+    }
+    pub(super) fn page_text(&self, page: usize) -> Result<PageText> {
+        ensure!(
+            (1..=self.deck.slides().len()).contains(&page),
+            "Invalid slide text page."
+        );
+        let rendered = self
+            .deck
+            .render_slide(page - 1)
+            .context("Cannot lay out this PowerPoint slide's text")?;
+        text::collect(&rendered.display_list)
     }
     pub(super) fn render(&self, page: usize, side: usize) -> Result<Raster> {
         ensure!(

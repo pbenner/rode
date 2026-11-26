@@ -300,11 +300,11 @@ impl Renderer {
         let start = Instant::now();
         self.request(Request::PageText { page })?;
         let Header::PageText { bytes } = self.header(cancel, start)? else {
-            bail!("Invalid PDF text layer response")
+            bail!("Invalid document text layer response")
         };
         ensure!(
             bytes <= super::positioned::FRAME_LIMIT,
-            "PDF text layer exceeds its limit."
+            "Document text layer exceeds its limit."
         );
         let mut data = vec![0; bytes];
         self.read(&mut data, cancel, start)?;
@@ -467,7 +467,13 @@ impl Backend {
     fn text(&self) -> Result<String> {
         match self {
             Self::Pdf(pdf, _) => super::text::extract(&pdf.document),
-            Self::Pptx(_) => bail!("PPTX text extraction is not available in this preview."),
+            Self::Pptx(_) => bail!("Read PowerPoint text one slide at a time."),
+        }
+    }
+    fn page_text(&self, page: usize) -> Result<PageText> {
+        match self {
+            Self::Pdf(pdf, _) => super::positioned::page(&pdf.document, page),
+            Self::Pptx(deck) => deck.page_text(page),
         }
     }
     fn warnings(&self) -> Vec<String> {
@@ -591,15 +597,12 @@ fn serve_document(path: &Path, format: Format, mut output: &mut impl Write) -> R
                 output.flush()?;
             }
             Request::PageText { page } => {
-                ensure!((1..=pages).contains(&page), "Invalid PDF text page.");
-                let Backend::Pdf(pdf, _) = &document else {
-                    bail!("No PDF text layer.")
-                };
-                let text = super::positioned::page(&pdf.document, page)?;
+                ensure!((1..=pages).contains(&page), "Invalid document text page.");
+                let text = document.page_text(page)?;
                 let bytes = serde_json::to_vec(&text)?;
                 ensure!(
                     bytes.len() <= super::positioned::FRAME_LIMIT,
-                    "PDF text layer exceeds its limit."
+                    "Document text layer exceeds its limit."
                 );
                 header(&mut output, &Header::PageText { bytes: bytes.len() })?;
                 output.write_all(&bytes)?;

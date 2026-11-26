@@ -22,18 +22,54 @@ const DOCX: &[u8] = include_bytes!("fixtures/word.docx");
 
 #[test]
 fn positioned_text_uses_the_same_snapshot_and_a_cancellable_independent_reader() {
+    for (format, bytes, expected) in [
+        (
+            pdf::Format::Pdf,
+            FIXTURE,
+            vec!["RODE - Page One", "RODE - Page Two"],
+        ),
+        (
+            pdf::Format::Pptx,
+            PPTX,
+            vec![
+                "RODE — PowerPoint slide 1",
+                "RODE — PowerPoint slide 2",
+                "RODE — PowerPoint slide 3",
+            ],
+        ),
+    ] {
+        independent_text_reader(format, bytes, &expected);
+    }
+}
+
+fn independent_text_reader(format: pdf::Format, bytes: &[u8], expected: &[&str]) {
     let budget = Arc::new(Budget::default());
-    let loaded = pdf::load_bytes(FIXTURE.to_vec(), 1, &budget, 128).unwrap();
+    let loaded = pdf::load_format_cancellable(
+        &STANDARD.encode(bytes),
+        format,
+        1,
+        &budget,
+        128,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     let cancel = AtomicBool::new(false);
     let mut reader = loaded.source.text_reader(&cancel).unwrap();
-    for (number, expected) in [(1, "RODE - Page One"), (2, "RODE - Page Two")] {
-        let page = reader.page(number, &cancel).unwrap();
-        assert_eq!(page.text, expected);
+    for (index, expected) in expected.iter().enumerate() {
+        let page = reader.page(index + 1, &cancel).unwrap();
+        assert_eq!(&page.text, expected);
         assert!(
             page.cells
                 .iter()
                 .all(|cell| page.text.get(cell.range[0]..cell.range[1]).is_some())
         );
+        assert!(page.cells.iter().all(|cell| {
+            cell.rect
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                && cell.rect[0] < cell.rect[2]
+                && cell.rect[1] < cell.rect[3]
+        }));
     }
     // Raster requests retain their own parser/cache while text is being read.
     assert!(loaded.source.render(2, &budget, 128, &cancel).is_ok());
@@ -45,6 +81,8 @@ fn positioned_text_uses_the_same_snapshot_and_a_cancellable_independent_reader()
             .to_string()
             .contains("cancelled")
     );
+    drop((reader, loaded));
+    assert_eq!(budget.used(), 0);
 }
 
 #[test]
