@@ -17,7 +17,7 @@ fn render_width(app: &mut EditorApp, ctx: &egui::Context, width: f32) {
             app.navigation.begin_layout();
             app.titlebar(ctx);
             app.activity(ctx);
-            app.explorer(ctx);
+            app.workspace_sidebar(ctx);
             app.workspace_content(ctx);
         },
     );
@@ -517,7 +517,7 @@ fn terminal_shortcut_restores_editor_focus_before_following_text() {
                 app.route_input(ctx);
                 app.navigation.begin_layout();
                 app.activity(ctx);
-                app.explorer(ctx);
+                app.workspace_sidebar(ctx);
                 app.workspace_content(ctx);
                 app.navigation_finish(ctx);
             },

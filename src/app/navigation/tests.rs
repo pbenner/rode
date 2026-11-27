@@ -172,7 +172,7 @@ fn explorer_focus_outline_clears_toolbar_controls_across_themes_and_scales() {
                 ui_probe::install_at(&ctx, path.clone());
                 app.set_explorer_visible(egui::ViewportId::ROOT, true);
                 app.navigation.active = Pane::Explorer;
-                app.navigation.explorer_width = Some(width);
+                app.editor.sidebar.width = Some(width);
                 let mut unfocused = None;
                 for focused in [false, true] {
                     app.navigation.used = focused;
@@ -186,7 +186,7 @@ fn explorer_focus_outline_clears_toolbar_controls_across_themes_and_scales() {
                                 )),
                                 ..Default::default()
                             },
-                            |ctx| app.explorer(ctx),
+                            |ctx| app.workspace_sidebar(ctx),
                         ));
                     }
                     let state: serde_json::Value =

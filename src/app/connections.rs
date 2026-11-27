@@ -287,7 +287,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    app.connections_sidebar(ctx);
+                    app.workspace_sidebar(ctx);
                     egui::CentralPanel::default().show(ctx, |_| {});
                 },
             )

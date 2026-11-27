@@ -86,7 +86,7 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
                 |ctx| {
                     app.navigation.begin_layout();
                     app.activity(ctx);
-                    app.explorer(ctx);
+                    app.workspace_sidebar(ctx);
                     app.workspace_content(ctx);
                 },
             );
@@ -346,7 +346,7 @@ fn global_root_navigation_does_not_hide_a_secondary_editors_explorer() {
             app.in_editor(viewport, |app| {
                 app.navigation.begin_layout();
                 assert_eq!(app.editing_allowed(ctx), viewport == child);
-                app.explorer(ctx);
+                app.workspace_sidebar(ctx);
                 assert_eq!(
                     app.navigation.rect(navigation::Pane::Explorer).is_some(),
                     viewport == child

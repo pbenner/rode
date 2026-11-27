@@ -2,6 +2,9 @@
 //! selection prevents Explorer and Connections from competing for the same edge.
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum View {
     Explorer,
@@ -10,15 +13,21 @@ pub(super) enum View {
 
 #[derive(Default)]
 pub(super) struct State {
-    pub connections_width: Option<f32>,
+    /// Requested width, consumed by the next unzoomed layout of this native host.
+    pub width: Option<f32>,
 }
 
-pub(super) fn connections_panel_id(zoom: bool) -> egui::Id {
-    egui::Id::new(if zoom {
-        "connections-sidebar-zoom"
+const DEFAULT_WIDTH: f32 = 250.;
+const MIN_WIDTH: f32 = 180.;
+
+/// Content-independent width/resize identity for one native host. Keep Explorer's
+/// stored IDs so existing widths survive; zoom has its own temporary geometry.
+fn panel_id(viewport: egui::ViewportId, zoom: bool) -> egui::Id {
+    if viewport == egui::ViewportId::ROOT {
+        egui::Id::new(if zoom { "explorer-zoom" } else { "explorer" })
     } else {
-        "connections-sidebar"
-    })
+        egui::Id::new(("explorer", viewport, zoom))
+    }
 }
 
 /// Sidebar libraries share a native, keyboard-discoverable disclosure without
@@ -43,6 +52,21 @@ pub(super) fn section<R>(
 }
 
 impl EditorApp {
+    fn sidebar_state_mut(&mut self, viewport: egui::ViewportId) -> Option<&mut State> {
+        self.editor_view_mut(viewport).map(|view| &mut view.sidebar)
+    }
+
+    /// Mouse and keyboard resizing use the same panel state for both components.
+    /// Accumulate commands delivered before layout rather than losing earlier steps.
+    pub(super) fn resize_sidebar(&mut self, ctx: &egui::Context, delta: f32) {
+        let viewport = ctx.viewport_id();
+        let stored = egui::containers::panel::PanelState::load(ctx, panel_id(viewport, false))
+            .map_or(DEFAULT_WIDTH, |state| state.rect.width());
+        if let Some(state) = self.sidebar_state_mut(viewport) {
+            state.width = Some(state.width.unwrap_or(stored) + delta);
+        }
+    }
+
     pub(super) fn connections_visible(&self) -> bool {
         self.presentation.sidebar == Some(View::Connections)
             && !self.tab_detached(ToolTab::Connections)
@@ -81,27 +105,43 @@ impl EditorApp {
         }
     }
 
-    /// The shared sidebar content also renders in its existing detached host.
-    /// Pin entry actions above one scrolling library, so long lists cannot hide
-    /// Open project, Connect SSH or New tunnel.
-    pub(super) fn connections_sidebar(&mut self, ctx: &egui::Context) {
-        if ctx.viewport_id() != egui::ViewportId::ROOT
-            || !self.connections_visible()
-            || !self.pane_visible(navigation::Pane::Connections, egui::ViewportId::ROOT)
-        {
+    /// One resizable themed container hosts Explorer or Connections. Switching
+    /// components changes content and focus, retaining the host's panel width.
+    pub(super) fn workspace_sidebar(&mut self, ctx: &egui::Context) {
+        let viewport = ctx.viewport_id();
+        let view = if self.explorer_visible(viewport) {
+            View::Explorer
+        } else if viewport == egui::ViewportId::ROOT && self.connections_visible() {
+            View::Connections
+        } else {
+            return;
+        };
+        let pane = match view {
+            View::Explorer => navigation::Pane::Explorer,
+            View::Connections => navigation::Pane::Connections,
+        };
+        if !self.pane_visible(pane, viewport) {
             return;
         }
         let palette = self.themes.active().palette;
-        let zoom = self.navigation.zoom == Some(navigation::Pane::Connections);
-        let maximum = (ctx.available_rect().width() - 320.).clamp(220., 450.);
-        let panel = egui::SidePanel::left(connections_panel_id(zoom))
-            .default_width(290.)
-            .width_range(220. ..=maximum)
+        let zoom = self.pane_zoom(viewport) == Some(pane);
+        let minimum_editor = if viewport == egui::ViewportId::ROOT {
+            320.
+        } else {
+            240.
+        };
+        let maximum = (ctx.available_rect().width() - minimum_editor).clamp(MIN_WIDTH, 450.);
+        let panel = egui::SidePanel::left(panel_id(viewport, zoom))
+            .default_width(DEFAULT_WIDTH)
+            .width_range(MIN_WIDTH..=maximum)
             .frame(layout::pane_frame(palette.panel));
         let panel = if zoom {
             panel.exact_width(ctx.available_rect().width())
-        } else if let Some(width) = self.sidebar.connections_width.take() {
-            panel.exact_width(width.clamp(220., maximum))
+        } else if let Some(width) = self
+            .sidebar_state_mut(viewport)
+            .and_then(|state| state.width.take())
+        {
+            panel.exact_width(width.clamp(MIN_WIDTH, maximum))
         } else {
             panel
         };
@@ -114,7 +154,10 @@ impl EditorApp {
             {
                 ui.disable();
             }
-            self.connections_content(ui, ctx);
+            match view {
+                View::Explorer => self.explorer_content(ui, ctx),
+                View::Connections => self.connections_content(ui, ctx),
+            }
         });
     }
 }

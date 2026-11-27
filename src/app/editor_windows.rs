@@ -28,8 +28,8 @@ pub(super) struct View {
     pub case_sensitive: bool,
     /// Child-window sidebar visibility; root visibility is kept by the application layout.
     pub show_explorer: bool,
-    /// Requested child sidebar width in logical points, consumed when its panel is rendered.
-    pub explorer_width: Option<f32>,
+    /// Sidebar geometry belongs to this native host, independently of the root.
+    pub sidebar: sidebar::State,
     /// Child-window zoom choice; root pane zoom belongs to the navigation owner.
     pub pane_zoom: Option<navigation::Pane>,
     /// Temporary PDF presentation owned by this native editor, never a second document/service.
@@ -51,7 +51,7 @@ impl Default for View {
             find_focus: false,
             case_sensitive: true,
             show_explorer: true,
-            explorer_width: None,
+            sidebar: Default::default(),
             pane_zoom: None,
             pdf_fullscreen: None,
         }
@@ -376,7 +376,7 @@ impl EditorApp {
             app.navigation.begin_viewport_layout(viewport);
             if !app.pdf_fullscreen_ui(ctx) {
                 app.editor_explorer_activity(ctx);
-                app.explorer(ctx);
+                app.workspace_sidebar(ctx);
                 app.git_gutter_tick(ctx);
                 app.editor(ctx);
             }

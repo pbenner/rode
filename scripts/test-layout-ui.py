@@ -40,6 +40,7 @@ def wait_for(check, message):
 
 
 def drag(start, end, check=None):
+    ui.move_pointer(*start)
     mouse_button(*start, 1, True)
     try:
         for step in range(1, 15):
@@ -52,15 +53,13 @@ def drag(start, end, check=None):
         mouse_button(*end, 1, False)
 
 
-def explorer_divider(state):
+def sidebar_divider(state, pane="Explorer"):
     controls = {button["name"]: button["rect"] for button in state["buttons"]}
-    explorer, editor = controls["pane-Explorer"], controls["pane-Editor"]
+    sidebar, editor = controls["pane-" + pane], controls["pane-Editor"]
     scale = state["pixels_per_point"]
     # Both panes use the same symmetric padding, so their midpoint is the
     # real divider without assuming a sidebar width or a theme's margin.
-    return round((explorer[2] + editor[0]) / 2 * scale), round(
-        (explorer[1] + explorer[3]) / 2 * scale
-    )
+    return round((sidebar[2] + editor[0]) / 2 * scale), round((sidebar[1] + sidebar[3]) / 2 * scale)
 
 
 def append_save(ui, path, marker, *, unsaved=""):
@@ -175,7 +174,7 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
                 ui.open_file(name)
             ui.navigate("f")
             assert_pane_outline(ui, "Explorer", "explorer-focus.png")
-            start = explorer_divider(ui.layout())
+            start = sidebar_divider(ui.layout())
             xtest.XTestFakeMotionEvent(display, -1, *start, 0)
             x11.XFlush(display)
             assert_pane_outline(ui, "Explorer", "explorer-focus-resize-hover.png")
@@ -184,15 +183,37 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
 
             def resizing():
                 ui.layout(
-                    lambda state: explorer_divider(state)[0] > start[0] + 30 * scale,
+                    lambda state: sidebar_divider(state)[0] > start[0] + 30 * scale,
                     "Explorer did not resize",
                 )
                 assert_pane_outline(ui, "Explorer", "explorer-focus-resize-active.png")
 
             drag(start, end, check=resizing)
-            drag(explorer_divider(ui.layout()), start)
+            ui.click("activity:Connections")
+            ui.control("pane-Connections")
             ui.layout(
-                lambda state: abs(explorer_divider(state)[0] - start[0]) <= 1,
+                lambda state: abs(sidebar_divider(state, "Connections")[0] - end[0]) <= 1,
+                "Switching to Connections changed the sidebar width",
+            )
+            connection_start = sidebar_divider(ui.layout(), "Connections")
+            connection_end = (round(connection_start[0] + 32 * scale), connection_start[1])
+            drag(connection_start, connection_end)
+            ui.layout(
+                lambda state: (
+                    abs(sidebar_divider(state, "Connections")[0] - connection_end[0]) <= 1
+                ),
+                "Connections did not resize",
+            )
+            ui.click("activity:Explorer")
+            ui.control("pane-Explorer")
+            ui.layout(
+                lambda state: abs(sidebar_divider(state)[0] - connection_end[0]) <= 1,
+                "Switching back to Explorer changed the sidebar width",
+            )
+            ui.navigate("f")
+            drag(sidebar_divider(ui.layout()), start)
+            ui.layout(
+                lambda state: abs(sidebar_divider(state)[0] - start[0]) <= 1,
                 "Explorer width was not restored",
             )
             assert_pane_outline(ui, "Explorer", "explorer-focus-after-resize.png")

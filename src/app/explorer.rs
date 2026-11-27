@@ -10,16 +10,6 @@ mod model;
 pub(super) use model::State;
 use model::{TreeRow, renamed};
 
-/// Stable panel-state ID for one editor and zoom mode. Root IDs preserve existing layout state;
-/// child IDs prevent width/scroll collisions.
-pub(super) fn panel_id(viewport: egui::ViewportId, zoom: bool) -> egui::Id {
-    if viewport == egui::ViewportId::ROOT {
-        egui::Id::new(if zoom { "explorer-zoom" } else { "explorer" })
-    } else {
-        egui::Id::new(("explorer", viewport, zoom))
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     File,
@@ -466,157 +456,116 @@ impl EditorApp {
         }
     }
 
-    /// Render cached directory rows and explicit project actions; directory I/O is delegated to workers.
-    pub(super) fn explorer(&mut self, ctx: &egui::Context) {
-        if ctx.viewport_id() == egui::ViewportId::ROOT
-            && self.presentation.area != areas::Area::Projects
-        {
-            return;
-        }
+    /// Explorer content inside the shared sidebar; directory I/O stays on workers.
+    pub(super) fn explorer_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        let viewport = ctx.viewport_id();
-        if !self.explorer_visible(viewport)
-            || !self.pane_visible(navigation::Pane::Explorer, viewport)
-        {
-            return;
-        }
-        let minimum_editor = if viewport == egui::ViewportId::ROOT {
-            320.
-        } else {
-            240.
-        };
-        let maximum = (ctx.available_rect().width() - minimum_editor).clamp(180., 450.);
-        let zoom = self.pane_zoom(viewport) == Some(navigation::Pane::Explorer);
-        let width = if viewport == egui::ViewportId::ROOT {
-            self.navigation.explorer_width.take()
-        } else {
-            self.editor_view_mut(viewport)
-                .and_then(|view| view.explorer_width.take())
-        };
-        let panel = egui::SidePanel::left(panel_id(viewport, zoom))
-            .default_width(250.0)
-            .width_range(180.0..=maximum)
-            .frame(layout::pane_frame(palette.panel));
-        let panel = if zoom {
-            panel.exact_width(ctx.available_rect().width())
-        } else if let Some(width) = width {
-            panel.exact_width(width.clamp(180., maximum))
-        } else {
-            panel
-        };
-        panel.show(ctx, |ui| {
-            palette.paint_panel(ui);
-            if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() {
-                ui.disable();
-            }
-            let mut content = self.pane_ui(ui, navigation::Pane::Explorer);
-            let ui = &mut content;
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.;
-                // Allocate actions first, then constrain the title to the
-                // remaining space. Theme typography cannot push actions out.
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let ready = self.project_ready()
-                        && !self.explorer_state.busy
-                        && self.dialog == Dialog::None
-                        && !self.pending.modal()
-                        && !egui::Popup::is_any_open(ctx)
-                        && ui.memory(|memory| memory.allows_interaction(ui.layer_id()));
-                    let refresh = ui
-                        .add_enabled_ui(ready, |ui| {
-                            ui.add(icons::IconButton::toolbar(
-                                Icon::Refresh,
-                                "Refresh expanded folders",
-                            ))
-                        })
-                        .inner;
-                    ui_probe::button(ui, "explorer-refresh-expanded", &refresh);
-                    if refresh.clicked() {
-                        let paths: Vec<_> = self.explorer_state.expanded.iter().cloned().collect();
-                        for path in paths {
-                            self.list(path, ctx);
-                        }
+        let mut content = self.pane_ui(ui, navigation::Pane::Explorer);
+        let ui = &mut content;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.;
+            // Allocate actions first, then constrain the title to the
+            // remaining space. Theme typography cannot push actions out.
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let ready = self.project_ready()
+                    && !self.explorer_state.busy
+                    && self.dialog == Dialog::None
+                    && !self.pending.modal()
+                    && !egui::Popup::is_any_open(ctx)
+                    && ui.memory(|memory| memory.allows_interaction(ui.layer_id()));
+                let refresh = ui
+                    .add_enabled_ui(ready, |ui| {
+                        ui.add(icons::IconButton::toolbar(
+                            Icon::Refresh,
+                            "Refresh expanded folders",
+                        ))
+                    })
+                    .inner;
+                ui_probe::button(ui, "explorer-refresh-expanded", &refresh);
+                if refresh.clicked() {
+                    let paths: Vec<_> = self.explorer_state.expanded.iter().cloned().collect();
+                    for path in paths {
+                        self.list(path, ctx);
                     }
-                    let new = ui.add(icons::IconButton::toolbar(Icon::NewFile, "New file"));
-                    ui_probe::button(ui, "explorer-new-document", &new);
-                    if new.clicked() {
-                        self.execute_command(Command::New, ctx);
-                    }
-                    ui.add_space(4.);
-                    let size = egui::vec2(ui.available_width().max(0.), 24.);
-                    ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
-                        ui.set_min_size(size);
-                        ui.add(
-                            egui::Label::new(palette.tag("Explorer").color(
-                                if palette.chrome.is_decorated() {
-                                    palette.heading
-                                } else {
-                                    palette.muted
-                                },
-                            ))
-                            .truncate(),
-                        );
-                    });
+                }
+                let new = ui.add(icons::IconButton::toolbar(Icon::NewFile, "New file"));
+                ui_probe::button(ui, "explorer-new-document", &new);
+                if new.clicked() {
+                    self.execute_command(Command::New, ctx);
+                }
+                ui.add_space(4.);
+                let size = egui::vec2(ui.available_width().max(0.), 24.);
+                ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+                    ui.set_min_size(size);
+                    ui.add(
+                        egui::Label::new(palette.tag("Explorer").color(
+                            if palette.chrome.is_decorated() {
+                                palette.heading
+                            } else {
+                                palette.muted
+                            },
+                        ))
+                        .truncate(),
+                    );
                 });
             });
-            if self.explorer_state.busy {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Updating files…");
-                });
-            }
-            ui.add_space(12.0);
-            if let Some(workspace) = self.workspace.as_ref() {
-                let root = workspace.root.clone();
-                let remote = workspace.remote.is_some();
-                let connected = workspace.connected;
-                let root_response = ui
-                    .add(
-                        egui::Label::new(
-                            RichText::new(ssh::display_name(&root))
-                                .strong()
-                                .size(12.0)
-                                .color(palette.text),
-                        )
-                        .truncate(),
-                    )
-                    .on_hover_text(&root);
-                ui_probe::button(ui, "explorer-root", &root_response);
-                let root_entry = Entry {
-                    path: root.clone(),
-                    name: ssh::display_name(&root).into(),
-                    dir: true,
-                };
-                crate::keyboard::context_menu(&root_response, |ui| {
-                    self.explorer_menu(ui, &root_entry, true, ctx)
-                });
-                // The connected host already appears in the bottom status bar.
-                // Reserve an extra explorer row only for actionable offline state.
-                if remote && !connected {
-                    ui.label(palette.tag("○ SSH PENDING / OFFLINE"));
-                    if crate::keyboard::button(ui, "Reconnect").clicked()
-                        && let Some(profile) = self
-                            .workspace
-                            .as_ref()
-                            .and_then(|w| w.remote.as_ref())
-                            .map(|r| r.profile.clone())
-                    {
-                        self.connect(profile, ctx, true);
-                    }
-                }
-                ui.add_space(8.0);
-                ui.separator();
-                self.tree(ui, &root, ctx);
-            } else {
-                if self.workspace.preparing() {
-                    ui.spinner();
-                    ui.weak("Opening local folder…");
-                } else if crate::keyboard::button(ui, "Open project…").clicked() {
-                    self.set_dialog(Dialog::Folder);
-                }
-            }
-            palette.paint_explorer_artwork(ui);
         });
+        if self.explorer_state.busy {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Updating files…");
+            });
+        }
+        ui.add_space(12.0);
+        if let Some(workspace) = self.workspace.as_ref() {
+            let root = workspace.root.clone();
+            let remote = workspace.remote.is_some();
+            let connected = workspace.connected;
+            let root_response = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(ssh::display_name(&root))
+                            .strong()
+                            .size(12.0)
+                            .color(palette.text),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(&root);
+            ui_probe::button(ui, "explorer-root", &root_response);
+            let root_entry = Entry {
+                path: root.clone(),
+                name: ssh::display_name(&root).into(),
+                dir: true,
+            };
+            crate::keyboard::context_menu(&root_response, |ui| {
+                self.explorer_menu(ui, &root_entry, true, ctx)
+            });
+            // The connected host already appears in the bottom status bar.
+            // Reserve an extra explorer row only for actionable offline state.
+            if remote && !connected {
+                ui.label(palette.tag("○ SSH PENDING / OFFLINE"));
+                if crate::keyboard::button(ui, "Reconnect").clicked()
+                    && let Some(profile) = self
+                        .workspace
+                        .as_ref()
+                        .and_then(|w| w.remote.as_ref())
+                        .map(|r| r.profile.clone())
+                {
+                    self.connect(profile, ctx, true);
+                }
+            }
+            ui.add_space(8.0);
+            ui.separator();
+            self.tree(ui, &root, ctx);
+        } else {
+            if self.workspace.preparing() {
+                ui.spinner();
+                ui.weak("Opening local folder…");
+            } else if crate::keyboard::button(ui, "Open project…").clicked() {
+                self.set_dialog(Dialog::Folder);
+            }
+        }
+        palette.paint_explorer_artwork(ui);
     }
 
     /// Render flattened visible tree rows, maintaining stable selection and deferred open/list intents.

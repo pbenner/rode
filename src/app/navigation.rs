@@ -91,7 +91,6 @@ pub(super) struct State {
     leader: Option<Instant>,
     input_viewport: egui::ViewportId,
     pub zoom: Option<Pane>,
-    pub explorer_width: Option<f32>,
     rects: [Option<egui::Rect>; Pane::COUNT],
     viewports: [Option<egui::ViewportId>; Pane::COUNT],
     native_rects: HashMap<egui::ViewportId, [Option<egui::Rect>; Pane::COUNT]>,
@@ -113,7 +112,6 @@ impl State {
             leader: None,
             input_viewport: egui::ViewportId::ROOT,
             zoom: None,
-            explorer_width: None,
             rects: [None; Pane::COUNT],
             viewports: [None; Pane::COUNT],
             native_rects: Default::default(),
@@ -483,29 +481,9 @@ impl EditorApp {
                     .max(if axis == 0 { 640. } else { 420. });
                     ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::InnerSize(size));
                 } else if matches!(action, Narrower | Wider)
-                    && self.navigation.active == Pane::Connections
+                    && matches!(self.navigation.active, Pane::Connections | Pane::Explorer)
                 {
-                    let width = egui::containers::panel::PanelState::load(
-                        ctx,
-                        sidebar::connections_panel_id(false),
-                    )
-                    .map_or(290., |state| state.rect.width());
-                    self.sidebar.connections_width =
-                        Some(width + if action == Wider { 32. } else { -32. });
-                } else if matches!(action, Narrower | Wider)
-                    && self.navigation.active == Pane::Explorer
-                {
-                    let width = egui::containers::panel::PanelState::load(
-                        ctx,
-                        explorer::panel_id(ctx.viewport_id(), false),
-                    )
-                    .map_or(250., |state| state.rect.width());
-                    let width = Some(width + if action == Wider { 32. } else { -32. });
-                    if ctx.viewport_id() == egui::ViewportId::ROOT {
-                        self.navigation.explorer_width = width;
-                    } else if let Some(view) = self.editor_view_mut(ctx.viewport_id()) {
-                        view.explorer_width = width;
-                    }
+                    self.resize_sidebar(ctx, if action == Wider { 32. } else { -32. });
                 }
             }
             Zoom => {

@@ -763,7 +763,7 @@ mod tests {
                 |ctx| {
                     app.navigation.begin_layout();
                     app.activity(ctx);
-                    app.explorer(ctx);
+                    app.workspace_sidebar(ctx);
                     app.workspace_content(ctx);
                 },
             )

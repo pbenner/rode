@@ -89,7 +89,7 @@ After SSH teardown, the workspace controller queues one Normal-mode local CWD pr
 | `src/app/navigation/` | Pane focus, validated shortcut presets and native source-editing modes |
 | `src/app/input.rs`, `src/app/input/control.rs` | Input adapter and private source replay/keymap owner; frame contexts and ordered document handoffs |
 | `src/app/transitions.rs`, `src/app/transitions/control.rs` | Ownership-transition effects and private intent/confirmation controller; source, file, save, runtime, vault and shared-folder cleanup admission |
-| `src/app/sidebar.rs`, `src/app/connections/view.rs` | Exclusive root sidebar selection, independent Connections focus/width, and compact saved lists shared with the detached owner |
+| `src/app/sidebar.rs`, `src/app/connections/view.rs` | Shared Explorer/Connections sidebar geometry, distinct pane focus, and compact saved lists shared with the detached owner |
 | `src/app/saved_connections/` | Connection form intents, catalogue reloads, submitted-form identity and serialized profile writes independent of workspace lifetime |
 | `src/shared_folders.rs`, `src/app/transfers/sharing.rs`, `src/app/transfers/sharing/view.rs`, `crates/rode-host-core/src/shared_folders/` | Captured share recipes, acknowledged automatic unsharing, intent-only presentation, cancellable SSH relays and identity-checked mounts; explicit bookmark reopening restores mounts |
 | `src/app/project_dialog.rs` | Owned selected-host project discovery state, path/selection, request tokens and candidate sandbox options; emits browse/open/cancel intents |
@@ -323,8 +323,12 @@ intact. It is idempotent rather than a toggle. Explorer and Project tools are al
 present in the root rail and can enter the project view directly. Connections
 is a sidebar destination: it retains the central area rather than replacing it.
 The presentation controller selects Explorer, Connections or neither;
-`sidebar::State` retains only the Connections width hint. A dedicated Connections
-pane identity keeps focus and geometry separate from the editor and tool panes.
+`sidebar::State` owns the requested width for each native editor host. Explorer
+and Connections render as components of one container, sharing its persisted
+width, resize limits, themed frame and modal guards. Switching components retains
+the width; zoom uses separate geometry so maximizing cannot overwrite it.
+Distinct pane identities retain each component's keyboard focus. Native child
+editors use the same container while keeping their own width and visibility.
 The same compact library renders in its detached host, with one owner for saved
 profiles, bookmarks and tunnel drafts. Explorer renders only project files; the
 tunnel manager owns running tunnels and setup, while the sidebar owns the saved

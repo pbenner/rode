@@ -173,7 +173,8 @@ Welcome is the initial view, with Explorer hidden. With no local or SSH target, 
 keeps **Connect SSH…** and **New tunnel…** above the saved
 projects, SSH profiles and tunnel setups. All three saved-list sections can be
 collapsed and use full-width rows without vertical guide lines. Switching between
-the two retains the current editor/tool view and each sidebar’s layout. The
+the two keeps the same sidebar width; resize either view to adjust both. Each
+component retains its own list/scroll state. The
 compact bookmark icon sits at the right of **Saved projects**. SSH and tunnel
 setup buttons live in Connections; **Active Tunnels** opens the running-tunnel list.
 

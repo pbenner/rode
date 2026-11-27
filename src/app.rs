@@ -226,7 +226,6 @@ pub struct EditorApp {
     startup_restore: Option<bool>,
     last_window_title: String,
     show_terminal: bool,
-    sidebar: sidebar::State,
     show_hidden: bool,
     dialog: Dialog,
     dialog_focus: bool,
@@ -357,7 +356,6 @@ impl EditorApp {
             startup_restore: None,
             last_window_title: String::new(),
             show_terminal: false,
-            sidebar: Default::default(),
             show_hidden: false,
             dialog: Dialog::None,
             dialog_focus: false,
@@ -828,8 +826,7 @@ impl eframe::App for EditorApp {
                 app.update_window_title(ctx);
                 app.statusbar(ctx);
                 app.activity(ctx);
-                app.connections_sidebar(ctx);
-                app.explorer(ctx);
+                app.workspace_sidebar(ctx);
                 app.workspace_content(ctx);
             }
             app.dialogs(ctx);

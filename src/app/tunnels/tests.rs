@@ -162,7 +162,7 @@ fn local_tunnel_manager_is_reachable_without_a_workspace_and_offers_return_detai
                 ..Default::default()
             },
             |ctx| {
-                app.connections_sidebar(ctx);
+                app.workspace_sidebar(ctx);
                 egui::CentralPanel::default().show(ctx, |_| {});
             },
         )
@@ -442,7 +442,7 @@ fn dialog_frame(
         },
         |ctx| {
             if app.dialog == Dialog::None {
-                app.connections_sidebar(ctx);
+                app.workspace_sidebar(ctx);
                 egui::CentralPanel::default().show(ctx, |_| {});
             } else {
                 app.dialogs(ctx);
@@ -839,8 +839,7 @@ fn connections_sidebar_orders_actions_and_host_bound_lists_without_replacing_the
                     ..Default::default()
                 },
                 |ctx| {
-                    app.connections_sidebar(ctx);
-                    app.explorer(ctx);
+                    app.workspace_sidebar(ctx);
                     app.workspace_content(ctx);
                 },
             )
@@ -1199,7 +1198,7 @@ fn sidebar_tunnel_counts_distinguish_connected_pending_failed_and_unknown() {
                     },
                     |ctx| {
                         app.show_connections(ctx);
-                        app.connections_sidebar(ctx);
+                        app.workspace_sidebar(ctx);
                         egui::CentralPanel::default().show(ctx, |_| {});
                     },
                 );
@@ -1287,7 +1286,7 @@ fn locking_offline_and_changed_hosts_cannot_advertise_a_previous_connected_count
     assert!(app.tunnels.observation.is_none());
     let output = ctx.run(egui::RawInput::default(), |ctx| {
         app.show_connections(ctx);
-        app.connections_sidebar(ctx);
+        app.workspace_sidebar(ctx);
         egui::CentralPanel::default().show(ctx, |_| {});
     });
     text_bounds(&output, "Active Tunnels (?)");
