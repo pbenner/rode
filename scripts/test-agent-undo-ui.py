@@ -59,6 +59,22 @@ def run():
                     ui.control("agent-idle")
 
                 send()
+                controls = {button["name"]: button["rect"] for button in ui.layout()["buttons"]}
+                row = controls["agent-undo"]
+                for name in ["agent-history", "agent-running", "agent-status"]:
+                    rect = controls[name]
+                    assert abs((rect[1] + rect[3] - row[1] - row[3]) / 2) <= 1, (
+                        f"{name} is not aligned with Undo last edits: {rect} vs {row}"
+                    )
+                row = controls["agent-send"]
+                assert controls["agent-composer"][3] < row[1], "Send overlaps the draft"
+                for name in ["agent-model-menu", "agent-access-menu", "agent-persistence"]:
+                    rect = controls[name]
+                    assert abs((rect[1] + rect[3] - row[1] - row[3]) / 2) <= 1, (
+                        f"{name} is not aligned with Send: {rect} vs {row}"
+                    )
+                assert controls["agent-model-menu"][2] < controls["agent-access-menu"][0]
+                assert controls["agent-access-menu"][2] < controls["agent-persistence"][0]
                 assert source.read_text() == "after 1\n"
                 # An open clean document must reload after the host acknowledges
                 # Undo, without discarding a separately edited buffer.

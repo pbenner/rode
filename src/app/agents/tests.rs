@@ -405,6 +405,11 @@ fn chat_header_actions_fit_inside_the_visible_panel() {
                 ctx.set_zoom_factor(scale);
                 app.agents.config.provider = Provider::Claude;
                 app.agents.config.personality = personality;
+                let status_text = if app.agents.chat.status.is_empty() {
+                    "Ready to start".to_owned()
+                } else {
+                    app.agents.chat.status.clone()
+                };
                 let mut render = || {
                     ctx.run(
                         egui::RawInput {
@@ -429,12 +434,38 @@ fn chat_header_actions_fit_inside_the_visible_panel() {
                 let button_bounds = |label| layout::tests::button_frame(&output, label).0;
                 let model = button_bounds("Model: agent");
                 let access = button_bounds("Permissions");
+                let send = button_bounds("Send");
+                let persist = button_bounds("Persist: Auto");
+                if width >= 650. {
+                    for rect in [model, access, persist] {
+                        assert!(
+                            (rect.center().y - send.center().y).abs() <= 1.,
+                            "Composer controls must share the Send row in {theme}, width={width}, scale={scale}: {send:?} vs {rect:?}"
+                        );
+                    }
+                    assert!(
+                        send.right() < model.left()
+                            && model.right() < access.left()
+                            && access.right() < persist.left()
+                    );
+                    let history = button_bounds("History");
+                    let running = button_bounds("Running");
+                    let status = layout::tests::text_bounds(&output, &status_text);
+                    assert!(
+                        (history.center().y - running.center().y).abs() <= 1.
+                            && (status.center().y - running.center().y).abs() <= 1.,
+                        "Session controls must share one header row"
+                    );
+                }
                 assert!(
                     (model.top() - access.top()).abs() <= 0.5
                         && (model.bottom() - access.bottom()).abs() <= 0.5,
                     "Model/Access misaligned in {theme} at {width}, scale={scale}: {model:?} vs {access:?}"
                 );
                 for label in [
+                    "Send",
+                    "Model: agent",
+                    "Permissions",
                     personality.button(),
                     "New chat",
                     "History",
@@ -447,6 +478,77 @@ fn chat_header_actions_fit_inside_the_visible_panel() {
                         clip.shrink(1.).contains_rect(rect),
                         "{label} clipped in {theme} at {width}, scale={scale}, oversized={oversized}: button={rect:?}, clip={clip:?}"
                     );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compact_chat_toolbars_fit_working_and_stopping_agents() {
+    for theme in ["phosphor", "studio", "studio-hacker"] {
+        for width in [220., 260., 320., 650.] {
+            for (stopping, active) in [(false, "Stop"), (true, "Close process")] {
+                let ctx = egui::Context::default();
+                let mut app = EditorApp::new(
+                    &eframe::CreationContext::_new_kittest(ctx.clone()),
+                    Startup {
+                        theme: Some(theme.into()),
+                        ..Default::default()
+                    },
+                );
+                app.agents.config.provider = Provider::Claude;
+                // An in-flight turn awaiting initialization needs no backend
+                // process. Cancellation still enters the real stopping state.
+                let chat = app.agents.chat.fixture_mut();
+                chat.apply_view(rode_agent_core::service::ChatView {
+                    conversation: "layout-fixture".into(),
+                    busy: true,
+                    status: "Working".into(),
+                    ..Default::default()
+                });
+                if stopping {
+                    chat.cancel();
+                }
+                assert!(app.agents.chat.busy);
+                assert_eq!(app.agents.chat.stopping(), stopping);
+                let mut frame = || {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 800.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| app.agent_ui(ui, ctx));
+                        },
+                    )
+                };
+                frame();
+                let output = frame();
+                let mut buttons = Vec::new();
+                for label in [
+                    "Queue",
+                    active,
+                    "Attach…",
+                    "Model: agent",
+                    "Permissions",
+                    "Persist: Auto",
+                ] {
+                    let (rect, clip) = layout::tests::button_frame(&output, label);
+                    assert!(
+                        clip.shrink(1.).contains_rect(rect),
+                        "{label} clipped in {theme}, width={width}, stopping={stopping}: {rect:?} vs {clip:?}"
+                    );
+                    for (previous_label, previous) in &buttons {
+                        assert!(
+                            rect.intersect(*previous).area() <= 0.,
+                            "Toolbar buttons {label}/{previous_label} overlap in {theme}, width={width}: {rect:?} vs {previous:?}"
+                        );
+                    }
+                    buttons.push((label, rect));
                 }
             }
         }

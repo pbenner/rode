@@ -19,6 +19,7 @@ mod background;
 mod composer;
 mod controller;
 mod controls;
+mod footer;
 mod header;
 mod history;
 mod message;

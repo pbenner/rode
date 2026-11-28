@@ -11,6 +11,8 @@ use crate::agent::{
 use eframe::egui;
 use serde_json::Value;
 
+pub(super) const MIN_BUTTON_WIDTH: f32 = 60.;
+
 /// Presentation control only: opening/selecting this menu never starts a backend
 /// or changes model, reasoning, approval or tool settings.
 pub(super) fn personality(ui: &mut egui::Ui, config: &mut Config, enabled: bool) {
@@ -62,7 +64,7 @@ pub(super) fn buttons(
             .unwrap_or_default()
     };
     let mut discover = false;
-    let width = ((ui.available_width() - ui.spacing().item_spacing.x) / 2.).max(60.);
+    let width = ((ui.available_width() - ui.spacing().item_spacing.x) / 2.).max(MIN_BUTTON_WIDTH);
     let model = if config.provider.is_acp() {
         chat.controls
             .iter()

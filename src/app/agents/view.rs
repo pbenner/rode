@@ -105,6 +105,13 @@ impl Agents {
         let hide_composer = answering || self.history_open && !self.chat.busy;
         let read_only = environment.plan.project_read_only;
         let isolated = environment.plan.active;
+        let footer = footer::Layout::new(
+            ui,
+            rect.shrink(paint_margin).width(),
+            &self.chat,
+            self.chat.busy || self.queue.waiting_for_reply() || !self.queue.is_empty(),
+        );
+        self.composer.set_toolbar_extra(footer.extra);
         let layout = self.composer.layout(
             ui,
             rect.shrink(paint_margin),
@@ -168,6 +175,17 @@ impl Agents {
                     ui_probe::value(ui, "agent-undo-revision", &button, &undo.revision.to_string());
                     undo_last = button.clicked();
                 }
+                let history = ui.add_enabled(!offline && !installing && !answering,crate::keyboard::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations for this project or other projects on this host");
+                ui_probe::button(ui, "agent-history", &history);
+                if history.clicked() {
+                    agents.history_open = !agents.history_open;
+                    if agents.history_open {history_action.refresh=true;} else {agents.browser=None;}
+                }
+                let running_button = ui.add_enabled(!offline, crate::keyboard::Button::new("Running")).on_hover_text("Reattach or stop background agent sessions on this host");
+                ui_probe::button(ui, "agent-running", &running_button);
+                if running_button.clicked() { running = true; }
+                let status = ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
+                ui_probe::button(ui, "agent-status", &status);
             });
             ui.add(egui::Label::new(palette.tag(&root)).truncate()).on_hover_text(&root);
             if agents.settings && !answering {
@@ -227,16 +245,6 @@ impl Agents {
                     ui.label(RichText::new("Agent settings are saved for this project; display preferences apply to all projects. Model and Access controls are below. Executable/provider changes start a new conversation. Use the agent's login or environment for credentials.").small().color(palette.muted));
                 });
             }
-            ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let history = ui.add_enabled(!offline && !installing && !answering,crate::keyboard::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations for this project or other projects on this host");
-                ui_probe::button(ui, "agent-history", &history);
-                if history.clicked() {
-                    agents.history_open = !agents.history_open;
-                    if agents.history_open {history_action.refresh=true;} else {agents.browser=None;}
-                }
-                if ui.add_enabled(!offline, crate::keyboard::Button::new("Running")).on_hover_text("Reattach or stop background agent sessions on this host").clicked() { running = true; }
-                ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
-            }); });
             if let Some(status) = agents.chat.response_style_status(agents.config.personality) {
                 let mismatch = matches!(status, agent::response_style::Status::Mismatch { .. });
                 let response = ui.add(egui::Label::new(RichText::new(status.message())
@@ -342,16 +350,6 @@ impl Agents {
                     }
                 });
             }
-            let control_height = layout::control_height(ui);
-            ui.add_enabled_ui(!agents.chat.busy && !offline, |ui| {
-                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), control_height), Layout::right_to_left(Align::Center), |ui| {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width().min(380.), control_height),
-                        Layout::left_to_right(Align::Center),
-                        |ui| discover_models = controls::buttons(ui, &mut agents.config, &agents.chat, agents.catalog.as_ref(), read_only, isolated),
-                    );
-                });
-            });
             agents.files.ui(ui, !modal && !offline);
             let id = egui::Id::new("agent-composer");
             let shortcut = text_submit(ui, id, modal, &mut agents.composing);
@@ -359,7 +357,7 @@ impl Agents {
                 ui, &mut agents.draft, id,
                 !modal && !agents.composing,
             );
-            let output = composer::editor(ui, &mut agents.draft, id, layout.stretch).inner;
+            let output = composer::editor(ui, &mut agents.draft, id, layout.stretch, footer.extra).inner;
             let at_start = output.cursor_range.is_some_and(|range| range.is_empty() && range.primary.index == 0);
             let response = output.response;
             if agents.focus && !modal {
@@ -391,16 +389,14 @@ impl Agents {
             {
                 ui_probe::button(ui, "agent-idle", &response);
             }
-            let action_height = layout::control_height(ui);
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), action_height),
-                Layout::right_to_left(Align::Center), |ui| {
-                    background::persistence(ui, &mut agents.chat, palette, !offline && !modal);
-                    let remaining = ui.available_width().max(1.);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(remaining, action_height),
-                        Layout::left_to_right(Align::Center),
-                        |ui| {
+            footer.show(ui, |ui, group| match group {
+                footer::Group::Persistence => background::persistence(ui, &mut agents.chat, palette, !offline && !modal),
+                footer::Group::Controls => {
+                    ui.add_enabled_ui(!agents.chat.busy && !offline, |ui| {
+                        discover_models = controls::buttons(ui, &mut agents.config, &agents.chat, agents.catalog.as_ref(), read_only, isolated);
+                    });
+                }
+                footer::Group::Actions => {
                             let enabled = !offline
                                 && !modal
                                 && !installing
@@ -465,8 +461,7 @@ impl Agents {
                                 .on_hover_text("Enter to send; Shift+Enter for a new line. At the start of the message, Up/Down recalls sent messages; Down returns to your draft.");
                                 ui_probe::button(ui, if agents.composer.waiting_older() { "agent-prompt-recall-loading" } else { "agent-prompt-recall-ready" }, &hint);
                             }
-                        },
-                    );
+                }
             });
         });
         if let Some(style) = use_host_tone {

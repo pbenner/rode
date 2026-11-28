@@ -5,8 +5,8 @@
 
 use eframe::egui::{self, Align, Key, Rect, Vec2};
 
-const DEFAULT_HEIGHT: f32 = 140.;
-const MIN_HEIGHT: f32 = 118.;
+const DEFAULT_HEIGHT: f32 = 112.;
+const MIN_HEIGHT: f32 = 90.;
 const WARNING_HEIGHT: f32 = 22.;
 const TRANSCRIPT_MIN_HEIGHT: f32 = 160.;
 
@@ -16,6 +16,7 @@ pub(super) struct State {
     /// temporarily small window clamps the actual panel or history hides input.
     height: super::splitter::State,
     attachment_height: f32,
+    toolbar_extra: f32,
     history: Vec<String>,
     recall: Option<Recall>,
     older_requested: bool,
@@ -27,6 +28,7 @@ impl Default for State {
         Self {
             height: Default::default(),
             attachment_height: 0.,
+            toolbar_extra: 0.,
             history: Vec::new(),
             recall: None,
             older_requested: false,
@@ -52,6 +54,11 @@ impl State {
     /// Reserve the measured attachment row before computing available transcript and input space.
     pub fn set_attachment_height(&mut self, height: f32) {
         self.attachment_height = height;
+    }
+
+    /// Reserve wrapped toolbar rows outside the draft's scrolling viewport.
+    pub fn set_toolbar_extra(&mut self, height: f32) {
+        self.toolbar_extra = height;
     }
 
     /// Leave prompt-history navigation while preserving the separately retained sent prompts.
@@ -306,7 +313,8 @@ impl State {
                 stretch: 0.,
             };
         }
-        let extra = if warning { WARNING_HEIGHT } else { 0. } + self.attachment_height;
+        let extra =
+            if warning { WARNING_HEIGHT } else { 0. } + self.attachment_height + self.toolbar_extra;
         let maximum = (bounds.height() - TRANSCRIPT_MIN_HEIGHT)
             .max(MIN_HEIGHT + extra)
             .min(bounds.height())
@@ -344,11 +352,13 @@ pub(super) fn editor(
     text: &mut String,
     id: egui::Id,
     stretch: f32,
+    toolbar_extra: f32,
 ) -> egui::containers::scroll_area::ScrollAreaOutput<egui::text_edit::TextEditOutput> {
     let font = egui::FontSelection::Default.resolve(ui.style());
     let row_height = ui.fonts_mut(|fonts| fonts.row_height(&font));
     let available = (ui.available_height()
         - crate::app::layout::control_height(ui)
+        - toolbar_extra
         - ui.spacing().item_spacing.y
         - 2.)
         .max(1.);
@@ -442,7 +452,7 @@ mod tests {
             ctx.run(Default::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.memory_mut(|memory| memory.request_focus(id));
-                    let output = editor(ui, &mut text, id, 0.);
+                    let output = editor(ui, &mut text, id, 0., 0.);
                     assert!(output.inner.response.has_focus());
                 });
             })
@@ -482,7 +492,7 @@ mod tests {
                         |ctx| {
                             egui::CentralPanel::default().show(ctx, |ui| {
                                 ui.memory_mut(|memory| memory.request_focus(id));
-                                let area = editor(ui, &mut draft, id, 0.);
+                                let area = editor(ui, &mut draft, id, 0., 0.);
                                 viewport = area.inner_rect;
                                 offset = area.state.offset.y;
                                 let _ = ui.button("Send");
@@ -566,7 +576,7 @@ mod tests {
                             memory.request_focus(if focused { id } else { id.with("other") })
                         });
                         self.state.recall(ui, &mut self.draft, id, enabled);
-                        output = Some(editor(ui, &mut self.draft, id, 0.).inner);
+                        output = Some(editor(ui, &mut self.draft, id, 0., 0.).inner);
                     });
                 },
             );
@@ -903,7 +913,7 @@ mod tests {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let id = egui::Id::new("agent-composer");
                     ui.memory_mut(|m| m.request_focus(id));
-                    let output = editor(ui, draft, id, stretch);
+                    let output = editor(ui, draft, id, stretch, 0.);
                     let cursor = output.inner.cursor_range.unwrap().primary;
                     view = Some(View {
                         viewport: output.inner_rect,
