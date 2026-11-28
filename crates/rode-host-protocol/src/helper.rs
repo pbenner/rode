@@ -24,6 +24,10 @@ pub const CAPABILITIES: &[&str] = &[
     // Resolver targets, login profiles and command lookup defaults must match
     // the desktop's path controls, even when an older helper is preinstalled.
     "sandbox_system_lookups",
+    // Device binds must remain device-enabled, optional and evaluated on each execution host.
+    "sandbox_devices",
+    // Notebook plots use bounded fragments and a separate raster/text retention policy.
+    "notebook_rich_output",
     "native_mise",
     "shared_compute_helper",
     "process",
@@ -191,6 +195,29 @@ impl Installed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helpers_with_small_notebook_output_limits_require_an_upgrade() {
+        let mut info = Info::current("test", 27);
+        info.capabilities
+            .retain(|cap| cap != "notebook_rich_output");
+        assert!(
+            info.validate(std::env::consts::OS, std::env::consts::ARCH, 27)
+                .unwrap_err()
+                .contains("notebook_rich_output")
+        );
+    }
+
+    #[test]
+    fn helpers_without_optional_device_grants_require_an_upgrade() {
+        let mut info = Info::current("test", 11);
+        info.capabilities.retain(|cap| cap != "sandbox_devices");
+        assert!(
+            info.validate(std::env::consts::OS, std::env::consts::ARCH, 11)
+                .unwrap_err()
+                .contains("sandbox_devices")
+        );
+    }
 
     #[test]
     fn helpers_requiring_ptrace_for_vault_lock_checks_require_an_upgrade() {

@@ -24,6 +24,8 @@ use std::{
 };
 static HELPER_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+pub(crate) mod devices;
+
 /// Explicit project-host sandbox implementation. Older preferences retain bubblewrap.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +62,9 @@ pub struct Options {
     pub read_only: Vec<String>,
     /// Additional host paths mounted read-write.
     pub read_write: Vec<String>,
+    /// Optional device files or device directories below /dev, evaluated on the execution host.
+    /// Grants include read/write and device ioctls; directories expose their entire contents.
+    pub devices: Vec<String>,
     /// Per-built-in-path access overrides, including explicit hiding.
     pub overrides: BTreeMap<String, Access>,
     /// Mount the project root read-only unless a more specific grant permits writing.
@@ -76,6 +81,8 @@ pub enum Access {
     ReadOnly,
     /// Expose the path with write access.
     ReadWrite,
+    /// Expose an optional /dev path with device access. Only valid for additional paths.
+    Device,
 }
 impl Access {
     /// Human-readable access label for the policy editor.
@@ -84,11 +91,13 @@ impl Access {
             Self::Hidden => "Hidden",
             Self::ReadOnly => "Read only",
             Self::ReadWrite => "Read + write",
+            Self::Device => "Device access",
         }
     }
-    fn flag(self) -> Option<&'static str> {
+    /// Built-in paths only support filesystem grants; explicit devices are handled separately.
+    fn filesystem_flag(self) -> Option<&'static str> {
         match self {
-            Self::Hidden => None,
+            Self::Hidden | Self::Device => None,
             Self::ReadOnly => Some("--ro-bind"),
             Self::ReadWrite => Some("--bind"),
         }
@@ -126,6 +135,7 @@ impl Default for Options {
             share_network: true,
             read_only: vec![],
             read_write: vec![],
+            devices: vec![],
             overrides: BTreeMap::new(),
             project_read_only: false,
         }
@@ -232,22 +242,21 @@ impl Options {
             return Ok(());
         }
         let defaults = default_mounts();
-        if self
-            .overrides
-            .keys()
-            .any(|p| !defaults.iter().any(|(path, _)| path == p))
-        {
+        if self.overrides.iter().any(|(p, access)| {
+            *access == Access::Device || !defaults.iter().any(|(path, _)| path == p)
+        }) {
             bail!(
-                "Sandbox overrides may only name built-in mount paths. Use additional paths for other folders."
+                "Sandbox overrides may only use filesystem access for built-in mount paths. Add other paths and devices separately."
             );
         }
-        if self.read_only.len() + self.read_write.len() > 32 {
+        if self.read_only.len() + self.read_write.len() + self.devices.len() > 32 {
             bail!("At most 32 additional sandbox paths are supported.");
         }
         if self
             .read_only
             .iter()
             .chain(&self.read_write)
+            .chain(&self.devices)
             .map(String::len)
             .sum::<usize>()
             > 16 * 1024
@@ -261,6 +270,11 @@ impl Options {
             if !path.starts_with('/') && path != "~" && !path.starts_with("~/") {
                 bail!("Additional sandbox paths must be absolute or start with ~/.");
             }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for path in &self.devices {
+            devices::validate_path(path)?;
+            anyhow::ensure!(seen.insert(path), "Duplicate sandbox device path: {path}");
         }
         Ok(())
     }
@@ -446,7 +460,7 @@ pub fn arguments(
             .get(&path)
             .copied()
             .unwrap_or(Access::ReadOnly);
-        if let Some(flag) = access.flag()
+        if let Some(flag) = access.filesystem_flag()
             && Path::new(&path).exists()
         {
             let path = grant_path(Path::new(&path))?;
@@ -478,7 +492,7 @@ pub fn arguments(
                 .copied()
                 .unwrap_or(access);
             let path = home.join(relative);
-            if let Some(flag) = access.flag()
+            if let Some(flag) = access.filesystem_flag()
                 && path.exists()
             {
                 let path = grant_path(&path)?;
@@ -511,6 +525,21 @@ pub fn arguments(
             }
             mounts.push((flag, path));
         }
+    }
+    for path in &options.devices {
+        // Keep the literal path, including when absent on the login host. Bubblewrap's
+        // optional device bind and the Landlock launcher resolve it on each execution host.
+        let resolved = devices::resolve(path)?;
+        if seen.contains(Path::new(path))
+            || resolved.as_ref().is_some_and(|path| seen.contains(path))
+        {
+            bail!("Device paths must not duplicate additional filesystem grants: {path}");
+        }
+        seen.insert(PathBuf::from(path));
+        if let Some(resolved) = resolved {
+            seen.insert(resolved);
+        }
+        mounts.push(("--dev-bind-try", PathBuf::from(path)));
     }
     let temporary = if options.backend == Backend::Bwrap {
         let path = crate::private_tmp::project(home, root)?.0;
@@ -648,6 +677,46 @@ mod private_tmp_tests {
             .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir()
             .unwrap()
+    }
+
+    #[test]
+    fn device_binds_keep_literal_compute_paths_and_do_not_enable_network() {
+        let home = private_home();
+        let project = tempfile::tempdir().unwrap();
+        for backend in [Backend::Bwrap, Backend::Landlock] {
+            let mut options = Options {
+                enabled: true,
+                backend,
+                share_network: false,
+                devices: vec!["/dev/null".into(), "/dev/rode-test-missing-device".into()],
+                ..Default::default()
+            };
+            let args = arguments(
+                &std::env::current_exe().unwrap(),
+                project.path(),
+                home.path(),
+                &options,
+            )
+            .unwrap();
+            for path in &options.devices {
+                assert!(
+                    args.windows(3)
+                        .any(|args| args == ["--dev-bind-try", path, path])
+                );
+                assert!(!args.windows(3).any(|args| args == ["--bind", path, path]));
+            }
+            assert!(!args.iter().any(|arg| arg == "--share-net"));
+            options.read_only = vec!["/dev/null".into()];
+            assert!(
+                arguments(
+                    &std::env::current_exe().unwrap(),
+                    project.path(),
+                    home.path(),
+                    &options
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

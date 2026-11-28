@@ -89,7 +89,7 @@ fn policy(argv: &[&std::ffi::OsStr]) -> Option<(usize, usize)> {
         end += match argv.get(end)?.to_str()? {
             "--" => return Some((start, end)),
             "--unshare-all" | "--die-with-parent" | "--share-net" | "--version" => 1,
-            "--bind" | "--ro-bind" | "--setenv" => 3,
+            "--bind" | "--ro-bind" | "--dev-bind-try" | "--setenv" => 3,
             "--proc" | "--dev" | "--tmpfs" | "--dir" | "--chdir" => 2,
             _ => return None,
         };
@@ -146,6 +146,9 @@ mod tests {
                 "--ro-bind",
                 "/private 'quoted' $path 🦀\nwith newline",
                 "/destination",
+                "--dev-bind-try",
+                "/dev/dri",
+                "/dev/dri",
                 "--setenv",
                 "POLICY",
                 "--",

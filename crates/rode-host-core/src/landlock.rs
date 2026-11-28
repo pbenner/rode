@@ -152,6 +152,16 @@ mod linux {
                     );
                     p.grants.push((source.into(), flag == "--bind"));
                 }
+                "--dev-bind-try" => {
+                    let source = args.next().context("Missing Landlock device source")?;
+                    ensure!(
+                        Some(source) == args.next(),
+                        "Landlock cannot remap device paths"
+                    );
+                    if let Some(path) = crate::sandbox::devices::resolve(source)? {
+                        p.grants.push((path, true));
+                    }
+                }
                 "--rode-home" => p.home = args.next().context("Missing Landlock home")?.into(),
                 "--rode-deny" => p.hidden.push(resolved(Path::new(
                     args.next().context("Missing hidden Landlock path")?,
@@ -192,6 +202,43 @@ mod linux {
             "Incomplete Landlock launch policy"
         );
         Ok(p)
+    }
+
+    #[test]
+    fn optional_device_grants_resolve_at_launch_and_reject_remaps_and_aliases() {
+        let args = |source: &str, destination: &str| {
+            [
+                "--dev-bind-try",
+                source,
+                destination,
+                "--rode-home",
+                "/home/test",
+                "--chdir",
+                "/project",
+                "--",
+                "/bin/true",
+            ]
+            .map(str::to_owned)
+        };
+        let parsed = policy(&args("/dev/null", "/dev/null")).unwrap();
+        assert_eq!(parsed.grants, [(PathBuf::from("/dev/null"), true)]);
+        assert!(
+            policy(&args(
+                "/dev/rode-test-missing-device",
+                "/dev/rode-test-missing-device"
+            ))
+            .unwrap()
+            .grants
+            .is_empty()
+        );
+        for (source, destination) in [
+            ("/dev/null", "/dev/another"),
+            ("/dev", "/dev"),
+            ("/dev/fd/0", "/dev/fd/0"),
+            ("/etc", "/etc"),
+        ] {
+            assert!(policy(&args(source, destination)).is_err());
+        }
     }
     fn validate(p: &Policy) -> Result<()> {
         for (child, writable) in p

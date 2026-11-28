@@ -20,7 +20,6 @@ import time
 from contextlib import contextmanager
 
 LIMIT = 256 * 1024
-OUTPUT_LIMIT = 1024 * 1024
 commands = queue.Queue(maxsize=4)
 closed = threading.Event()
 interrupt = threading.Event()
@@ -29,12 +28,68 @@ write_lock = threading.Lock()
 
 def emit(kind, **data):
     """Write a bounded execution-tagged JSON notification under the shared output lock."""
-    line = json.dumps(dict(kind=kind, **data), ensure_ascii=False, default=str)
+    line = compact(dict(kind=kind, **data))
     if len(line.encode("utf-8")) > 2 * 1024 * 1024:
         raise ValueError("Notebook response exceeds 2 MiB.")
     with write_lock:
         sys.stdout.write(line + "\n")
         sys.stdout.flush()
+
+
+def compact(value):
+    """Match the Rust retained-output policy's compact UTF-8 JSON accounting."""
+    return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+class OutputBudget:
+    """Account for retained output, allowing clear/display updates to reclaim their space."""
+
+    def __init__(self, limits):
+        self.limits = limits
+        self.entries = []
+
+    def clear(self):
+        self.entries.clear()
+
+    def accept(self, output, display_id, update, clear=False):
+        size = len(compact(output).encode("utf-8"))
+        text = size
+        for mime in ("image/png", "image/jpeg"):
+            if mime in output.get("data", {}):
+                text -= len(compact(output["data"][mime]).encode("utf-8"))
+        if size + 2 > self.limits["bytes"] or text + 2 > self.limits["text"]:
+            return False
+        entries = [] if clear else list(self.entries)
+        entry = (size, text, display_id)
+        if update:
+            entries = [entry if display_id and old[2] == display_id else old for old in entries]
+        else:
+            entries.append(entry)
+        separators = max(0, len(entries) - 1) + 2
+        if (
+            len(entries) > self.limits["count"]
+            or sum(old[0] for old in entries) + separators > self.limits["bytes"]
+            or sum(old[1] for old in entries) + separators > self.limits["text"]
+        ):
+            return False
+        self.entries = entries
+        return True
+
+
+def emit_output(limits, **data):
+    """Send rich output in bounded JSON fragments, preserving the original image bytes."""
+    line = compact(dict(kind="output", **data))
+    chunk = limits["chunk_chars"]
+    if len(line) <= chunk:
+        emit("output", **data)
+    else:
+        for offset in range(0, len(line), chunk):
+            emit(
+                "output_chunk",
+                id=data["id"],
+                data=line[offset : offset + chunk],
+                last=offset + chunk >= len(line),
+            )
 
 
 def read_commands():
@@ -71,7 +126,7 @@ def terminate(*_args):
     raise SystemExit(0)
 
 
-def execute(manager, client, message):
+def execute(manager, client, message, limits):
     """Run one bounded code snapshot and translate only matching Jupyter messages into safe outputs."""
     code = message.get("code", "")
     request_id = message["id"]
@@ -79,7 +134,8 @@ def execute(manager, client, message):
         raise ValueError("Code cells are limited to 128 KiB per execution.")
     interrupt.clear()
     msg_id = client.execute(code, store_history=True, allow_stdin=False, stop_on_error=True)
-    total, count, status = 0, None, "ok"
+    budget = OutputBudget(limits)
+    count, status, limited = None, "ok", False
     clear_next = False
     while not closed.is_set():
         if interrupt.is_set():
@@ -100,11 +156,17 @@ def execute(manager, client, message):
             count = content.get("execution_count")
             emit("count", id=request_id, count=count)
         elif kind == "clear_output":
+            if limited:
+                continue
             if content.get("wait"):
                 clear_next = True
             else:
                 emit("clear", id=request_id)
+                budget.clear()
+                clear_next = False
         elif kind in ("stream", "execute_result", "display_data", "update_display_data", "error"):
+            if limited:
+                continue
             if kind == "stream":
                 output = dict(
                     output_type="stream",
@@ -126,25 +188,34 @@ def execute(manager, client, message):
                 )
                 if kind == "execute_result":
                     output["execution_count"] = content.get("execution_count")
-            size = len(json.dumps(output, ensure_ascii=False).encode("utf-8"))
-            total += size
-            if total > OUTPUT_LIMIT:
+            display_id = content.get("transient", {}).get("display_id")
+            if (
+                display_id is not None
+                and (not isinstance(display_id, str) or len(display_id.encode("utf-8")) > 1024)
+            ) or not budget.accept(output, display_id, kind == "update_display_data", clear_next):
                 emit(
-                    "error",
+                    "warning",
                     id=request_id,
-                    message="Cell output exceeded 1 MiB; the kernel was stopped. Earlier output is preserved.",
+                    message=(
+                        "Cell output limit reached; this cell was interrupted. "
+                        "Earlier output and kernel variables are preserved. "
+                        f"Limits: {limits['bytes'] // (1024 * 1024)} MiB including images, "
+                        f"{limits['text'] // (1024 * 1024)} MiB of text, "
+                        f"{limits['count']} output records."
+                    ),
                 )
-                closed.set()
-                break
+                limited, status = True, "output_limit"
+                manager.interrupt_kernel()
+                continue
             if clear_next:
                 emit("clear", id=request_id)
                 clear_next = False
-            emit(
-                "output",
+            emit_output(
+                limits,
                 id=request_id,
                 output=output,
                 update=kind == "update_display_data",
-                display_id=content.get("transient", {}).get("display_id"),
+                display_id=display_id,
             )
     if closed.is_set():
         return
@@ -156,7 +227,7 @@ def execute(manager, client, message):
         except queue.Empty:
             continue
         if reply.get("parent_header", {}).get("msg_id") == msg_id:
-            status = reply["content"].get("status", status)
+            status = "output_limit" if limited else reply["content"].get("status", status)
             count = reply["content"].get("execution_count", count)
             break
     emit("done", id=request_id, status=status, count=count)
@@ -186,6 +257,7 @@ def run():
     spec = commands.get(timeout=10)
     if spec.get("cmd") != "start":
         raise ValueError("Expected notebook kernel configuration.")
+    limits = spec["output_limits"]
     try:
         import zmq
         from jupyter_client import KernelManager
@@ -203,7 +275,7 @@ def run():
     ):
         try:
             context = zmq.Context()
-            context.setsockopt(zmq.MAXMSGSIZE, 2 * 1024 * 1024)
+            context.setsockopt(zmq.MAXMSGSIZE, limits["message"])
             manager = KernelManager(
                 kernel_name=spec.get("kernel", "python3"),
                 transport="ipc",
@@ -271,7 +343,7 @@ def run():
                         raise ValueError("Notebook kernel exited.")
                     continue
                 if message.get("cmd") == "execute":
-                    execute(manager, client, message)
+                    execute(manager, client, message, limits)
         finally:
             if manager is not None:
                 if manager.has_kernel:

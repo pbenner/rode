@@ -180,6 +180,33 @@ fn adding_a_grant_appends_an_editable_row_after_writable_paths() {
 }
 
 #[test]
+fn device_rows_support_creation_editing_and_policy_replacement() {
+    let mut form = Form::new();
+    let output = form.frame(vec![]);
+    form.click(labels(&output, "+ Add device")[0]);
+    let output = form.frame(vec![]);
+    form.click(labels(&output, "/dev/device")[0]);
+    form.replace_path("/dev/dri");
+    assert_eq!(form.options.devices, ["/dev/dri"]);
+    // Start a separate edit from a loaded policy: rapid edits of a newly empty
+    // field may correctly coalesce into one native TextEdit undo operation.
+    let mut form = Form::new();
+    form.options.devices = vec!["/dev/dri".into()];
+    let id = form.focus_path("/dev/dri");
+    form.replace_path("/dev/kfd");
+    assert_eq!(form.options.devices, ["/dev/kfd"]);
+    assert_eq!(form.focus_path("/dev/kfd"), id);
+    form.key(egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(form.options.devices, ["/dev/dri"]);
+    assert_eq!(form.options.read_only, ["/data/alpha", "/data/bravo"]);
+    assert_eq!(form.options.read_write, ["/data/output"]);
+    form.options.devices = vec!["/dev/ttyUSB0".into()];
+    assert_ne!(form.focus_path("/dev/ttyUSB0"), id);
+    form.key(egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(form.options.devices, ["/dev/ttyUSB0"]);
+}
+
+#[test]
 fn folder_and_ssh_dialogs_do_not_share_rule_editing_state() {
     use crate::app::{Dialog, EditorApp, Startup};
     let ctx = Context::default();

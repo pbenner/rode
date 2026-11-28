@@ -713,8 +713,6 @@ impl EditorApp {
                                 .unwrap_or(0);
                             let clear = view.pending_clear.get(&run.uid) == Some(&run.version);
                             if clear {
-                                view.pending_clear.remove(&run.uid);
-                                view.drop_displays(run.uid);
                                 index = 0;
                             }
                             let result = view.book.apply_output(
@@ -724,16 +722,20 @@ impl EditorApp {
                                 None,
                                 clear,
                             );
-                            if matches!(&result, Ok(true))
-                                && let Some(id) = display_id
-                            {
-                                view.display_ids.entry(id).or_default().push((
-                                    run.uid,
-                                    run.version,
-                                    index,
-                                ));
+                            if matches!(&result, Ok(true)) {
+                                if clear {
+                                    view.pending_clear.remove(&run.uid);
+                                    view.drop_displays(run.uid);
+                                }
+                                if let Some(id) = display_id {
+                                    view.display_ids.entry(id).or_default().push((
+                                        run.uid,
+                                        run.version,
+                                        index,
+                                    ));
+                                }
+                                view.invalidate_pictures(run.uid);
                             }
-                            view.invalidate_pictures(run.uid);
                             result
                         }
                     }
@@ -780,12 +782,15 @@ impl EditorApp {
                         view.detach("Kernel view ended · Reattach persistent work from Sessions");
                         Ok(false)
                     }
+                    kernel::Event::Warning(warning) => {
+                        view.error = warning;
+                        Ok(false)
+                    }
                 };
                 match result {
                     Ok(value) => changed |= value,
                     Err(error) => {
                         view.error = format!("{error:#}");
-                        view.stop("Kernel stopped after an output limit");
                     }
                 }
             }

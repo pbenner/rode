@@ -1,4 +1,5 @@
 //! On-demand stateful kernels over core workspace process transport.
+mod incoming;
 pub mod outputs;
 use crate::process;
 use anyhow::{Result, ensure};
@@ -50,6 +51,8 @@ pub enum Event {
     Done(Run, String),
     /// Bridge/startup/protocol failure for display.
     Error(String),
+    /// Output was omitted or interrupted without ending the kernel or losing its variables.
+    Warning(String),
 }
 /// On-demand, project-scoped kernel and bounded sequential execution queue. Dropping the core
 /// transport stops the owned kernel; it is separate from persistent terminals.
@@ -63,6 +66,7 @@ pub struct Kernel {
     stderr: String,
     started: Instant,
     startup_timeout: Duration,
+    incoming: incoming::Incoming,
     /// Current human-readable bridge/kernel status.
     pub status: String,
     /// Project-host interpreter running the Jupyter bridge.
@@ -101,7 +105,8 @@ impl Kernel {
         execution: String,
         startup_timeout: Duration,
     ) -> Result<Self> {
-        session.send(&json!({"cmd":"start","kernel":name}))?;
+        session
+            .send(&json!({"cmd":"start","kernel":name,"output_limits":outputs::configuration()}))?;
         Ok(Self {
             session,
             queue: VecDeque::new(),
@@ -112,6 +117,7 @@ impl Kernel {
             stderr: String::new(),
             started: Instant::now(),
             startup_timeout,
+            incoming: Default::default(),
             status: "Starting kernel…".into(),
             python,
             name,
@@ -182,6 +188,7 @@ impl Kernel {
         self.session.stop();
         self.queue.clear();
         self.pending = None;
+        self.incoming = Default::default();
         self.status = "Stopped".into();
     }
     /// Whether the bridge supervisor has reaped its owned process.
@@ -195,6 +202,7 @@ impl Kernel {
         self.failed = true;
         self.queue.clear();
         self.pending = None;
+        self.incoming = Default::default();
         self.status = "Kernel failed".into();
         self.session.stop();
         events.push(Event::Error(error));
@@ -211,6 +219,14 @@ impl Kernel {
             }
             match event {
                 process::Event::Message(message) => {
+                    let message = match self.incoming.message(message) {
+                        Ok(Some(message)) => message,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            self.fail(error.to_string(), &mut events);
+                            continue;
+                        }
+                    };
                     let run = message["id"].as_u64().and_then(|id| {
                         self.pending
                             .as_ref()
@@ -277,6 +293,18 @@ impl Kernel {
                                 .into(),
                             &mut events,
                         ),
+                        "warning" => {
+                            if run.is_some() {
+                                events.push(Event::Warning(
+                                    message["message"]
+                                        .as_str()
+                                        .unwrap_or("Notebook output omitted")
+                                        .chars()
+                                        .take(8192)
+                                        .collect(),
+                                ));
+                            }
+                        }
                         _ => self.fail("Invalid notebook kernel message.".into(), &mut events),
                     }
                 }
@@ -458,5 +486,45 @@ mod tests {
         assert!(kernel.poll().is_empty());
         assert!(!kernel.ready());
         assert!(!kernel.busy());
+    }
+
+    #[test]
+    fn output_warnings_stop_only_the_queue_and_leave_the_kernel_reusable() {
+        let (mut kernel, send, stopped) = kernel(Duration::from_secs(30));
+        send.send(process::Event::Message(json!({"kind":"ready"})))
+            .unwrap();
+        kernel.poll();
+        let run = |uid| Run {
+            uid,
+            cell: format!("cell-{uid}"),
+            version: 0,
+            code: "print(value)".into(),
+        };
+        kernel.run(vec![run(1), run(2)]).unwrap();
+        send.send(process::Event::Message(
+            json!({"kind":"warning", "id":1,"message":"Earlier output and variables preserved"}),
+        ))
+        .unwrap();
+        send.send(process::Event::Message(
+            json!({"kind":"done", "id":1,"status":"output_limit"}),
+        ))
+        .unwrap();
+        let events = kernel.poll();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Warning(_)))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event,Event::Done(_,status) if status=="output_limit"))
+        );
+        assert!(!stopped.load(Ordering::Acquire));
+        assert!(kernel.ready());
+        assert!(!kernel.busy());
+        assert!(kernel.runs().is_empty());
+        kernel.run(vec![run(3)]).unwrap();
+        assert_eq!(kernel.running_uid(), Some(3));
     }
 }

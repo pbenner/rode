@@ -137,11 +137,64 @@ The sandbox deliberately does not mount VS Code directories, the entire `/run`, 
 
 Agent chat uses this same plan for the entire agent process and its tool children. Installed executables, runtimes, configuration/authentication, and caches must be reachable through these grants; for example, `~/.codex` is shared by default. Other agents may need additional explicit paths. Approving a command or file change in chat does not widen the outer sandbox. Local model servers such as Ollama run separately; their endpoints need network access, and localhost refers to the project host when using SSH. See [Agent chat](agents.md) for setup and supported protocols. Switching projects or applying a new sandbox stops the old chat process independently of SSH authentication.
 
-Use **Sandbox access rules** in the folder/SSH form, or the full **Project settings** panel. Each built-in shared path has **Hidden**, **Read only**, and **Read + write** choices. **+ Add folder or file** adds an absolute or `~/` path with its access level. Remove an extra grant with ×. **Project is read only** controls the project's base grant. **Apply sandbox settings** probes the edited rules and replaces the project environment while preserving buffers; new sandboxed shells use the edited policy; explicitly unsandboxed shells continue to use normal host permissions. Existing persistent sessions detach and keep their original sandbox. Restore the original project/policy to reattach sandboxed sessions; unsandboxed sessions require the original project on the same host. You can explicitly end either in the session manager.
+Use **Sandbox access rules** in the folder/SSH form, or the full **Project settings** panel. Each built-in shared path has **Hidden**, **Read only**, and **Read + write** choices. **+ Add folder or file** adds an absolute or `~/` path with its access level. **+ Add device** adds an explicit device grant as described below. Remove an extra grant with ×. **Project is read only** controls the project's base grant. **Apply sandbox settings** probes the edited rules and replaces the project environment while preserving buffers; new sandboxed shells use the edited policy; explicitly unsandboxed shells continue to use normal host permissions. Existing persistent sessions detach and keep their original sandbox. Restore the original project/policy to reattach sandboxed sessions; unsandboxed sessions require the original project on the same host. You can explicitly end either in the session manager.
 
-Bubblewrap project/extra grants are applied from parent to child so the most specific rule takes effect. For example, a writable project with a read-only `data/` grant protects that dataset; a read-only project with an explicitly writable `results/` grant allows only that subfolder's writes. Landlock supports the latter and rejects the former as described above. Duplicate canonical extra paths, including a duplicate project-root grant, are rejected. Paths refer to the project host, not the desktop when using SSH. A missing extra path is a configuration error; correct it or open the project in normal mode. At most 32 additional paths are accepted, with a 16 KiB total and 4,096 bytes per path.
+Bubblewrap project/extra grants are applied from parent to child so the most specific rule takes effect. For example, a writable project with a read-only `data/` grant protects that dataset; a read-only project with an explicitly writable `results/` grant allows only that subfolder's writes. Landlock supports the latter and rejects the former as described above. Duplicate canonical extra paths, including a duplicate project-root grant, are rejected. Paths refer to the project host, not the desktop when using SSH. A missing additional filesystem path is a configuration error; correct it or open the project in normal mode. At most 32 additional filesystem and device paths combined are accepted, with a 16 KiB total and 4,096 bytes per path.
 
-Saved SSH profile JSON retains `read_only`/`read_write` arrays, plus `project_read_only`, `backend` (`"bwrap"` or `"landlock"`) and a preset `overrides` map. For example, `"overrides": {"~/.cargo": "hidden", "~/.codex": "read_only"}` changes those built-in grants. The access table edits the same configuration. The baseline mount names/defaults live in [crates/rode-host-core/src/sandbox_policy.json](../crates/rode-host-core/src/sandbox_policy.json); ordinary access changes belong in settings, without editing source code.
+Saved SSH profile JSON retains `read_only`/`read_write` and `devices` arrays, plus `project_read_only`, `backend` (`"bwrap"` or `"landlock"`) and a preset `overrides` map. For example, `"overrides": {"~/.cargo": "hidden", "~/.codex": "read_only"}` changes those built-in grants. The access table edits the same configuration. The baseline mount names/defaults live in [crates/rode-host-core/src/sandbox_policy.json](../crates/rode-host-core/src/sandbox_policy.json); ordinary access changes belong in settings, without editing source code.
+
+### Device access
+
+Use **+ Add device** and enter a literal path below `/dev`. This is a generic
+permission: it can expose NVIDIA, AMD, Intel, serial, USB or other host devices.
+No vendor runtime or container toolkit is installed by RODE. Existing policies
+have no additional device grants.
+
+**Device access** permits read/write and driver commands (`ioctl`). A directory
+grant exposes its entire contents, including ordinary files and nested device
+nodes. Prefer specific nodes or a narrow device directory; the entire `/dev`,
+process descriptor aliases, traversal and wildcard patterns are rejected.
+Ordinary **Read + write** grants are filesystem grants and do not enable device
+mounts in bubblewrap.
+
+The same configuration is saved with project policies, saved projects, SSH
+profiles and reusable sandbox presets. Its JSON field is an array of paths:
+
+```json
+{"devices": ["/dev/dri", "/dev/kfd"]}
+```
+
+Examples depend on the installed driver and workload:
+
+| Device paths | Typical use |
+| --- | --- |
+| `/dev/dri/renderD128` or `/dev/dri` | DRM render devices used by Intel, AMD and other graphics drivers |
+| `/dev/kfd`, together with the required DRM render nodes | AMD ROCm compute |
+| `/dev/nvidiactl`, selected `/dev/nvidiaN` nodes | NVIDIA NVML and `nvidia-smi` |
+| `/dev/nvidia-uvm` and any other required NVIDIA nodes | CUDA workloads |
+| `/dev/ttyUSB0` or `/dev/serial/by-id/DEVICE` | A specific serial device |
+
+Driver libraries and configuration must also be readable. The standard `/usr`,
+`/lib` and `/opt` grants cover many installations. Add required sysfs paths,
+such as `/sys/devices` and `/sys/module`, as **Read only** when the driver needs
+them. Linux driver metadata under `/proc` uses the sandbox's existing proc view.
+There is no single library or metadata list suitable for every device. Consult
+the driver documentation, for example [AMD ROCm device access](https://rocmdocs.amd.com/en/latest/install/docker-containers.html)
+or [NVIDIA driver capabilities](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html#driver-capabilities).
+
+Device paths are evaluated at every launch on the actual execution host.
+Missing paths are skipped, allowing a shared policy to work on login hosts and
+compute nodes with different hardware. Other access or mount errors remain
+errors. Bubblewrap uses optional device-enabled binds; Landlock resolves and
+grants the existing device paths, including device-ioctl rights on ABI 5+.
+Updating a policy does not change the permissions of already running processes.
+
+Host file permissions, inherited restrictions and scheduler device controls still
+apply. RODE neither allocates a GPU nor changes device ownership, loads kernel
+modules or elevates privileges. Slurm GPU indices can differ from physical device
+node numbers: configure the correct nodes for the allocation, and retain the
+scheduler's visibility settings. An active sandbox probe verifies sandbox setup;
+it does not prove that a particular GPU workload can initialize its driver.
 
 ### Adapting access to your host
 

@@ -60,9 +60,9 @@ pub(in crate::app) fn rules_ui(
         let mut draft = ui.data_mut(|data| data.get_temp::<ExtraPaths>(draft_id)).unwrap_or_default();
         draft.sync(options);
         let mut remove = None;
-        list(ui, "Additional shared paths", palette, columns, |ui| {
+        list(ui, "Additional shared paths and devices", palette, columns, |ui| {
             if draft.rows.is_empty() {
-                layout::subtitle(ui, "No additional paths. Add a folder or file to share it with the project.", palette);
+                layout::subtitle(ui, "No additional paths. Add a folder, file or device to share it with the project.", palette);
             }
             for (index, grant) in draft.rows.iter_mut().enumerate() {
                 // Stable child scope also preserves text undo/cursor and button
@@ -71,7 +71,7 @@ pub(in crate::app) fn rules_ui(
                     row(ui, index, columns.height, palette, |ui| {
                         ui.add_sized(
                             [columns.path_width(ui), columns.height],crate::keyboard::named("Sandbox access path", layout::text_input(ui, &mut grant.path).font(egui::TextStyle::Monospace)
-                                .desired_width(0.).vertical_align(Align::Center).hint_text("/path or ~/folder"))).on_hover_text(grant.path.as_str());
+                                .desired_width(0.).vertical_align(Align::Center).hint_text(if grant.access == sandbox::Access::Device { "/dev/device" } else { "/path or ~/folder" }))).on_hover_text(grant.path.as_str());
                         access_picker(ui, &mut grant.access, columns, false);
                         if ui.add_sized(
                             [columns.action, columns.height],
@@ -87,10 +87,16 @@ pub(in crate::app) fn rules_ui(
             draft.rows.remove(index);
         }
         ui.add_space(6.);
-        if crate::keyboard::button(ui, "+ Add folder or file").clicked() {
-            draft.push(String::new(), sandbox::Access::ReadOnly);
-        }
+        ui.horizontal_wrapped(|ui| {
+            if crate::keyboard::button(ui, "+ Add folder or file").clicked() {
+                draft.push(String::new(), sandbox::Access::ReadOnly);
+            }
+            if crate::keyboard::button(ui, "+ Add device").clicked() {
+                draft.push(String::new(), sandbox::Access::Device);
+            }
+        });
         ui.small("Add any custom shell setup, tool installation or cache needed on this host. Paths are literal (absolute or ~/); use Read only for configuration and Read + write for tool state.");
+        ui.small("Device access shares an explicit /dev node or directory, including read/write and driver commands. Missing device paths are skipped on each execution host. Directories share all their contents. Add driver libraries and metadata above as Read only when needed; host and scheduler permissions still apply.");
         draft.publish(options);
         ui.data_mut(|data| data.insert_temp(draft_id, draft));
         ui.add_space(8.);
@@ -101,12 +107,12 @@ pub(in crate::app) fn rules_ui(
     });
 }
 
-/// Private, per-form state only; persisted options retain their existing format.
+/// Private, per-form state; persisted options group filesystem and device paths by access.
 #[derive(Clone, Default)]
 struct ExtraPaths {
     rows: Vec<ExtraPath>,
     next_serial: u64,
-    published: (Vec<String>, Vec<String>),
+    published: (Vec<String>, Vec<String>, Vec<String>),
 }
 
 #[derive(Clone)]
@@ -118,7 +124,10 @@ struct ExtraPath {
 
 impl ExtraPaths {
     fn sync(&mut self, options: &sandbox::Options) {
-        if self.published.0 == options.read_only && self.published.1 == options.read_write {
+        if self.published.0 == options.read_only
+            && self.published.1 == options.read_write
+            && self.published.2 == options.devices
+        {
             return;
         }
         // A profile switch or reset replaces the draft. Fresh IDs prevent undo
@@ -129,6 +138,9 @@ impl ExtraPaths {
         }
         for path in &options.read_write {
             self.push(path.clone(), sandbox::Access::ReadWrite);
+        }
+        for path in &options.devices {
+            self.push(path.clone(), sandbox::Access::Device);
         }
     }
 
@@ -154,7 +166,17 @@ impl ExtraPaths {
             .filter(|row| row.access == sandbox::Access::ReadWrite)
             .map(|row| row.path.clone())
             .collect();
-        self.published = (options.read_only.clone(), options.read_write.clone());
+        options.devices = self
+            .rows
+            .iter()
+            .filter(|row| row.access == sandbox::Access::Device)
+            .map(|row| row.path.clone())
+            .collect();
+        self.published = (
+            options.read_only.clone(),
+            options.read_write.clone(),
+            options.devices.clone(),
+        );
     }
 }
 
@@ -171,7 +193,7 @@ impl Columns {
         let spacing = ui.spacing();
         let text = ui.fonts_mut(|fonts| {
             fonts
-                .layout_no_wrap("Read + write".into(), font, ui.visuals().text_color())
+                .layout_no_wrap("Device access".into(), font, ui.visuals().text_color())
                 .size()
                 .x
                 .ceil()
@@ -249,14 +271,14 @@ fn access_picker(
     ui: &mut egui::Ui,
     access: &mut sandbox::Access,
     columns: Columns,
-    allow_hidden: bool,
+    built_in: bool,
 ) {
     ui.allocate_ui_with_layout(
         egui::vec2(columns.access, columns.height),
         Layout::top_down(Align::Min),
         |ui| {
             ui.set_min_size(egui::vec2(columns.access, columns.height));
-            crate::keyboard::ComboBox::new("mode", "Execution mode")
+            crate::keyboard::ComboBox::new("mode", "Path access")
                 .width(columns.access)
                 .truncate()
                 .selected_text(access.label())
@@ -265,8 +287,11 @@ fn access_picker(
                         sandbox::Access::Hidden,
                         sandbox::Access::ReadOnly,
                         sandbox::Access::ReadWrite,
+                        sandbox::Access::Device,
                     ] {
-                        if allow_hidden || value != sandbox::Access::Hidden {
+                        if (built_in && value != sandbox::Access::Device)
+                            || (!built_in && value != sandbox::Access::Hidden)
+                        {
                             crate::keyboard::selectable_value(ui, access, value, value.label());
                         }
                     }

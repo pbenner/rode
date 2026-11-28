@@ -128,6 +128,7 @@ def execution(ui, source, original, label):
     original_image = book["cells"][3]["outputs"][output_index]["data"]["image/png"]
     if isinstance(original_image, list):
         original_image = "".join(original_image)
+    assert len(original_image) > 2 * 1024 * 1024, "Plot must exceed the old transport/preview limit"
     image_path = ui.project_root / "exported-plot.png"
     image_control = f"notebook-output-image:{plot['uid']}:{output_index}"
     # Seed text so a stale image clipboard cannot satisfy the copy assertion.
@@ -315,6 +316,16 @@ def run(remote=False):
         original["cells"][0]["source"].extend(
             ["\n\nInline $E=mc^2$.\n\n", "$$x_i^2 + y_i^2 = z_i^2$$\n"]
         )
+        # A detailed wide plot crosses the former 1 MiB output and 2 MiB
+        # preview/transport limits while fitting the existing viewport layout.
+        original["cells"][3]["source"] = [
+            "import matplotlib.pyplot as plt\n",
+            "import numpy as np\n",
+            "plt.figure(figsize=(20.48, 5.12), dpi=100)\n",
+            "plt.axes([0, 0, 1, 1]); plt.axis('off')\n",
+            "plt.imshow(np.random.default_rng(7).integers(0, 256, (512, 2048, 3), dtype=np.uint8), interpolation='nearest')\n",
+            "plt.show()\n",
+        ]
         # Include partial transparency so copying cannot silently premultiply
         # the clipboard's straight RGBA pixels and darken pasted plots.
         original["cells"][3]["source"].insert(

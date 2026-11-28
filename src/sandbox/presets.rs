@@ -57,6 +57,7 @@ mod tests {
                 "enabled": true, "backend": "landlock", "share_network": false,
                 "read_only": ["~/.config/dev-shell", "/srv/site-tools"],
                 "read_write": ["~/.cache/dev-tools"], "project_read_only": true,
+                "devices": ["/dev/dri", "/dev/kfd"],
                 "overrides": {"~/.codex": "read_only"}
             }})
             .to_string(),
@@ -65,6 +66,10 @@ mod tests {
         assert_eq!(
             presets["Remote toolchain"].read_only[0],
             "~/.config/dev-shell"
+        );
+        assert_eq!(
+            presets["Remote toolchain"].devices,
+            ["/dev/dri", "/dev/kfd"]
         );
         assert_eq!(
             decode(&serde_json::to_string(&presets).unwrap()).unwrap(),

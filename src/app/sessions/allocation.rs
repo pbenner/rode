@@ -310,7 +310,7 @@ impl EditorApp {
         });
         let warning = ui.add(egui::Label::new(RichText::new(
                     if self.sessions.allocation_sandbox {
-                        "GPU tools such as nvidia-smi/CUDA may fail without sandbox access to GPU devices and driver files. Compute nodes must support the same sandbox backend."
+                        "GPU tools need Device access grants and readable driver files in the project sandbox rules. Compute nodes must support the same sandbox backend."
                     } else {
                         "Outside sandbox: commands have your normal access to host files, devices and network."
                     }

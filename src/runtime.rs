@@ -1,7 +1,7 @@
 //! Disposable desktop attachments to native host-owned notebook/debugger controllers.
 use crate::{process, sandbox, sessions, ssh};
 use anyhow::{Result, ensure};
-use rode_runtime_core::service::{Command, Envelope, Info, Spec, State, Update};
+use rode_runtime_core::service::{self, Command, Envelope, Info, Spec, State, Update};
 use std::{
     collections::VecDeque,
     sync::{
@@ -341,7 +341,11 @@ impl Client {
                             if self.persistence_change == Some(state.info.persistent) {
                                 self.persistence_change = None;
                             }
-                            if !state.error.is_empty() {
+                            // Notebook retention/execution warnings are delivered in State
+                            // while the kernel remains alive; they are not transport failures.
+                            if !state.error.is_empty()
+                                && (state.info.kind != service::Kind::Notebook || !state.info.alive)
+                            {
                                 self.error = Some(state.error.clone());
                             }
                             self.state = Some(*state.clone());

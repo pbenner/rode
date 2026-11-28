@@ -11,6 +11,89 @@ use rode::{
 };
 use std::{fs, io::Write, path::Path, process::Stdio};
 
+#[test]
+fn optional_devices_preserve_filesystem_denials_on_both_sandbox_backends() {
+    // /dev/full reads as zeroes, but is absent from the default device grants.
+    // An enclosing sandbox can deny this node before our child policy runs.
+    if fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/full")
+        .is_err()
+    {
+        native_peer::capabilities::skip(
+            "devices",
+            "/dev/full is unavailable with existing host permissions",
+        );
+        return;
+    }
+    let project = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("secret"), b"private").unwrap();
+    for backend in [sandbox::Backend::Bwrap, sandbox::Backend::Landlock] {
+        let mut options = Options {
+            enabled: true,
+            backend,
+            ..Default::default()
+        };
+        let ordinary = native_peer::prepare(project.path().to_str().unwrap(), &options).unwrap();
+        if !ordinary.active {
+            native_peer::capabilities::skip(
+                match backend {
+                    sandbox::Backend::Bwrap => "bwrap",
+                    sandbox::Backend::Landlock => "landlock",
+                },
+                &ordinary.reason,
+            );
+            continue;
+        }
+        let run = |plan: &sandbox::Plan, allowed: bool| {
+            let mut command = rode_host_core::command::from_argv(&plan.prefix).unwrap();
+            command
+                .args([
+                    "/usr/bin/python3",
+                    "-I",
+                    "-c",
+                    r#"
+import errno, fcntl, os, sys
+try:
+    fd = os.open('/dev/full', os.O_RDWR)
+except OSError as e:
+    assert sys.argv[1] == 'denied' and e.errno in (errno.EACCES, errno.EPERM, errno.ENOENT), str(e)
+else:
+    assert sys.argv[1] == 'allowed'
+    assert os.read(fd, 1) == b'\0'
+    try:
+        fcntl.ioctl(fd, 0xdeadbeef, 0)
+    except OSError as e:
+        assert e.errno == errno.ENOTTY, str(e)
+    os.close(fd)
+try:
+    open(sys.argv[2], 'rb')
+except (PermissionError, FileNotFoundError):
+    pass
+else:
+    raise AssertionError('Device grant exposed unrelated files')
+"#,
+                ])
+                .arg(if allowed { "allowed" } else { "denied" })
+                .arg(outside.path().join("secret"));
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}: {}",
+                backend.label(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&ordinary, false);
+        options.devices = vec!["/dev/full".into(), "/dev/rode-test-missing-device".into()];
+        let permitted = native_peer::prepare(project.path().to_str().unwrap(), &options).unwrap();
+        assert!(permitted.active, "{}", permitted.reason);
+        run(&permitted, true);
+    }
+}
+
 fn headless(request: &Request, path: Option<&Path>) -> anyhow::Result<Response> {
     headless_using(request, path, native_peer::binary())
 }

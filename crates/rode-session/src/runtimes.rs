@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::sync::Condvar;
 
 const FRAME_LIMIT: usize = super::framing::RUNTIME.limit();
-const NOTEBOOK_LIMIT: usize = 8 * 1024 * 1024;
+const NOTEBOOK_LIMIT: usize = notebook::outputs::MAX_NOTEBOOK_BYTES;
 const TERMINAL_EVENT_LIMIT: usize = 128;
 #[derive(Default)]
 /// Host registry of retained notebook/debugger controllers; completed persistent state
@@ -319,7 +319,7 @@ impl Store {
                     }
                     let first = revision == u64::MAX;
                     revision = shared.revision;
-                    let state = shared.view.clone();
+                    let mut state = shared.view.clone();
                     let updated: Vec<_> = shared
                         .cells
                         .iter()
@@ -361,10 +361,25 @@ impl Store {
                     sequence = shared.event_sequence;
                     shared.terminal_read_sequence = sequence;
                     drop(shared);
+                    let delivering = state.info.kind == Kind::Notebook
+                        && state.info.alive
+                        && !state.info.busy
+                        && !updated.is_empty();
+                    let completion = delivering.then(|| state.clone());
+                    if delivering {
+                        // An idle snapshot is only complete after its outputs reach
+                        // the reader. Keep the initial state frame for attachment metadata,
+                        // but do not enable Run/Save completion checks ahead of a large cell.
+                        state.info.busy = true;
+                        state.info.status = "Receiving output…".into();
+                    }
                     send(&mut writer, &Update::State(Box::new(state)))?;
                     for (key, cell) in updated {
                         cells.insert(key, cell.revision);
                         send(&mut writer, &Update::Cell(cell))?;
+                    }
+                    if let Some(completion) = completion {
+                        send(&mut writer, &Update::State(Box::new(completion)))?;
                     }
                     for event in events {
                         send(&mut writer, &Update::Terminal(event))?;
@@ -499,8 +514,8 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Envelope>, spec: Spec) {
                     changed = true;
                     if let Err(error) = notebook_event(&mut shared, event) {
                         shared.view.error = format!("{error:#}");
-                        kernel.stop();
-                        shared.finished = true;
+                        // A retention limit rejects this candidate atomically. The
+                        // computation and its variables remain useful; keep its kernel alive.
                     }
                 }
                 shared.view.info.busy = !shared.finished && kernel.busy();
@@ -744,6 +759,10 @@ fn notebook_event(shared: &mut Shared, event: notebook::Event) -> Result<()> {
         shared.finished = true;
         return Ok(());
     }
+    if let Event::Warning(warning) = event {
+        shared.view.error = warning;
+        return Ok(());
+    }
     let run = match &event {
         Event::Output { run, .. }
         | Event::Clear(run)
@@ -862,7 +881,7 @@ fn update_notebook_displays(
 fn check_notebook_budget(cells: usize, size: usize) -> Result<()> {
     ensure!(
         cells <= 1024 && size <= NOTEBOOK_LIMIT,
-        "Retained notebook outputs exceed 8 MiB; shut down this kernel and clear outputs"
+        "Retained notebook outputs exceed 64 MiB or 1024 cells; earlier output and kernel variables are preserved. Clear outputs to make room."
     );
     Ok(())
 }
@@ -1045,10 +1064,14 @@ mod tests {
                 done.send(attached.attach(server, &attaching_id, policy))
                     .unwrap();
             });
-            assert!(matches!(
-                receive::<Update>(&mut peer).unwrap(),
-                Update::State(_)
-            ));
+            let Update::State(receiving) = receive::<Update>(&mut peer).unwrap() else {
+                panic!("Expected attachment metadata before the cell")
+            };
+            assert!(
+                receiving.info.busy,
+                "Idle must wait until the complete output is delivered"
+            );
+            assert_eq!(receiving.info.status, "Receiving output…");
             // Read the next frame's header and one payload byte. The remaining
             // cell exceeds SO_SNDBUF, so the writer must wait for this reader.
             let mut header = [0; 5];
@@ -1072,6 +1095,11 @@ mod tests {
                 panic!("Expected the complete retained output cell")
             };
             assert_eq!(delivered.outputs[0].value, expected);
+            let Update::State(complete) = receive::<Update>(&mut peer).unwrap() else {
+                panic!("Expected completion state after the cell")
+            };
+            assert!(!complete.info.busy);
+            assert_eq!(complete.info.status, "Idle");
 
             // The command reader must also survive an idle period longer than
             // its handshake deadline, while retaining the same attachment.
@@ -1129,9 +1157,9 @@ mod tests {
         let mut cells = display_cells();
         let previous = serde_json::to_vec(&cells).unwrap();
         let output =
-            json!({"output_type":"display_data", "data":{"text/plain":"x".repeat(512*1024)}});
+            json!({"output_type":"display_data", "data":{"image/png":"x".repeat(4*1024*1024)}});
         let error = update_notebook_displays(&mut cells, "shared", &output).unwrap_err();
-        assert!(error.to_string().contains("8 MiB"));
+        assert!(error.to_string().contains("64 MiB"));
         assert_eq!(serde_json::to_vec(&cells).unwrap(), previous);
     }
 

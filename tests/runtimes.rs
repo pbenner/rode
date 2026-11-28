@@ -624,7 +624,8 @@ fn slow_debugger_views_keep_their_terminal_and_controls_during_output_bursts() {
 }
 
 #[test]
-fn display_update_overflow_stops_the_kernel_and_replays_its_earlier_outputs() {
+fn display_update_overflow_preserves_outputs_and_keeps_kernel_reusable() {
+    const SEEDS: usize = 160;
     let mut fixture = Fixture::new();
     let bridge = r#"
 import sys, json
@@ -641,8 +642,7 @@ for line in sys.stdin:
         emit('output', id=message['id'],
              output={'output_type':'display_data', 'data':{'text/plain':'x'*(512*1024 if update else 1)}, 'metadata':{}},
              display_id='shared', update=update)
-        if not update:
-            emit('done', id=message['id'], status='ok')
+        emit('done', id=message['id'], status='ok')
     elif message['cmd'] == 'shutdown':
         break
 "#;
@@ -659,9 +659,9 @@ for line in sys.stdin:
         &session,
         |u| matches!(u, Update::State(s) if !s.language.is_null()),
     );
-    let runs = (0..20)
+    let runs = (0..SEEDS)
         .map(|uid| rode_runtime_core::notebook::Run {
-            uid,
+            uid: uid as u64,
             cell: format!("cell-{uid}"),
             version: 0,
             code: format!("seed-{uid}"),
@@ -676,7 +676,7 @@ for line in sys.stdin:
         &session,
         Action::Run {
             runs: vec![rode_runtime_core::notebook::Run {
-                uid: 100,
+                uid: 200,
                 cell: "update".into(),
                 version: 0,
                 code: "update".into(),
@@ -685,23 +685,44 @@ for line in sys.stdin:
     );
     wait(
         &session,
-        |u| matches!(u, Update::State(s) if !s.info.alive && s.error.contains("8 MiB")),
+        |u| matches!(u, Update::State(s) if s.info.alive && !s.info.busy && s.error.contains("64 MiB")),
     );
     drop(session);
     until(|| !fixture.infos()[0].attached);
     let session = fixture.attach(&info);
     let mut replayed = BTreeMap::new();
     wait(&session, |update| {
-        if let Update::Cell(cell) = update {
+        if let Update::Cell(cell) = update
+            && cell.run.cell.starts_with("cell-")
+        {
             replayed.insert(cell.run.cell.clone(), cell.clone());
         }
-        replayed.len() == 20
+        replayed.len() == SEEDS
     });
-    assert_eq!(replayed.len(), 20);
+    assert_eq!(replayed.len(), SEEDS);
     for cell in replayed.values() {
         assert_eq!(cell.outputs.len(), 1);
         assert_eq!(cell.outputs[0].value["data"]["text/plain"], "x");
         assert_eq!(cell.done.as_deref(), Some("ok"));
     }
-    assert!(serde_json::to_vec(&replayed).unwrap().len() < 8 * 1024 * 1024);
+    assert!(
+        serde_json::to_vec(&replayed).unwrap().len()
+            < rode_runtime_core::notebook::outputs::MAX_NOTEBOOK_BYTES
+    );
+    action(
+        &session,
+        Action::Run {
+            runs: vec![rode_runtime_core::notebook::Run {
+                uid: 201,
+                cell: "probe".into(),
+                version: 0,
+                code: "reuse".into(),
+            }],
+        },
+    );
+    wait(
+        &session,
+        |update| matches!(update, Update::Cell(cell) if cell.run.cell == "probe" && cell.done.as_deref() == Some("ok")),
+    );
+    assert!(fixture.infos()[0].alive);
 }

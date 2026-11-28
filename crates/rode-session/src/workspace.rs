@@ -432,6 +432,17 @@ mod tests {
             changed.project_read_only = true;
             different(changed);
             let mut changed = plan.clone();
+            let end = changed.prefix.len() - 1;
+            changed.prefix.splice(
+                end..end,
+                [
+                    "--dev-bind-try".into(),
+                    "/dev/dri".into(),
+                    "/dev/dri".into(),
+                ],
+            );
+            different(changed);
+            let mut changed = plan.clone();
             changed.active = false;
             different(changed);
             let mut changed = plan.clone();

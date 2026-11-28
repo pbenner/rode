@@ -180,7 +180,7 @@ impl EditorApp {
 pub(super) fn image_bundle(bundle: &Value) -> Option<(String, String)> {
     for (mime, path) in [("image/png", "output.png"), ("image/jpeg", "output.jpg")] {
         if let Ok(data) = notebook::multiline(&bundle[mime])
-            && data.len() <= 2 * 1024 * 1024
+            && data.len() <= notebook::MAX_OUTPUT_BYTES
         {
             return Some((data, path.into()));
         }
@@ -268,7 +268,7 @@ mod tests {
             json!({}),
             json!({"image/png": "invalid"}),
             json!({"image/png": STANDARD.encode(b"not an image")}),
-            json!({"image/png": "a".repeat(2 * 1024 * 1024 + 1)}),
+            json!({"image/png": "a".repeat(notebook::MAX_OUTPUT_BYTES + 1)}),
         ] {
             assert!(ImageExport::capture(1, "book.ipynb", 1, 1, &bundle).is_err());
         }

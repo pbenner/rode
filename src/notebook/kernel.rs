@@ -371,8 +371,12 @@ impl Kernel {
                         self.ready = true;
                         events.push(Event::Ready(state.language.clone()));
                     }
-                    if !state.info.alive && !state.error.is_empty() {
-                        events.push(Event::Error(state.error));
+                    if !state.error.is_empty() {
+                        events.push(if state.info.alive {
+                            Event::Warning(state.error)
+                        } else {
+                            Event::Error(state.error)
+                        });
                     }
                 }
                 Update::Cell(cell) => {

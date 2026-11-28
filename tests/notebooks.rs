@@ -17,6 +17,143 @@ use std::{
     time::{Duration, Instant},
 };
 const FIXTURE: &str = include_str!("fixtures/notebook.ipynb");
+
+#[test]
+fn bridge_accounting_fragments_and_nonfatal_limits_need_no_jupyter_installation() {
+    let result = std::process::Command::new("python3")
+        .args([
+            "-I",
+            "-c",
+            include_str!("notebooks/bridge.py"),
+            include_str!("../crates/rode-host-core/src/notebook_kernel.py"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn large_plots_updates_and_output_overflow_preserve_the_running_kernel() {
+    let Some(python) = interpreter() else {
+        return;
+    };
+    for managed in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let plan =
+            native_peer::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
+        let mut kernel = if managed {
+            Kernel::start_managed(
+                plan,
+                None,
+                python.clone(),
+                "python3".into(),
+                None,
+                root.path().join("plots.ipynb").to_string_lossy().into(),
+                false,
+                Arc::new(|| {}),
+            )
+        } else {
+            Kernel::start(
+                plan,
+                None,
+                python.clone(),
+                "python3".into(),
+                Arc::new(|| {}),
+            )
+        }
+        .unwrap();
+        let run = |uid: u64, code: String| Run {
+            uid,
+            cell: format!("cell-{uid}"),
+            version: 0,
+            code,
+        };
+        let plot = run(1, r#"
+import os, base64, numpy as np
+import matplotlib.pyplot as plt
+from IPython.display import display, update_display
+sentinel = 123
+kernel_pid = os.getpid()
+fig = plt.figure(figsize=(10.24, 10.24), dpi=100)
+ax = fig.add_axes([0, 0, 1, 1])
+ax.set_axis_off()
+ax.imshow(np.random.default_rng(7).integers(0, 256, (1024, 1024, 3), dtype=np.uint8), interpolation='nearest')
+fig.savefig('large-plot.png', dpi=100)
+plt.close(fig)
+with open('large-plot.png', 'rb') as image:
+    encoded_plot = base64.b64encode(image.read()).decode('ascii')
+display({'image/png': encoded_plot, 'text/plain': '日本語 plot'}, raw=True, display_id='large-plot')
+for _ in range(3):
+    update_display({'image/png': encoded_plot, 'text/plain': 'Updated plot'}, raw=True, display_id='large-plot')
+"#.into());
+        kernel.bind(vec![plot.clone()]);
+        kernel.run(vec![plot]).unwrap();
+        let events = wait(&mut kernel, 1);
+        let warnings = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Warning(warning) => Some(warning.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let png = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Output { output, .. } => output["data"]["image/png"].as_str(),
+                _ => None,
+            })
+            .expect("No high-resolution plot output");
+        assert!(png.len() > 2 * 1024 * 1024);
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        assert_eq!(
+            STANDARD.decode(png).unwrap(),
+            std::fs::read(root.path().join("large-plot.png")).unwrap()
+        );
+
+        let overflow = run(
+            2,
+            format!(
+                "print('x' * {})",
+                rode_runtime_core::notebook::outputs::MAX_TEXT_BYTES + 1
+            ),
+        );
+        let skipped = run(3, "open('must-not-run', 'w').write('wrong')".into());
+        kernel.bind(vec![overflow.clone(), skipped.clone()]);
+        kernel.run(vec![overflow, skipped]).unwrap();
+        let events = wait(&mut kernel, 1);
+        assert!(events.iter().any(
+            |event| matches!(event, Event::Warning(message) if message.contains("preserved"))
+        ));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Done(_, status) if status == "output_limit"))
+        );
+        assert!(!root.path().join("must-not-run").exists());
+        let reuse = run(
+            4,
+            "assert sentinel == 123\nassert os.getpid() == kernel_pid\nprint('same kernel')".into(),
+        );
+        kernel.bind(vec![reuse.clone()]);
+        kernel.run(vec![reuse]).unwrap();
+        let events = wait(&mut kernel, 1);
+        assert!(events.iter().any(
+            |event| matches!(event, Event::Output{output,..} if output["text"]=="same kernel\n")
+        ));
+        kernel.stop();
+        let until = Instant::now() + Duration::from_secs(10);
+        while kernel.pending() {
+            kernel.poll();
+            assert!(Instant::now() < until, "Kernel shutdown did not complete");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
 fn interpreter() -> Option<String> {
     native_peer::capabilities::tool("jupyter", &["RODE_TEST_JUPYTER"])
 }
@@ -24,7 +161,9 @@ fn wait(kernel: &mut Kernel, done: usize) -> Vec<Event> {
     let mut events = vec![];
     let mut completed = 0;
     let start = Instant::now();
-    while completed < done {
+    // A host-managed completion includes the final idle acknowledgement after
+    // its retained output has crossed the attachment stream.
+    while completed < done || kernel.busy() {
         assert!(
             start.elapsed() < Duration::from_secs(35),
             "kernel timeout: {}",
