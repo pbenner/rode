@@ -39,6 +39,29 @@ class Client:
 
 
 class OutputPolicy(unittest.TestCase):
+    def test_stream_fragments_share_one_record_and_match_json_byte_accounting(self):
+        budget = bridge["OutputBudget"](dict(limits, bytes=8192, text=4096))
+        joined = ""
+        for fragment in ["日", "🦀", "\n", '"', "\\"] * 70:
+            output = dict(output_type="stream", name="stdout", text=fragment)
+            self.assertTrue(budget.accept(output, None, False), budget.reason)
+            joined += fragment
+        retained = dict(output_type="stream", name="stdout", text=joined)
+        size = len(bridge["compact"](retained).encode("utf-8"))
+        self.assertEqual(len(budget.entries), 1)
+        self.assertEqual(budget.entries[0][:2], (size, size))
+        for output in [
+            dict(output_type="stream", name="stderr", text="error"),
+            dict(output_type="display_data", data={"text/plain": "result"}),
+            dict(output_type="stream", name="stdout", text="after display"),
+        ]:
+            self.assertTrue(budget.accept(output, None, False), budget.reason)
+        self.assertEqual(len(budget.entries), limits["count"])
+        self.assertFalse(
+            budget.accept(dict(output_type="stream", name="stderr", text="error"), None, False)
+        )
+        self.assertIn("output records", budget.reason)
+
     def test_updates_replace_and_clear_reclaims_retained_bytes(self):
         budget = bridge["OutputBudget"](limits)
         image = {"output_type": "display_data", "data": {"image/png": "a" * 1200}}
@@ -66,12 +89,16 @@ class OutputPolicy(unittest.TestCase):
         result = json.loads("".join(chunk["data"] for chunk in chunks))
         self.assertEqual(result["output"], output)
 
-    def test_limit_interrupts_the_cell_without_closing_the_bridge(self):
+    def test_limits_omit_only_rejected_output_without_interrupting_the_cell(self):
         client = Client(
             [
                 ("stream", {"text": "earlier output"}),
                 ("stream", {"text": "x" * 300}),
-                ("stream", {"text": "omitted"}),
+                ("stream", {"text": "later output"}),
+                ("stream", {"text": "x" * 400}),
+                ("clear_output", {"wait": True}),
+                ("stream", {"text": "x" * 300}),
+                ("display_data", {"data": {"image/png": "a" * 1200}}),
                 ("status", {"execution_state": "idle"}),
             ]
         )
@@ -80,14 +107,26 @@ class OutputPolicy(unittest.TestCase):
         with contextlib.redirect_stdout(stream):
             bridge["execute"](manager, client, {"id": 17, "code": "print(value)"}, limits)
         events = [json.loads(line) for line in stream.getvalue().splitlines()]
-        self.assertEqual(manager.interrupts, 1)
+        self.assertEqual(manager.interrupts, 0)
         self.assertFalse(bridge["closed"].is_set())
-        self.assertEqual(events[-1]["status"], "output_limit")
+        self.assertEqual(events[-1]["status"], "ok")
         self.assertEqual(sum(event["kind"] == "warning" for event in events), 1)
-        output = json.loads(
-            "".join(event["data"] for event in events if event["kind"] == "output_chunk")
-        )
-        self.assertEqual(output["output"]["text"], "earlier output")
+        self.assertEqual(sum(event["kind"] == "clear" for event in events), 1)
+        outputs, pending = [], ""
+        for event in events:
+            if event["kind"] == "output":
+                outputs.append(event["output"])
+            elif event["kind"] == "output_chunk":
+                pending += event["data"]
+                if event["last"]:
+                    outputs.append(json.loads(pending)["output"])
+                    pending = ""
+        self.assertEqual(outputs[0]["text"], "earlier output")
+        self.assertEqual(outputs[1]["text"], "later output")
+        self.assertEqual(outputs[2]["data"]["image/png"], "a" * 1200)
+        warning = next(event["message"] for event in events if event["kind"] == "warning")
+        self.assertIn("MiB of text", warning)
+        self.assertIn("Computation continues", warning)
 
     def test_immediate_clear_replaces_a_pending_deferred_clear(self):
         manager = Manager()

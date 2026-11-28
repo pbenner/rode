@@ -51,7 +51,7 @@ pub enum Event {
     Done(Run, String),
     /// Bridge/startup/protocol failure for display.
     Error(String),
-    /// Output was omitted or interrupted without ending the kernel or losing its variables.
+    /// Output was omitted without interrupting execution or losing kernel variables.
     Warning(String),
 }
 /// On-demand, project-scoped kernel and bounded sequential execution queue. Dropping the core
@@ -489,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn output_warnings_stop_only_the_queue_and_leave_the_kernel_reusable() {
+    fn output_warnings_keep_the_queue_running_and_execution_errors_still_stop_it() {
         let (mut kernel, send, stopped) = kernel(Duration::from_secs(30));
         send.send(process::Event::Message(json!({"kind":"ready"})))
             .unwrap();
@@ -500,13 +500,13 @@ mod tests {
             version: 0,
             code: "print(value)".into(),
         };
-        kernel.run(vec![run(1), run(2)]).unwrap();
+        kernel.run(vec![run(1), run(2), run(3)]).unwrap();
         send.send(process::Event::Message(
             json!({"kind":"warning", "id":1,"message":"Earlier output and variables preserved"}),
         ))
         .unwrap();
         send.send(process::Event::Message(
-            json!({"kind":"done", "id":1,"status":"output_limit"}),
+            json!({"kind":"done", "id":1,"status":"ok"}),
         ))
         .unwrap();
         let events = kernel.poll();
@@ -518,13 +518,25 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event,Event::Done(_,status) if status=="output_limit"))
+                .any(|event| matches!(event,Event::Done(_,status) if status=="ok"))
         );
         assert!(!stopped.load(Ordering::Acquire));
         assert!(kernel.ready());
+        assert!(kernel.busy());
+        assert_eq!(kernel.running_uid(), Some(2));
+        assert_eq!(
+            kernel.runs().iter().map(|run| run.uid).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        send.send(process::Event::Message(
+            json!({"kind":"done", "id":2,"status":"error"}),
+        ))
+        .unwrap();
+        kernel.poll();
         assert!(!kernel.busy());
         assert!(kernel.runs().is_empty());
-        kernel.run(vec![run(3)]).unwrap();
-        assert_eq!(kernel.running_uid(), Some(3));
+        assert!(!stopped.load(Ordering::Acquire));
+        kernel.run(vec![run(4)]).unwrap();
+        assert_eq!(kernel.running_uid(), Some(4));
     }
 }

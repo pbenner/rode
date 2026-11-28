@@ -652,7 +652,11 @@ fn apply(controller: &mut Controller, job: &Job, action: Action) -> Result<()> {
                 serde_json::to_vec(&runs)?.len() <= 8 * 1024 * 1024,
                 "Notebook queue exceeds 8 MiB encoded size"
             );
-            kernel.run(runs)
+            kernel.run(runs)?;
+            // A warning belongs to the previously submitted queue. Do not
+            // replay it as a new failure after accepting another execution.
+            job.shared.lock().unwrap().view.error.clear();
+            Ok(())
         }
         Action::Retain { cells } => {
             let Controller::Notebook(kernel) = controller else {
@@ -801,10 +805,17 @@ fn notebook_event(shared: &mut Shared, event: notebook::Event) -> Result<()> {
         Event::Output {
             output, display_id, ..
         } => {
-            cell.outputs.push(service::Output {
-                value: output,
-                display: display_id,
-            });
+            let merged = display_id.is_none()
+                && cell.outputs.last_mut().is_some_and(|previous| {
+                    previous.display.is_none()
+                        && notebook::outputs::merge_stream(&mut previous.value, &output)
+                });
+            if !merged {
+                cell.outputs.push(service::Output {
+                    value: output,
+                    display: display_id,
+                });
+            }
         }
         Event::Clear(_) => cell.outputs.clear(),
         Event::Count(_, count) => cell.count = Some(count),

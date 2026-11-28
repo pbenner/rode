@@ -8,8 +8,9 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Required service protocol, including chunked notebook output and nonfatal output limits.
-pub const PROTOCOL: u32 = 27;
+/// Required service protocol, including coalesced notebook streams and output
+/// retention limits that never interrupt computation.
+pub const PROTOCOL: u32 = 28;
 
 /// Host-service metadata for one terminal; no live PTY handle is transferred to clients.
 #[derive(Clone, Debug, Serialize, Deserialize)]

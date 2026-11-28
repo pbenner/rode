@@ -183,7 +183,7 @@ fn allocation_footer_stays_visible_with_expanded_options_errors_and_scaled_windo
     }
 
     for theme in ["carbon", "sumie-light"] {
-        for scale in [1., 1.5] {
+        for scale in [0.75, 1., 1.5] {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("allocation.json");
             let ctx = egui::Context::default();
@@ -210,6 +210,24 @@ fn allocation_footer_stays_visible_with_expanded_options_errors_and_scaled_windo
             let large = egui::vec2(1380., 1000.);
             for _ in 0..5 {
                 render(&mut app, large, vec![]);
+            }
+            // A short form must keep its actions beside the content instead of
+            // centring them in unused viewport space. Text fields share their
+            // row's control height even when the interface is zoomed out.
+            let (snapshot, output) = render(&mut app, large, vec![]);
+            let actions = control(&snapshot, "slurm-allocate");
+            let lifetime = control(&snapshot, "slurm-lifetime");
+            assert!(
+                actions.top() - lifetime.bottom() <= 2. * actions.height(),
+                "Detached footer at {theme}/{scale}: {lifetime:?}, {actions:?}"
+            );
+            for value in ["2", "80"] {
+                let (field, clip) = crate::app::layout::tests::button_frame(&output, value);
+                assert!(clip.contains_rect(field));
+                assert!(
+                    (field.height() - actions.height()).abs() <= 1.,
+                    "Uneven controls at {theme}/{scale}: field {field:?}, action {actions:?}"
+                );
             }
             // Open real disclosure controls before resizing, so retained grid
             // widths and long content exercise the same modal as native input.

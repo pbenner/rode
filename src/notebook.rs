@@ -304,7 +304,12 @@ impl Notebook {
             let outputs = cell.data["outputs"]
                 .as_array_mut()
                 .context("Cell outputs are invalid")?;
-            outputs.push(output);
+            if !outputs
+                .last_mut()
+                .is_some_and(|previous| outputs::merge_stream(previous, &output))
+            {
+                outputs.push(output);
+            }
         }
         if let Err(error) = outputs::validate(cell.outputs()) {
             cell.data = old;

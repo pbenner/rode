@@ -175,12 +175,12 @@ impl EditorApp {
         let control_height = layout::control_height(ui);
         // Reserve the actual action rows before sizing the sole scroll area.
         // Errors, expanded options and short viewports cannot displace the footer.
-        let footer_height = if stacked {
+        let actions_height = if stacked {
             3. * control_height + 2. * spacing.y
         } else {
             control_height
-        } + 3. * spacing.y
-            + 8.;
+        };
+        let footer_height = actions_height + 3. * spacing.y + 8.;
         let body_height =
             (ctx.content_rect().height() - 64. - (ui.cursor().top() - top) - footer_height).max(1.);
         let form = egui::ScrollArea::vertical()
@@ -199,7 +199,9 @@ impl EditorApp {
         } else {
             Layout::left_to_right(Align::Center)
         };
-        ui.with_layout(action_layout, |ui| {
+        // A horizontal scope otherwise centres controls in all remaining height.
+        // Bound both footer variants to their measured rows, even in a tall modal.
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), actions_height), action_layout, |ui| {
             let interactive = ui.add_enabled(ready && plan.is_ok(),
                 crate::keyboard::Button::new(RichText::new(labels[0]).color(palette.background).strong())
                     .fill(palette.accent)
@@ -356,10 +358,10 @@ impl EditorApp {
                         layout::field_label(ui, label, compact);
                         ui.add(crate::keyboard::named(
                             label,
-                            egui::TextEdit::singleline(value)
+                            layout::text_input(ui, value)
                                 .hint_text(hint)
                                 .char_limit(1024)
-                                .desired_width(ui.available_width().min(300.)),
+                                .desired_width(ui.available_width().max(1.)),
                         ));
                         ui.end_row();
                     }
@@ -389,10 +391,10 @@ impl EditorApp {
                                 layout::field_label(ui, label, compact);
                                 ui.add(crate::keyboard::named(
                                     label,
-                                    egui::TextEdit::singleline(value)
+                                    layout::text_input(ui, value)
                                         .hint_text(hint)
                                         .char_limit(1024)
-                                        .desired_width(ui.available_width().min(320.)),
+                                        .desired_width(ui.available_width().max(1.)),
                                 ));
                                 ui.end_row();
                             }
@@ -413,12 +415,12 @@ impl EditorApp {
                     ui.label("salloc");
                     ui.add(crate::keyboard::named(
                         "salloc executable",
-                        egui::TextEdit::singleline(&mut draft.allocator),
+                        layout::text_input(ui, &mut draft.allocator),
                     ));
                     ui.label("srun");
                     ui.add(crate::keyboard::named(
                         "srun executable",
-                        egui::TextEdit::singleline(&mut draft.runner),
+                        layout::text_input(ui, &mut draft.runner),
                     ));
                 });
             super::super::ui_probe::button(ui, "slurm-advanced", &advanced.header_response);

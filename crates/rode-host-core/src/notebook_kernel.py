@@ -47,31 +47,54 @@ class OutputBudget:
     def __init__(self, limits):
         self.limits = limits
         self.entries = []
+        self.reason = ""
 
     def clear(self):
         self.entries.clear()
 
     def accept(self, output, display_id, update, clear=False):
+        self.reason = ""
         size = len(compact(output).encode("utf-8"))
         text = size
         for mime in ("image/png", "image/jpeg"):
             if mime in output.get("data", {}):
                 text -= len(compact(output["data"][mime]).encode("utf-8"))
-        if size + 2 > self.limits["bytes"] or text + 2 > self.limits["text"]:
-            return False
         entries = [] if clear else list(self.entries)
-        entry = (size, text, display_id)
+        stream = (
+            output.get("name")
+            if output.get("output_type") == "stream"
+            and isinstance(output.get("name"), str)
+            and isinstance(output.get("text"), str)
+            else None
+        )
+        entry = (size, text, display_id, stream)
         if update:
             entries = [entry if display_id and old[2] == display_id else old for old in entries]
+        elif stream is not None and entries and entries[-1][3] == stream:
+            # Only the fragment's escaped JSON string contents are added to the
+            # retained stream; its object header and quotes already exist.
+            fragment = len(compact(output["text"]).encode("utf-8")) - 2
+            previous = entries[-1]
+            entries[-1] = (previous[0] + fragment, previous[1] + fragment, display_id, stream)
         else:
             entries.append(entry)
         separators = max(0, len(entries) - 1) + 2
-        if (
-            len(entries) > self.limits["count"]
-            or sum(old[0] for old in entries) + separators > self.limits["bytes"]
-            or sum(old[1] for old in entries) + separators > self.limits["text"]
-        ):
-            return False
+        for exceeded, reason in [
+            (
+                size + 2 > self.limits["bytes"]
+                or sum(old[0] for old in entries) + separators > self.limits["bytes"],
+                f"{self.limits['bytes'] / (1024 * 1024):g} MiB including images",
+            ),
+            (
+                text + 2 > self.limits["text"]
+                or sum(old[1] for old in entries) + separators > self.limits["text"],
+                f"{self.limits['text'] / (1024 * 1024):g} MiB of text and metadata",
+            ),
+            (len(entries) > self.limits["count"], f"{self.limits['count']} output records"),
+        ]:
+            if exceeded:
+                self.reason = reason
+                return False
         self.entries = entries
         return True
 
@@ -135,7 +158,7 @@ def execute(manager, client, message, limits):
     interrupt.clear()
     msg_id = client.execute(code, store_history=True, allow_stdin=False, stop_on_error=True)
     budget = OutputBudget(limits)
-    count, status, limited = None, "ok", False
+    count, status, warned = None, "ok", False
     clear_next = False
     while not closed.is_set():
         if interrupt.is_set():
@@ -156,8 +179,6 @@ def execute(manager, client, message, limits):
             count = content.get("execution_count")
             emit("count", id=request_id, count=count)
         elif kind == "clear_output":
-            if limited:
-                continue
             if content.get("wait"):
                 clear_next = True
             else:
@@ -165,8 +186,6 @@ def execute(manager, client, message, limits):
                 budget.clear()
                 clear_next = False
         elif kind in ("stream", "execute_result", "display_data", "update_display_data", "error"):
-            if limited:
-                continue
             if kind == "stream":
                 output = dict(
                     output_type="stream",
@@ -188,24 +207,29 @@ def execute(manager, client, message, limits):
                 )
                 if kind == "execute_result":
                     output["execution_count"] = content.get("execution_count")
-            display_id = content.get("transient", {}).get("display_id")
-            if (
-                display_id is not None
-                and (not isinstance(display_id, str) or len(display_id.encode("utf-8")) > 1024)
-            ) or not budget.accept(output, display_id, kind == "update_display_data", clear_next):
-                emit(
-                    "warning",
-                    id=request_id,
-                    message=(
-                        "Cell output limit reached; this cell was interrupted. "
-                        "Earlier output and kernel variables are preserved. "
-                        f"Limits: {limits['bytes'] // (1024 * 1024)} MiB including images, "
-                        f"{limits['text'] // (1024 * 1024)} MiB of text, "
-                        f"{limits['count']} output records."
-                    ),
-                )
-                limited, status = True, "output_limit"
-                manager.interrupt_kernel()
+            display_id = (
+                content.get("transient", {}).get("display_id")
+                if kind in ("display_data", "update_display_data", "execute_result")
+                else None
+            )
+            invalid_display = display_id is not None and (
+                not isinstance(display_id, str) or len(display_id.encode("utf-8")) > 1024
+            )
+            if invalid_display or not budget.accept(
+                output, display_id, kind == "update_display_data", clear_next
+            ):
+                if not warned:
+                    reason = "invalid display identifier" if invalid_display else budget.reason
+                    emit(
+                        "warning",
+                        id=request_id,
+                        message=(
+                            f"Some cell output was omitted ({reason}). "
+                            "Computation continues; earlier output and kernel variables are preserved. "
+                            "Reduce the output or use clear_output() to make room."
+                        ),
+                    )
+                    warned = True
                 continue
             if clear_next:
                 emit("clear", id=request_id)
@@ -227,7 +251,7 @@ def execute(manager, client, message, limits):
         except queue.Empty:
             continue
         if reply.get("parent_header", {}).get("msg_id") == msg_id:
-            status = "output_limit" if limited else reply["content"].get("status", status)
+            status = reply["content"].get("status", status)
             count = reply["content"].get("execution_count", count)
             break
     emit("done", id=request_id, status=status, count=count)

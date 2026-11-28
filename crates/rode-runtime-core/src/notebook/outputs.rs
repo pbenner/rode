@@ -37,6 +37,35 @@ fn sizes(output: &Value) -> Result<(usize, usize)> {
     Ok((bytes, text))
 }
 
+/// Join consecutive chunks of the same stream without crossing a rich output or
+/// stdout/stderr boundary. Callers validate the candidate before publishing it.
+/// Unknown fields must match so coalescing never discards notebook metadata.
+pub fn merge_stream(previous: &mut Value, next: &Value) -> bool {
+    let (Some(old), Some(new)) = (previous.as_object(), next.as_object()) else {
+        return false;
+    };
+    if old.get("output_type").and_then(Value::as_str) != Some("stream")
+        || old.get("name").and_then(Value::as_str).is_none()
+        || old.len() != new.len()
+        || old
+            .iter()
+            .any(|(key, value)| key != "text" && new.get(key) != Some(value))
+    {
+        return false;
+    }
+    let (Some(text), Some(fragment)) = (
+        old.get("text").and_then(Value::as_str),
+        new.get("text").and_then(Value::as_str),
+    ) else {
+        return false;
+    };
+    let mut merged = String::with_capacity(text.len() + fragment.len());
+    merged.push_str(text);
+    merged.push_str(fragment);
+    previous["text"] = Value::String(merged);
+    true
+}
+
 /// Validate a proposed cell output array without cloning values or serializing
 /// it into another buffer. Callers can substitute display replacements in the
 /// iterator and validate every affected cell before publishing any changes.
@@ -80,5 +109,23 @@ mod tests {
         let small = json!({"output_type":"stream", "text":"ok"});
         validate(std::iter::repeat_n(&small, MAX_OUTPUTS)).unwrap();
         assert!(validate(std::iter::repeat_n(&small, MAX_OUTPUTS + 1)).is_err());
+    }
+
+    #[test]
+    fn stream_chunks_preserve_unicode_metadata_and_output_boundaries() {
+        let mut output =
+            json!({"output_type":"stream", "name":"stdout", "text":"日本語\n", "extra":7});
+        let next = json!({"output_type":"stream", "name":"stdout", "text":"🦀\rnext", "extra":7});
+        assert!(merge_stream(&mut output, &next));
+        assert_eq!(output["text"], "日本語\n🦀\rnext");
+        for next in [
+            json!({"output_type":"stream", "name":"stderr", "text":"error", "extra":7}),
+            json!({"output_type":"stream", "name":"stdout", "text":"changed", "extra":8}),
+            json!({"output_type":"display_data", "data":{"text/plain":"result"}}),
+        ] {
+            let before = output.clone();
+            assert!(!merge_stream(&mut output, &next));
+            assert_eq!(output, before);
+        }
     }
 }

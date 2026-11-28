@@ -118,23 +118,31 @@ for _ in range(3):
         let overflow = run(
             2,
             format!(
-                "print('x' * {})",
+                "print('x' * {})\noverflow_finished = True",
                 rode_runtime_core::notebook::outputs::MAX_TEXT_BYTES + 1
             ),
         );
-        let skipped = run(3, "open('must-not-run', 'w').write('wrong')".into());
-        kernel.bind(vec![overflow.clone(), skipped.clone()]);
-        kernel.run(vec![overflow, skipped]).unwrap();
-        let events = wait(&mut kernel, 1);
+        let following = run(
+            3,
+            "assert overflow_finished\nopen('queue-finished', 'w').write('ok')".into(),
+        );
+        kernel.bind(vec![overflow.clone(), following.clone()]);
+        kernel.run(vec![overflow, following]).unwrap();
+        let events = wait(&mut kernel, 2);
         assert!(events.iter().any(
             |event| matches!(event, Event::Warning(message) if message.contains("preserved"))
         ));
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, Event::Done(_, status) if status == "output_limit"))
+                .filter(|event| matches!(event, Event::Done(_, status) if status == "ok"))
+                .count()
+                >= 2
         );
-        assert!(!root.path().join("must-not-run").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("queue-finished")).unwrap(),
+            "ok"
+        );
         let reuse = run(
             4,
             "assert sentinel == 123\nassert os.getpid() == kernel_pid\nprint('same kernel')".into(),
@@ -145,6 +153,41 @@ for _ in range(3):
         assert!(events.iter().any(
             |event| matches!(event, Event::Output{output,..} if output["text"]=="same kernel\n")
         ));
+
+        let progress = run(
+            5,
+            "for i in range(350):\n    print(f'progress {i}', flush=True)".into(),
+        );
+        kernel.bind(vec![progress.clone()]);
+        kernel.run(vec![progress]).unwrap();
+        let events = wait(&mut kernel, 1);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::Warning(_)))
+        );
+        let mut retained = Notebook::default();
+        let uid = retained.cells[0].uid;
+        for event in events {
+            match event {
+                Event::Clear(_) => {
+                    retained.apply_output(uid, 0, None, None, true).unwrap();
+                }
+                Event::Output { output, .. } => {
+                    retained
+                        .apply_output(uid, 0, Some(output), None, false)
+                        .unwrap();
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(retained.cells[0].outputs().len(), 1);
+        assert_eq!(
+            retained.cells[0].outputs()[0]["text"],
+            (0..350)
+                .map(|index| format!("progress {index}\n"))
+                .collect::<String>()
+        );
         kernel.stop();
         let until = Instant::now() + Duration::from_secs(10);
         while kernel.pending() {
@@ -153,6 +196,37 @@ for _ in range(3):
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+#[test]
+fn stream_fragments_coalesce_without_reordering_outputs_or_bypassing_text_limits() {
+    use serde_json::json;
+    let mut book = Notebook::default();
+    let uid = book.cells[0].uid;
+    for _ in 0..350 {
+        book.apply_output(
+            uid,
+            0,
+            Some(json!({"output_type":"stream", "name":"stdout", "text":"日🦀\n"})),
+            None,
+            false,
+        )
+        .unwrap();
+    }
+    assert_eq!(book.cells[0].outputs().len(), 1);
+    assert_eq!(book.cells[0].outputs()[0]["text"], "日🦀\n".repeat(350));
+    for output in [
+        json!({"output_type":"stream", "name":"stderr", "text":"error"}),
+        json!({"output_type":"display_data", "data":{"text/plain":"result"}}),
+        json!({"output_type":"stream", "name":"stdout", "text":"after display"}),
+    ] {
+        book.apply_output(uid, 0, Some(output), None, false)
+            .unwrap();
+    }
+    assert_eq!(book.cells[0].outputs().len(), 4);
+    let before = book.serialize().unwrap();
+    assert!(book.apply_output(uid, 0, Some(json!({"output_type":"stream", "name":"stdout", "text":"x".repeat(rode_runtime_core::notebook::outputs::MAX_TEXT_BYTES)})), None, false).is_err());
+    assert_eq!(book.serialize().unwrap(), before);
 }
 fn interpreter() -> Option<String> {
     native_peer::capabilities::tool("jupyter", &["RODE_TEST_JUPYTER"])
