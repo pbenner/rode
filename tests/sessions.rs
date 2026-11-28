@@ -643,6 +643,122 @@ fn interactive_allocation_waits_then_supplies_the_scheduler_environment_and_surv
 }
 
 #[test]
+fn nonpersistent_notebook_reservations_release_after_their_last_view_disconnects() {
+    use rode::slurm;
+    use std::os::unix::fs::PermissionsExt;
+
+    struct Release {
+        root: PathBuf,
+        queue: String,
+        cancel: String,
+    }
+    impl Drop for Release {
+        fn drop(&mut self) {
+            // An assertion must not leave the fixture's allocator or command alive.
+            if self.root.join("slurm-state/job.json").exists() {
+                let _ = slurm::cancel(&self.root, &self.queue, &self.cancel, "4242");
+            }
+        }
+    }
+
+    for (wrapped, explicit_end) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut fixture = Fixture::new();
+        let plan = fixture.plan();
+        let tools = fixture.root.path().join("tools");
+        fs::create_dir(&tools).unwrap();
+        for name in ["salloc", "srun", "squeue", "scancel"] {
+            let path = tools.join(name);
+            fs::write(&path, include_str!("fixtures/slurm.py")).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let allocator = if wrapped {
+            let wrapper = tools.join("wrapped-salloc");
+            fs::write(
+                &wrapper,
+                "#!/usr/bin/python3\nimport pathlib, subprocess, sys\nraise SystemExit(subprocess.call([str(pathlib.Path(__file__).with_name('salloc')), *sys.argv[1:]]))\n",
+            )
+            .unwrap();
+            fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+            wrapper
+        } else {
+            tools.join("salloc")
+        };
+        let settings = slurm::Allocation {
+            allocator: allocator.to_string_lossy().into(),
+            runner: tools.join("srun").to_string_lossy().into(),
+            ..Default::default()
+        };
+        let id = rode_session::new_id().unwrap();
+        let policy = sessions::fingerprint(&plan);
+        let launch = settings.reserve(&plan, &id).unwrap();
+        let Response::Session(info) = fixture
+            .rpc(&Request::Create {
+                id: id.clone(),
+                name: "Notebook allocation".into(),
+                root: plan.root.clone(),
+                policy: policy.clone(),
+                mode: plan.label().into(),
+                argv: launch.argv,
+                initial_input: String::new(),
+                persistent: true,
+                env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+                allocation: Some(launch.job_name),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        fixture.ids.push((id.clone(), policy.clone()));
+        let _release = Release {
+            root: fixture.root.path().into(),
+            queue: tools.join("squeue").to_string_lossy().into(),
+            cancel: tools.join("scancel").to_string_lossy().into(),
+        };
+        let view = fixture.attach(&info);
+        let other = fixture.attach(&info);
+        let state = fixture.root.path().join("slurm-state");
+        wait(|| state.join("job.json").exists());
+        fs::write(state.join("grant"), "").unwrap();
+        wait(|| view.contents().contains("is ready"));
+        wait(|| other.contents().contains("is ready"));
+        fixture
+            .rpc(&Request::SetPersistence {
+                id,
+                policy,
+                persistent: false,
+            })
+            .unwrap();
+        wait(|| !view.persistent() && !other.persistent());
+        drop(view);
+        assert!(
+            state.join("job.json").exists(),
+            "Closing one shared view released the allocation"
+        );
+        if explicit_end {
+            for _ in 0..2 {
+                fixture
+                    .rpc(&Request::End {
+                        id: info.id.clone(),
+                        policy: info.policy.clone(),
+                    })
+                    .unwrap();
+            }
+        }
+        drop(other);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.join("job.json").exists() || !state.join("ended").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "A nonpersistent reservation survived disconnect (wrapped allocator: {wrapped}, explicit End: {explicit_end}); sessions: {:?}; job: {:?}",
+                fixture.rpc(&Request::List),
+                fs::read_to_string(state.join("job.json")),
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[test]
 fn notebook_reservations_survive_view_and_kernel_closure_until_explicit_release() {
     use rode::{
         notebook::kernel::{Event, Kernel, Run},

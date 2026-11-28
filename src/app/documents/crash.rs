@@ -9,7 +9,6 @@ impl Documents {
     ) -> anyhow::Result<(Vec<super::crash_recovery::Entry>, bool)> {
         let mut excluded = false;
         let mut entries = Vec::new();
-        let mut bytes = 0usize;
         for doc in self.items.iter_mut() {
             doc.encrypted_source |= encrypted;
             if !doc.dirty() {
@@ -23,11 +22,6 @@ impl Documents {
                 Some(view) if !view.source_mode() => view.book.serialize()?,
                 _ => doc.text.clone(),
             };
-            bytes = bytes.saturating_add(text.len());
-            anyhow::ensure!(
-                bytes <= crate::persistence::LIMIT,
-                "Unsaved work exceeds the 8 MiB desktop recovery limit; save it explicitly"
-            );
             entries.push(super::crash_recovery::Entry {
                 name: doc
                     .display_path()
@@ -70,6 +64,23 @@ impl Documents {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_captures_large_drafts_without_a_configuration_size_limit() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EditorApp::new(&cc, Startup::default());
+        let large = "x".repeat(9 * 1024 * 1024);
+        for text in [large.as_str(), "another unsaved draft"] {
+            let id = app.documents.new_file();
+            app.documents.by_id_mut(id).unwrap().set_source(text.into());
+        }
+        let (entries, excluded) = app.documents.crash_entries(false).unwrap();
+        assert!(!excluded);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].text, large);
+        assert_eq!(entries[1].text, "another unsaved draft");
+    }
 
     #[test]
     fn recovery_keeps_remote_names_without_authorizing_file_io_and_excludes_vault_plaintext() {

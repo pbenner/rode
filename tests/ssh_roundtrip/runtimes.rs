@@ -5,45 +5,48 @@ use super::*;
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn interactive_slurm_shells_receive_scheduler_environment_over_ssh_and_proxyjump() {
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
-    for jump in ["", "rode-jump"] {
-        let base = tempfile::tempdir().unwrap();
-        let remote = Remote::new(Profile {
-            host: "rode-test".into(),
-            config: config.clone(),
-            jump: jump.into(),
-            ..Default::default()
-        })
-        .unwrap();
-        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
-        while !remote.connected() {
-            assert!(
-                login.is_alive() && Instant::now() < end,
-                "{}",
-                login.contents()
-            );
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        for sandbox in [false, true] {
-            let root = base.path().join(if sandbox { "sandbox" } else { "normal" });
-            std::fs::create_dir(&root).unwrap();
-            let response = remote
-                .request(&Request::Prepare {
-                    path: root.to_string_lossy().into(),
-                    sandbox: rode::sandbox::Options {
-                        enabled: sandbox,
-                        ..Default::default()
-                    },
-                })
-                .unwrap();
-            let plan = response.project.unwrap();
-            if sandbox && !plan.active {
-                eprintln!("Compute sandbox fixture unavailable: {}", plan.reason);
+    for backend in [rode::ssh::Backend::Russh, rode::ssh::Backend::OpenSsh] {
+        for jump in ["", "rode-jump"] {
+            let base = tempfile::tempdir().unwrap();
+            let remote = Remote::new(Profile {
+                backend,
+                host: "rode-test".into(),
+                config: config.clone(),
+                jump: jump.into(),
+                ..Default::default()
+            })
+            .unwrap();
+            let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+            let end = Instant::now() + Duration::from_secs(10);
+            while !remote.connected() {
+                assert!(
+                    login.is_alive() && Instant::now() < end,
+                    "{}",
+                    login.contents()
+                );
+                std::thread::sleep(Duration::from_millis(25));
             }
-            interactive_allocation_roundtrip(&remote, &plan);
+            for sandbox in [false, true] {
+                let root = base.path().join(if sandbox { "sandbox" } else { "normal" });
+                std::fs::create_dir(&root).unwrap();
+                let response = remote
+                    .request(&Request::Prepare {
+                        path: root.to_string_lossy().into(),
+                        sandbox: rode::sandbox::Options {
+                            enabled: sandbox,
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+                let plan = response.project.unwrap();
+                if sandbox && !plan.active {
+                    eprintln!("Compute sandbox fixture unavailable: {}", plan.reason);
+                }
+                interactive_allocation_roundtrip(&remote, &plan);
+            }
+            drop(login);
+            remote.cleanup();
         }
-        drop(login);
-        remote.cleanup();
     }
 }
 
@@ -521,57 +524,107 @@ pub(super) fn interactive_allocation_roundtrip(remote: &Remote, plan: &rode::san
     let state = root.join("slurm-state");
     fs::create_dir_all(&state).unwrap();
     fs::write(state.join("grant"), "").unwrap();
-    let id = rode_session::new_id().unwrap();
     let settings = rode::slurm::Allocation {
         allocator: tools.join("salloc").to_string_lossy().into(),
         runner: tools.join("srun").to_string_lossy().into(),
         ..Default::default()
     };
     let runtime = root.parent().unwrap().join("slurm-runtime");
-    let response = remote
-        .request(&Request::Tool {
-            request: rode::project::Request::Sessions {
-                root: plan.root.clone(),
-                operation: rode::sessions::Operation::Create {
-                    environment: Default::default(),
-                    id: id.clone(),
-                    name: "SSH allocation".into(),
-                    plan: Box::new(plan.clone()),
-                    policy: rode::sessions::fingerprint(plan),
-                    python: "off".into(),
-                    persistent: false,
-                    allocation: Some(settings.launch(plan, &id).unwrap()),
+    for reserve in [false, true] {
+        if state.join("ended").exists() {
+            fs::remove_file(state.join("ended")).unwrap();
+        }
+        let id = rode_session::new_id().unwrap();
+        let response = remote
+            .request(&Request::Tool {
+                request: rode::project::Request::Sessions {
+                    root: plan.root.clone(),
+                    operation: rode::sessions::Operation::Create {
+                        environment: Default::default(),
+                        id: id.clone(),
+                        name: "SSH allocation".into(),
+                        plan: Box::new(plan.clone()),
+                        policy: rode::sessions::fingerprint(plan),
+                        python: "off".into(),
+                        persistent: reserve,
+                        allocation: Some(if reserve {
+                            settings.reserve(plan, &id).unwrap()
+                        } else {
+                            settings.launch(plan, &id).unwrap()
+                        }),
+                    },
+                    directory: Some(runtime.to_string_lossy().into()),
                 },
-                directory: Some(runtime.to_string_lossy().into()),
-            },
-        })
-        .unwrap();
-    let Some(rode::project::Response::Sessions(reply)) = response.tool else {
-        panic!()
-    };
-    let rode_session::Response::Session(info) = &reply.response else {
-        panic!()
-    };
-    assert_eq!(info.allocation, Some(format!("rode-{id}")));
-    let view = native_attach(remote, &reply, info);
-    terminal_ui::wait_for_prompt(&view);
-    view.send(b"printf 'SSH_SLURM_%s_%s_%s\\n' \"$SLURM_JOB_ID\" \"$SLURM_STEP_ID\" \"$CUDA_VISIBLE_DEVICES\"\n".to_vec()).unwrap();
-    let end = Instant::now() + Duration::from_secs(10);
-    while !view.contents().contains("SSH_SLURM_4242_0_0,1") {
-        assert!(
-            view.is_alive() && Instant::now() < end,
-            "{}",
-            view.contents()
-        );
-        std::thread::sleep(Duration::from_millis(25));
+            })
+            .unwrap();
+        let Some(rode::project::Response::Sessions(reply)) = response.tool else {
+            panic!()
+        };
+        let rode_session::Response::Session(info) = &reply.response else {
+            panic!()
+        };
+        assert_eq!(info.allocation, Some(format!("rode-{id}")));
+        let view = native_attach(remote, &reply, info);
+        if reserve {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !view.contents().contains("is ready") {
+                assert!(
+                    view.is_alive() && Instant::now() < deadline,
+                    "Reservation did not start: {}",
+                    view.contents()
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            remote
+                .request(&Request::Tool {
+                    request: rode::project::Request::Sessions {
+                        root: plan.root.clone(),
+                        operation: rode::sessions::Operation::SetPersistence {
+                            id: info.id.clone(),
+                            policy: info.policy.clone(),
+                            persistent: false,
+                        },
+                        directory: Some(runtime.to_string_lossy().into()),
+                    },
+                })
+                .unwrap();
+            while view.persistent() {
+                assert!(
+                    Instant::now() < deadline,
+                    "Persistence off was not acknowledged"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            drop(view); // Close the SSH allocation channel without explicit cancellation.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while state.join("job.json").exists() || !state.join("ended").exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "Nonpersistent SSH reservation survived its last view"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        } else {
+            terminal_ui::wait_for_prompt(&view);
+            view.send(b"printf 'SSH_SLURM_%s_%s_%s\\n' \"$SLURM_JOB_ID\" \"$SLURM_STEP_ID\" \"$CUDA_VISIBLE_DEVICES\"\n".to_vec()).unwrap();
+            let end = Instant::now() + Duration::from_secs(10);
+            while !view.contents().contains("SSH_SLURM_4242_0_0,1") {
+                assert!(
+                    view.is_alive() && Instant::now() < end,
+                    "{}",
+                    view.contents()
+                );
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            view.send(b"exit\n".to_vec()).unwrap();
+            while view.is_alive() {
+                assert!(Instant::now() < end, "SSH allocation did not exit");
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+        assert!(state.join("ended").exists());
+        assert!(remote.connected());
     }
-    view.send(b"exit\n".to_vec()).unwrap();
-    while view.is_alive() {
-        assert!(Instant::now() < end, "SSH allocation did not exit");
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    assert!(state.join("ended").exists());
-    assert!(remote.connected());
 }
 
 pub(super) fn native_terminal_start(

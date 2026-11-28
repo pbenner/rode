@@ -6,7 +6,7 @@ use rode_host_core::locking::{self, PrivateFile};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
-    io::Read,
+    io::{BufReader, BufWriter, Write},
     os::{
         fd::AsRawFd,
         unix::fs::{DirBuilderExt, MetadataExt},
@@ -15,9 +15,6 @@ use std::{
     sync::{Arc, Condvar, Mutex},
     time::Duration,
 };
-
-/// Checkpoint size is bounded independently of the open document's size.
-const LIMIT: usize = rode_host_core::persistence::LIMIT;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(in crate::app) struct Entry {
@@ -113,10 +110,7 @@ impl Store {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
                     Err(e) => return Err(e.into()),
                 };
-                let mut bytes = Vec::new();
-                file.take(LIMIT as u64 + 1).read_to_end(&mut bytes)?;
-                ensure!(bytes.len() <= LIMIT, "Recovery checkpoint exceeds 8 MiB");
-                serde_json::from_slice(&bytes)
+                serde_json::from_reader(BufReader::new(file))
                     .with_context(|| format!("Cannot read recovery checkpoint {}", path.display()))
             })();
             let (entries, failure) = match read {
@@ -138,46 +132,59 @@ impl Store {
         locking::lock(&lock)?;
         let shared = Arc::new(Shared::default());
         let writing = shared.clone();
-        std::thread::Builder::new().name("draft-checkpoints".into()).spawn(move || {
-            let _lock = lock;
-            loop {
-                let mut state = writing.pending.lock().unwrap();
-                while state.next.is_none() && !state.closing {
-                    state = writing.changed.wait(state).unwrap();
-                }
-                if state.closing && (state.discard || state.next.is_none()) {
-                    let discard = state.discard;
-                    drop(state);
-                    if discard { let _ = fs::remove_file(&path); }
+        std::thread::Builder::new()
+            .name("draft-checkpoints".into())
+            .spawn(move || {
+                let _lock = lock;
+                loop {
                     let mut state = writing.pending.lock().unwrap();
-                    state.closed = true;
-                    writing.changed.notify_all();
-                    return;
-                }
-                let (version, entries) = state.next.take().unwrap();
-                drop(state);
-                let result = (|| -> Result<()> {
-                    if entries.is_empty() {
-                        match fs::remove_file(&path) {
-                            Ok(()) => {},
-                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-                            Err(e) => return Err(e.into()),
-                        }
-                    } else {
-                        let bytes = serde_json::to_vec(&entries)?;
-                        ensure!(bytes.len() <= LIMIT, "Unsaved work exceeds the 8 MiB desktop recovery limit; save it explicitly");
-                        rode_host_core::persistence::replace(&path, &bytes, true)?;
+                    while state.next.is_none() && !state.closing {
+                        state = writing.changed.wait(state).unwrap();
                     }
-                    Ok(())
-                })();
-                let mut state = writing.pending.lock().unwrap();
-                match result {
-                    Ok(()) => { state.saved = version; state.error = None; },
-                    Err(e) => { state.error = Some(format!("{e:#}")); state.reported = false; },
+                    if state.closing && (state.discard || state.next.is_none()) {
+                        let discard = state.discard;
+                        drop(state);
+                        if discard {
+                            let _ = fs::remove_file(&path);
+                        }
+                        let mut state = writing.pending.lock().unwrap();
+                        state.closed = true;
+                        writing.changed.notify_all();
+                        return;
+                    }
+                    let (version, entries) = state.next.take().unwrap();
+                    drop(state);
+                    let result = (|| -> Result<()> {
+                        if entries.is_empty() {
+                            match fs::remove_file(&path) {
+                                Ok(()) => {}
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                Err(e) => return Err(e.into()),
+                            }
+                        } else {
+                            rode_host_core::persistence::replace_with(&path, true, |file| {
+                                let mut writer = BufWriter::new(file);
+                                serde_json::to_writer(&mut writer, &entries)?;
+                                writer.flush()?;
+                                Ok(())
+                            })?;
+                        }
+                        Ok(())
+                    })();
+                    let mut state = writing.pending.lock().unwrap();
+                    match result {
+                        Ok(()) => {
+                            state.saved = version;
+                            state.error = None;
+                        }
+                        Err(e) => {
+                            state.error = Some(format!("{e:#}"));
+                            state.reported = false;
+                        }
+                    }
+                    writing.changed.notify_all();
                 }
-                writing.changed.notify_all();
-            }
-        })?;
+            })?;
         Ok((Self { shared }, candidates))
     }
     /// Latest-only queue: slow storage never creates an unbounded series of drafts.
@@ -291,25 +298,65 @@ mod tests {
     #[test]
     fn a_failed_checkpoint_keeps_the_last_durable_copy_and_reports_the_error() {
         let root = private_directory();
-        let (store, _) = Store::open(root.path()).unwrap();
+        let directory = root.path().join("recovery");
+        let (store, _) = Store::open(&directory).unwrap();
         store.submit(vec![entry("last safe version")]);
         assert!(store.shared.flush(Duration::from_secs(3)));
-        store.submit(vec![entry(&"x".repeat(LIMIT + 1))]);
+        // Force a real write error without relying on the caller's UID or umask.
+        let retained = root.path().join("retained");
+        fs::rename(&directory, &retained).unwrap();
+        fs::write(&directory, b"not a directory").unwrap();
+        store.submit(vec![entry("replacement")]);
         assert!(!store.shared.flush(Duration::from_secs(3)));
-        assert!(store.error().unwrap().contains("8 MiB"));
+        assert!(store.error().is_some());
         assert!(store.error().is_none());
-        let path = fs::read_dir(root.path())
+        fs::remove_file(&directory).unwrap();
+        fs::rename(&retained, &directory).unwrap();
+        let path = fs::read_dir(&directory)
             .unwrap()
             .map(|e| e.unwrap().path())
             .find(|p| p.extension().is_some_and(|x| x == "json"))
             .unwrap();
-        let entries: Vec<Entry> = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        let entries: Vec<Entry> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(entries[0].text, "last safe version");
+        store.submit(vec![entry("retry succeeded")]);
+        assert!(store.shared.flush(Duration::from_secs(3)));
+        let entries: Vec<Entry> = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(entries[0].text, "retry succeeded");
+    }
+
+    #[test]
+    fn large_checkpoints_roundtrip_unicode_and_json_escaping_without_a_size_cap() {
+        let root = private_directory();
+        let (store, _) = Store::open(root.path()).unwrap();
+        let text = "日本語\n\\\"".repeat(1024 * 1024);
+        assert!(text.len() > 8 * 1024 * 1024);
+        store.submit(vec![entry(&text), entry("unsent prompt draft")]);
+        assert!(store.shared.flush(Duration::from_secs(5)));
+        let path = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .unwrap();
+        assert!(fs::metadata(&path).unwrap().len() > 8 * 1024 * 1024);
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+        // Leave an abandoned copy without racing the live writer's OS lock.
+        let abandoned = root
+            .path()
+            .join(format!("{}.json", rode_session::new_id().unwrap()));
+        fs::copy(&path, &abandoned).unwrap();
+        let (_recovering, candidates) = Store::open(root.path()).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].failure.is_none());
+        assert_eq!(candidates[0].entries.len(), 2);
+        assert_eq!(candidates[0].entries[0].text, text);
+        assert_eq!(candidates[0].entries[1].text, "unsent prompt draft");
+        candidates[0].discard().unwrap();
+        store.clear_on_exit();
     }
     #[test]
     fn interrupted_shutdown_keeps_pending_drafts_and_corrupt_files_do_not_disable_new_checkpoints()
     {
-        use std::io::Write;
         let root = private_directory();
         let broken = root
             .path()

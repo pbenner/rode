@@ -1166,8 +1166,11 @@ services without the advertised takeover capability remain usable without an
 unsafe restart. Running agents reports the current controller and separates
 confirmed takeover from ordinary attachment and explicit termination.
 
-Crash recovery stores only bounded ordinary source/notebook and unsent composer
-drafts in private atomic checkpoints with per-window live locks. Restoration is
+Crash recovery stores ordinary source/notebook and unsent composer drafts in
+private atomic checkpoints with per-window live locks. Checkpoints have no fixed
+byte-size cap. A coalescing background writer streams JSON to disk, and recovery
+reads it directly from the private file without a serialized byte-buffer copy.
+Configuration-file size limits remain separate. Restoration is
 explicit and opens unbound buffers that require Save As. Encrypted and binary
 buffers are excluded, including retained encrypted buffers after disconnect.
 Normal admitted close clears its own checkpoint; failures and desktop loss leave

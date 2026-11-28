@@ -212,7 +212,7 @@ impl EditorApp {
                 ready && plan.is_ok(),
                 crate::keyboard::Button::new(labels[1])
                     .min_size(egui::vec2(action_width, control_height)),
-            ).on_hover_text("Keep a persistent allocation for notebook kernels. This view is a progress log, not a shell. Release the allocation explicitly when finished.");
+            ).on_hover_text("Reserve resources for notebook kernels. Starts with Persist on; turn it off in the allocation's progress view to release resources when its last view closes or SSH disconnects. Persist kernel is separate.");
             super::super::ui_probe::button(ui, "slurm-reserve", &reserve);
             if interactive.clicked() || reserve.clicked() {
                 let settings = self.sessions.allocation_draft.clone();
@@ -427,7 +427,7 @@ impl EditorApp {
             self.slurm_settings_ui(ui);
         });
         let lifetime = crate::keyboard::collapsing(ui, "Session lifetime", |ui| {
-            ui.label("Interactive terminals use Persist to survive closing RODE. Notebook reservations always start persistent; their view is a progress log, not a shell. Release the allocation explicitly when finished.");
+            ui.label("Persist controls whether an allocation survives its last view closing or SSH disconnecting. Notebook reservations start with Persist on; change it in their progress view. Persist kernel controls only the notebook kernel. Release retained allocations explicitly when finished.");
         });
         super::super::ui_probe::button(ui, "slurm-lifetime", &lifetime.header_response);
         let plan = self.slurm_allocation_plan();

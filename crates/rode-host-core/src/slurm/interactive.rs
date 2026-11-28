@@ -1,5 +1,5 @@
 //! Allocations belong to native sessions. Interactive sessions end with their
-//! srun shell; notebook reservations instead hold salloc until explicitly ended. The job
+//! srun shell; notebook reservations instead hold salloc until their owning session ends. The job
 //! name is tied to a random session ID so reattachment and renaming retain the
 //! association without saving another allocation database.
 use anyhow::{Result, ensure};
@@ -174,7 +174,7 @@ impl Allocation {
         // as SLURM_CONF and SLURM_JWT. The new values come from salloc/srun,
         // never from an editor-side guess or a separate squeue response.
         let command = if reserve {
-            ["/bin/sh", "-c", "printf 'Notebook allocation %s is ready. Select it in the notebook Execution target.\\nClosing this persistent view keeps the reservation. Release it in Slurm controls when finished.\\n' \"$SLURM_JOB_ID\"; trap 'exit 0' HUP INT TERM; while :; do sleep 3600 & wait $!; done"]
+            ["/bin/sh", "-c", "printf 'Notebook allocation %s is ready. Select it in the notebook Execution target.\\nThis allocation follows its own Persist setting, separately from Persist kernel. Release it in Slurm controls when finished.\\n' \"$SLURM_JOB_ID\"; trap 'exit 0' HUP INT TERM; while :; do sleep 3600 & wait $!; done"]
                 .iter().map(|v| quote(v)).collect::<Vec<_>>().join(" ")
         } else {
             format!(

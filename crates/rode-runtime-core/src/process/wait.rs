@@ -12,7 +12,7 @@ use std::{io, process::Child};
 /// Returns `false` immediately for a running child; propagates ownership/I/O
 /// errors after retrying interruptions. It never calls [`Child::try_wait`].
 pub fn exited(child: &Child) -> io::Result<bool> {
-    observe(child, libc::WNOHANG)
+    observe(child.id(), libc::WNOHANG)
 }
 
 /// Wait until this child exits without reaping it or releasing its PID.
@@ -20,10 +20,23 @@ pub fn exited(child: &Child) -> io::Result<bool> {
 /// Retrying interruptions preserves blocking-wait behavior. The owner must
 /// finish its signals before a subsequent [`Child::wait`] releases the ID.
 pub fn wait_for_exit(child: &Child) -> io::Result<()> {
-    observe(child, 0).map(|_| ())
+    wait_for_exit_pid(child.id())
 }
 
-fn observe(child: &Child, options: libc::c_int) -> io::Result<bool> {
+/// Observe a child owned through another process API, such as a native PTY.
+/// The caller must remain its sole reaper, retain the child handle and disable
+/// further signals before reaping. A numeric PID alone does not confer ownership.
+pub fn wait_for_exit_pid(pid: u32) -> io::Result<()> {
+    observe(pid, 0).map(|_| ())
+}
+
+fn observe(pid: u32, options: libc::c_int) -> io::Result<bool> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid child PID",
+        ));
+    }
     loop {
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
         // SAFETY: P_PID selects only this positive child ID; info is writable.
@@ -31,7 +44,7 @@ fn observe(child: &Child, options: libc::c_int) -> io::Result<bool> {
         if unsafe {
             libc::waitid(
                 libc::P_PID,
-                child.id(),
+                pid,
                 &mut info,
                 libc::WEXITED | libc::WNOWAIT | options,
             )
@@ -63,6 +76,7 @@ mod tests {
         let mut child = Owned(Command::new("/bin/sleep").arg("30").spawn().unwrap());
         assert!(!exited(&child.0).unwrap());
         child.0.kill().unwrap();
+        wait_for_exit_pid(child.0.id()).unwrap();
         wait_for_exit(&child.0).unwrap();
         assert!(exited(&child.0).unwrap());
         wait_for_exit(&child.0).unwrap();

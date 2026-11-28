@@ -1,4 +1,4 @@
-//! Bounded configuration transactions shared by headless services.
+//! Atomic private-file publication and bounded configuration transactions.
 pub use crate::locking::{lock, lock_existing, open_regular};
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -78,6 +78,22 @@ pub fn replace(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
         bytes.len() <= LIMIT,
         "Configuration exceeds 8 MiB; changes were not saved."
     );
+    replace_with(path, overwrite, |file| {
+        file.write_all(bytes)?;
+        Ok(())
+    })
+}
+
+/// Stream into a private temporary file before atomically publishing it.
+/// A callback error preserves the destination and removes the temporary file.
+/// Flush any buffering before returning so write errors abort publication.
+/// No byte limit is imposed here:
+/// configuration callers use [`replace`], while document checkpoints may grow.
+pub fn replace_with(
+    path: &Path,
+    overwrite: bool,
+    write: impl FnOnce(&mut File) -> Result<()>,
+) -> Result<()> {
     let temporary = path.with_file_name(format!(
         ".rode-config-{}-{}-{}.tmp",
         std::process::id(),
@@ -90,7 +106,7 @@ pub fn replace(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
     let mut file = private_file(&temporary, true)?;
     let result = (|| {
         lock(&file)?;
-        file.write_all(bytes)?;
+        write(&mut file)?;
         file.sync_all()?;
         if overwrite {
             fs::rename(&temporary, path)?;
@@ -110,4 +126,33 @@ pub fn replace(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streamed_write_failures_preserve_the_destination_and_configuration_remains_bounded() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("state.json");
+        replace(&path, b"last durable version", false).unwrap();
+        let result = replace_with(&path, true, |file| {
+            file.write_all(b"partial replacement")?;
+            anyhow::bail!("writer failed");
+        });
+        assert!(result.unwrap_err().to_string().contains("writer failed"));
+        assert_eq!(fs::read(&path).unwrap(), b"last durable version");
+        assert!(replace(&path, &vec![b'x'; LIMIT + 1], true).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"last durable version");
+        assert!(
+            replace_with(&path, false, |file| {
+                file.write_all(b"conflicting creation")?;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"last durable version");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
 }

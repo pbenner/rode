@@ -181,6 +181,15 @@ impl Session {
         self.input.lock().unwrap().take();
         self.master.lock().unwrap().take();
     }
+    /// Hang up once, retaining the PTY until the supervisor observes process exit.
+    /// Closing it immediately sends another hangup, which can interrupt salloc
+    /// while it is releasing the scheduler allocation. The caller retains this
+    /// session's state lock through signalling, excluding the reaper.
+    fn request_stop(&self, state: &State) {
+        if state.info.alive && !self.stopped.swap(true, Ordering::AcqRel) {
+            let _ = self.killer.lock().unwrap().kill();
+        }
+    }
     fn resize(&self) {
         let mut state = self.state.lock().unwrap();
         if state.viewers.is_empty() {
@@ -249,7 +258,7 @@ impl Server {
         }
     }
     fn end_unattached(&self, id: &str, startup_timeout: bool) {
-        let mut sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().unwrap();
         let Some(session) = sessions.get(id).cloned() else {
             return;
         };
@@ -261,20 +270,10 @@ impl Server {
             {
                 return;
             }
-            // Prevent a racing Attach from entering a session being closed.
-            session.stopped.store(true, Ordering::Release);
+            // Prevent racing Attach and repeated hangups. Keep the record and
+            // daemon alive until the supervisor has reaped the allocator.
+            session.request_stop(&state);
         }
-        sessions.remove(id);
-        if sessions.is_empty()
-            && !self.agents.live()
-            && !self.runtimes.live()
-            && !self.tunnels.live()
-        {
-            self.stop.store(true, Ordering::Release);
-        }
-        drop(sessions);
-        let _ = session.killer.lock().unwrap().kill();
-        session.close_pty();
     }
     fn find(&self, id: &str, policy: &str) -> Result<Arc<Session>> {
         ensure!(valid_id(id), "Invalid session ID");
@@ -493,7 +492,17 @@ impl Server {
                         let _ = drained_tx.send(());
                     });
                     let _ = ready_tx.send(Ok(session.clone()));
-                    let status = child.wait();
+                    // Observe exit without reaping, then revoke signal ownership
+                    // under the same state lock used by stop requests. A delayed
+                    // End must never signal a PID already reused by another job.
+                    let observed = child
+                        .process_id()
+                        .map_or(Ok(()), rode_runtime_core::process::wait::wait_for_exit_pid);
+                    let status = {
+                        let _state = session.state.lock().unwrap();
+                        session.stopped.store(true, Ordering::Release);
+                        observed.and_then(|()| child.wait())
+                    };
                     drop(arguments);
                     // Let the reader drain queued bytes before publishing exit.
                     // It bounds idle/live descendants itself, so descheduling the
@@ -809,24 +818,8 @@ fn handle(
                     session.check(&policy)?;
                     session
                 };
-                if session.info().alive {
-                    let _ = session.killer.lock().unwrap().kill();
-                }
-                session.close_pty();
-                let mut sessions = server.sessions.lock().unwrap();
-                if sessions
-                    .get(&id)
-                    .is_some_and(|current| Arc::ptr_eq(current, &session))
-                {
-                    sessions.remove(&id);
-                }
-                if sessions.is_empty()
-                    && !server.agents.live()
-                    && !server.runtimes.live()
-                    && !server.tunnels.live()
-                {
-                    server.stop.store(true, Ordering::Release);
-                }
+                let state = session.state.lock().unwrap();
+                session.request_stop(&state);
                 Response::Ok
             }
             Request::Shutdown => {
