@@ -19,7 +19,7 @@ pub(super) struct Edit {
     pub focused: bool,
     /// The edit passed the UTF-8 byte budget and advanced the cell source version.
     pub changed: bool,
-    /// Shift+Enter was consumed by this focused editor; execution is still the caller's action.
+    /// Shift+Enter was consumed; the caller runs/renders the cell and advances focus.
     pub submitted: bool,
     pub error: Option<&'static str>,
 }

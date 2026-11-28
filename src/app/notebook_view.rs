@@ -139,6 +139,19 @@ impl View {
     fn active_index(&self) -> Option<usize> {
         self.book.cells.iter().position(|c| c.uid == self.active)
     }
+    /// Move keyboard editing to the next cell, revealing it even when virtualized.
+    /// Keep the last cell selected and leave notebook content/structure untouched.
+    fn focus_next_cell(&mut self) {
+        if let Some(at) = self.active_index()
+            && let Some(next) = self.book.cells.get(at + 1)
+        {
+            self.active = next.uid;
+            self.focus = Some(next.uid);
+            self.selection = None;
+            self.cells.entry(next.uid).or_default().previewing = false;
+            self.reveal = true;
+        }
+    }
     /// Report a selected compute allocation; this does not imply a kernel is running.
     pub(in crate::app) fn uses_slurm(&self) -> bool {
         self.execution_target.is_some()
@@ -290,11 +303,12 @@ enum Action {
     Kind(usize, String),
     Clear(Option<usize>),
     Run(bool),
+    RunNext,
     Interrupt,
     Shutdown,
     Kernel,
     Source,
-    Preview(usize),
+    Advance(usize),
 }
 
 impl EditorApp {
@@ -442,8 +456,24 @@ impl EditorApp {
     /// Validate host, source mode and execution target, then lazily start or reuse a kernel
     /// and queue the active cell or all code cells with their captured source versions.
     pub(super) fn run_notebook(&mut self, all: bool, ctx: &egui::Context) {
+        self.submit_notebook(all, ctx);
+    }
+    /// Run/render the selected cell, advancing only after the action is accepted.
+    pub(super) fn run_notebook_next(&mut self, ctx: &egui::Context) {
+        if self.submit_notebook(false, ctx)
+            && let Some(view) = self
+                .documents
+                .active_mut()
+                .and_then(|doc| doc.notebook_mut())
+        {
+            view.focus_next_cell();
+            ctx.request_repaint();
+        }
+    }
+    /// Return whether the selected run/render was admitted by the existing guards.
+    fn submit_notebook(&mut self, all: bool, ctx: &egui::Context) -> bool {
         if !self.feature(crate::extensions::Feature::Notebooks) {
-            return;
+            return false;
         }
         if self.workspace.preparing()
             || self
@@ -452,32 +482,32 @@ impl EditorApp {
                 .is_some_and(|w| !w.ready || !w.connected)
         {
             self.notify("Wait for the project host and sandbox to be ready.", false);
-            return;
+            return false;
         }
         let python = self.terminal_python_selection();
         let output_budget = self.workbench.notebook_output_budget();
         let Some(doc) = self.documents.active_mut() else {
-            return;
+            return false;
         };
         if doc.is_recovery() {
             self.notify(
                 "Reconnect or Save As this disconnected notebook before running it.",
                 true,
             );
-            return;
+            return false;
         }
         let document_id = doc.id;
         let path = doc.path.clone();
         let Some(view) = doc.notebook_mut() else {
             self.notify("Open a Jupyter notebook first.", false);
-            return;
+            return false;
         };
         if view.source() {
             self.notify(
                 "Switch from JSON source back to Cells before running.",
                 false,
             );
-            return;
+            return false;
         }
         let index = view.active_index();
         {
@@ -502,7 +532,7 @@ impl EditorApp {
                     }
                     Err(error) => {
                         view.error = error.to_string();
-                        return;
+                        return false;
                     }
                 }
             }
@@ -512,8 +542,10 @@ impl EditorApp {
             && let Some(index) = index
             && view.book.cells[index].kind() != "code"
         {
-            view.cells.entry(view.active).or_default().previewing = true;
-            return;
+            if view.book.cells[index].kind() == "markdown" {
+                view.cells.entry(view.active).or_default().previewing = true;
+            }
+            return true;
         }
         let runs: Vec<_> = view
             .book
@@ -532,11 +564,11 @@ impl EditorApp {
             })
             .collect();
         if runs.is_empty() {
-            return;
+            return false;
         }
         if view.kernel.as_ref().is_some_and(Kernel::busy) {
             view.error = "A notebook run is already in progress.".into();
-            return;
+            return false;
         }
         if view.kernel.is_none() {
             let (plan, remote) = self
@@ -568,7 +600,7 @@ impl EditorApp {
             let context = ctx.clone();
             if view.persistent && path.is_none() {
                 view.error = "Save this notebook before enabling persistent execution".into();
-                return;
+                return false;
             }
             let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || context.request_repaint());
             let started = Kernel::start_managed(
@@ -588,7 +620,7 @@ impl EditorApp {
                 }
                 Err(error) => {
                     view.error = format!("{error:#}");
-                    return;
+                    return false;
                 }
             }
         }
@@ -604,8 +636,12 @@ impl EditorApp {
                     view.pending_clear.insert(run.uid, run.version);
                 }
                 view.error.clear();
+                true
             }
-            Err(error) => view.error = format!("{error:#}"),
+            Err(error) => {
+                view.error = format!("{error:#}");
+                false
+            }
         }
     }
     /// Drain kernel events and window-owned shutdowns without blocking. Apply outputs

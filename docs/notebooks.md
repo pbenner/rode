@@ -50,7 +50,8 @@ Do not recreate an existing environment. You can also use pip or an already prep
 
 The compact notebook toolbar keeps run controls, **Insert…**, **Notebook…**, **Kernel settings** and kernel status together. **Insert…** adds code or Markdown cells below the selection; inline insertion remains available between cells. Kernel settings are hidden until opened and scroll within a bounded area, leaving room for cells. A distinct toolbar surface and separator mark the start of the scrolling notebook. Hover kernel status for interpreter/target details.
 
-- **Run cell / Shift+Enter:** execute the selected code cell in a stateful kernel. Variables persist across runs. Shift+Enter on Markdown switches it to Preview.
+- **Run cell:** execute the selected code cell in a stateful kernel. Variables persist across runs.
+- **Shift+Enter:** run the focused code cell, or render the focused Markdown cell, then focus and scroll to the next cell's source editor. Raw cells advance without execution. The last cell stays selected; no extra cell is created. A rejected submission (for example, while code is already running) keeps the current cell selected.
 - **Run all:** execute code cells in document order. An execution error stops the remaining queue. Edits to queued cells invalidate their queued snapshots; outputs from an already running edited/deleted cell are discarded.
 - **Interrupt:** interrupt the current execution and discard queued cells. The kernel can be reused afterward.
 - **Notebook… → Shut down kernel:** release this notebook's kernel and its processes. The next Run starts a fresh kernel. Old saved outputs remain until a cell actually begins producing a new result; startup/dependency failures preserve them.

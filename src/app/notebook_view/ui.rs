@@ -51,17 +51,29 @@ impl EditorApp {
         let mut action = self.notebook_toolbar(ui, ctx, index, &mut view);
         if !view.source_mode {
             let mut visible = HashSet::new();
-            let scroll_offset = if view.reveal {
-                view.reveal = false;
-                view.active_index().map(|at| {
-                    view.book.cells[..at]
-                        .iter()
-                        .map(|c| view.cells.get(&c.uid).map(|c| c.height).unwrap_or(150.))
-                        .sum::<f32>()
+            // Cached heights can shrink when execution clears old output.
+            // Keep revealing a pending source target until it actually renders.
+            // Reading Markdown has no source editor, so its initial focus intent
+            // must not continually reset ordinary scrolling.
+            let pending_focus = view.focus.and_then(|uid| {
+                view.book.cells.iter().position(|cell| {
+                    cell.uid == uid
+                        && (cell.kind() != "markdown"
+                            || view.cells.get(&uid).is_some_and(|state| !state.previewing))
                 })
-            } else {
-                None
-            };
+            });
+            if pending_focus.is_some() {
+                ctx.request_repaint();
+            }
+            let reveal =
+                pending_focus.or_else(|| view.reveal.then(|| view.active_index()).flatten());
+            view.reveal = false;
+            let scroll_offset = reveal.map(|at| {
+                view.book.cells[..at]
+                    .iter()
+                    .map(|c| view.cells.get(&c.uid).map(|c| c.height).unwrap_or(150.))
+                    .sum::<f32>()
+            });
             let mut scroll = egui::ScrollArea::vertical()
                 .id_salt(("notebook", id))
                 .auto_shrink([false, false]);
@@ -199,11 +211,11 @@ impl EditorApp {
                                 if selected.is_some() { view.selection = None; }
                                 if focus_cell == Some(uid) { view.focus = None; }
                                 if edit.focused { view.active = uid; }
-                                if edit.submitted {
-                                    action = Some(if cell.kind() == "markdown" {
-                                        Action::Preview(at)
+                                if edit.submitted && edit.error.is_none() {
+                                    action = Some(if cell.kind() == "code" {
+                                        Action::RunNext
                                     } else {
-                                        Action::Run(false)
+                                        Action::Advance(at)
                                     });
                                 }
                                 if let Some(error) = edit.error { view.error = error.into(); }
@@ -395,11 +407,13 @@ impl EditorApp {
                         }
                     }
                     Action::Shutdown => view.stop("Kernel shut down · Run to restart"),
-                    Action::Preview(at) => {
-                        view.cells
-                            .entry(view.book.cells[at].uid)
-                            .or_default()
-                            .previewing = true;
+                    Action::Advance(at) => {
+                        view.active = view.book.cells[at].uid;
+                        if view.book.cells[at].kind() == "markdown" {
+                            view.cells.entry(view.active).or_default().previewing = true;
+                        }
+                        view.focus_next_cell();
+                        ctx.request_repaint();
                     }
                     other => action = Some(other),
                 }
@@ -426,6 +440,7 @@ impl EditorApp {
         }
         match action {
             Some(Action::Run(all)) => self.run_notebook(all, ctx),
+            Some(Action::RunNext) => self.run_notebook_next(ctx),
             Some(Action::Source) => self.toggle_notebook_source(ctx),
             _ => {}
         }

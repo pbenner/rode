@@ -3,6 +3,180 @@
 use super::*;
 
 #[test]
+fn next_cell_focus_survives_old_output_shrinking_before_it_is_rendered() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_notebook();
+    let document = app.documents[0].id;
+    let view = app.documents[0].notebook_mut().unwrap();
+    let first = view.active;
+    view.book
+        .apply_output(
+            first,
+            0,
+            Some(serde_json::json!({
+                "output_type":"stream", "name":"stdout", "text":"Old output\n".repeat(1000)
+            })),
+            None,
+            false,
+        )
+        .unwrap();
+    view.book.cells.extend((0..20).map(|_| Cell::new("code")));
+    let target = view.book.cells[1].uid;
+    let frame = |app: &mut EditorApp| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800., 600.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.notebook_ui(ui, ctx));
+            },
+        )
+    };
+    frame(&mut app);
+    frame(&mut app);
+    let view = app.documents[0].notebook_mut().unwrap();
+    assert!(view.cells[&first].height > 5000.);
+    view.focus_next_cell();
+    view.book.cells[0].clear_outputs();
+    for _ in 0..4 {
+        frame(&mut app);
+    }
+    let view = app.documents[0].notebook().unwrap();
+    assert_eq!(view.active, target);
+    assert_eq!(view.focus, None);
+    assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new((
+        "notebook-source",
+        document,
+        target
+    )))));
+}
+
+#[test]
+fn rejected_source_edit_with_shift_enter_keeps_source_and_focus_in_place() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_notebook();
+    let view = app.documents[0].notebook_mut().unwrap();
+    view.book.cells[0].change_kind("raw");
+    view.book.cells[0].set_source("keep this source".into());
+    view.book.cells.push(Cell::new("code"));
+    let first = view.active;
+    let before = view.book.serialize().unwrap();
+    let frame = |app: &mut EditorApp, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800., 600.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.notebook_ui(ui, ctx));
+            },
+        )
+    };
+    frame(&mut app, vec![]);
+    frame(
+        &mut app,
+        vec![
+            egui::Event::Paste("🦀".repeat(notebook::MAX_SOURCE / 4 + 1)),
+            egui::Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::SHIFT,
+            },
+        ],
+    );
+    let view = app.documents[0].notebook().unwrap();
+    assert_eq!(view.active, first);
+    assert_eq!(view.book.serialize().unwrap(), before);
+    assert_eq!(view.error, "Cell source exceeds 256 KiB.");
+    assert!(view.kernel.is_none());
+}
+
+#[test]
+fn shift_enter_renders_and_focuses_the_next_cell_even_beyond_the_viewport() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_notebook();
+    let view = app.documents[0].notebook_mut().unwrap();
+    view.book.cells[0].change_kind("markdown");
+    view.book.cells[0].set_source("# First section".into());
+    let first = view.book.cells[0].uid;
+    view.cells.entry(first).or_default().previewing = false;
+    let mut raw = Cell::new("raw");
+    raw.set_source("Raw line\n".repeat(100));
+    let middle = raw.uid;
+    let mut last = Cell::new("markdown");
+    last.set_source("# Last section".into());
+    let final_uid = last.uid;
+    view.book.cells.extend([raw, last]);
+    let before = view.book.serialize().unwrap();
+    let frame = |app: &mut EditorApp, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800., 600.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.notebook_ui(ui, ctx));
+            },
+        )
+    };
+    let enter = |modifiers| {
+        vec![egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]
+    };
+    let document = app.documents[0].id;
+    frame(&mut app, vec![]);
+    frame(&mut app, vec![]);
+    for expected in [middle, final_uid] {
+        frame(&mut app, enter(egui::Modifiers::SHIFT));
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        let view = app.documents[0].notebook().unwrap();
+        assert_eq!(view.active, expected);
+        assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new((
+            "notebook-source",
+            document,
+            expected
+        )))));
+        assert!(!view.cells[&expected].previewing);
+    }
+    frame(&mut app, enter(egui::Modifiers::SHIFT));
+    frame(&mut app, vec![]);
+    let view = app.documents[0].notebook().unwrap();
+    assert_eq!(view.active, final_uid);
+    assert!(view.cells[&first].previewing && view.cells[&final_uid].previewing);
+    assert!(
+        view.kernel.is_none(),
+        "Markdown/raw traversal must not start a kernel"
+    );
+    assert_eq!(view.book.serialize().unwrap(), before);
+}
+
+#[test]
 fn output_paging_keeps_all_saved_records_and_reveals_the_rest_on_request() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -332,11 +506,23 @@ fn a_disconnected_notebook_cannot_start_a_local_kernel_or_read_external_images()
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_notebook();
     app.documents[0].fixture_content().path = Some("/remote/work.ipynb".into());
+    let first = app.documents[0].notebook().unwrap().active;
+    app.documents[0]
+        .notebook_mut()
+        .unwrap()
+        .book
+        .cells
+        .push(Cell::new("code"));
     app.workspace
         .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.detach_ssh(documents::Retention::Keep, &ctx);
-    app.run_notebook(false, &ctx);
+    app.execute_command(Command::NotebookRun, &ctx);
     assert!(app.documents[0].notebook().unwrap().kernel.is_none());
+    assert_eq!(
+        app.documents[0].notebook().unwrap().active,
+        first,
+        "Rejected execution must not advance"
+    );
     assert!(
         app.notice
             .as_ref()

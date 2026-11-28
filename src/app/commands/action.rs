@@ -326,7 +326,7 @@ impl Command {
                 .palette("Hex: Open file / inspect binary"),
             Self::NewNotebook => Definition::new("New Jupyter notebook", Icon::NewFile)
                 .palette("Notebook: New Jupyter notebook"),
-            Self::NotebookRun => Definition::new("Notebook: Run selected cell", Icon::Play),
+            Self::NotebookRun => Definition::new("Notebook: Run cell and select next", Icon::Play),
             Self::NotebookRunAll => Definition::new("Notebook: Run all cells", Icon::Play),
             Self::MarpNew => Definition::new("New Marp presentation", Icon::NewFile)
                 .palette("Marp: New presentation"),
@@ -529,7 +529,7 @@ impl EditorApp {
                 },
                 ctx,
             ),
-            Command::NotebookRun => self.run_notebook(false, ctx),
+            Command::NotebookRun => self.run_notebook_next(ctx),
             Command::NotebookRunAll => self.run_notebook(true, ctx),
             Command::NotebookSource => self.toggle_notebook_source(ctx),
             Command::Open => self.set_dialog(Dialog::Open),

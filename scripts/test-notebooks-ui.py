@@ -211,6 +211,26 @@ def execution(ui, source, original, label):
     before = notebook(ui)
     key("Return", ("Shift_L",))
     completed(ui, before, [1])
+    cells = notebook(ui)["cells"]
+    ui.control(f"notebook-cell:{cells[2]['uid']}", focused=True)
+    before = notebook(ui)
+    key("Return", ("Shift_L",))
+    completed(ui, before, [2])
+    ui.control(f"notebook-cell:{cells[3]['uid']}", focused=True)
+    before = notebook(ui)
+    key("Return", ("Shift_L",))
+    completed(ui, before, [3])
+    ui.control(f"notebook-cell:{cells[3]['uid']}", focused=True)
+    assert len(notebook(ui)["cells"]) == len(cells), "Last-cell execution added a cell"
+    key("f", ("Control_L",))
+    ui.fill("notebook-find", "counter = 41")
+    key("Return")
+    ui.control(f"notebook-cell:{first['uid']}", focused=True)
+    key("Escape")
+    before = notebook(ui)
+    ui.command("Notebook: Run cell and select next")
+    completed(ui, before, [1])
+    ui.control(f"notebook-cell:{cells[2]['uid']}", focused=True)
     save(
         ui,
         source,

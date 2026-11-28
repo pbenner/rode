@@ -11,9 +11,39 @@ use rode::{
 };
 use std::{fs, io::Write, path::Path, process::Stdio};
 
+const DEVICE_PROBE: &str = include_str!("fixtures/sandbox_device.py");
+
+#[test]
+fn device_probe_checks_allowed_access_and_rejects_false_positives() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing");
+    let secret = directory.path().join("secret");
+    fs::write(&secret, b"private").unwrap();
+    for (expected, secret, success, diagnostic) in [
+        ("allowed", &missing, true, ""),
+        ("denied", &missing, false, "Unexpected device access"),
+        (
+            "allowed",
+            &secret,
+            false,
+            "Device grant exposed unrelated files",
+        ),
+    ] {
+        let output = std::process::Command::new("/usr/bin/python3")
+            .args(["-I", "-c", DEVICE_PROBE, "/dev/zero", expected])
+            .arg(secret)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.success(), success, "{stderr}");
+        assert!(stderr.contains(diagnostic), "{stderr}");
+    }
+}
+
 #[test]
 fn optional_devices_preserve_filesystem_denials_on_both_sandbox_backends() {
-    // /dev/full reads as zeroes, but is absent from the default device grants.
+    // Bubblewrap exposes /dev/full by default. A private alias exercises an
+    // optional path without GPU hardware or permission to create device nodes.
     // An enclosing sandbox can deny this node before our child policy runs.
     if fs::OpenOptions::new()
         .read(true)
@@ -27,6 +57,23 @@ fn optional_devices_preserve_filesystem_denials_on_both_sandbox_backends() {
         );
         return;
     }
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let device_directory = match tempfile::Builder::new()
+        .prefix("rode-device-")
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in("/dev/shm")
+    {
+        Ok(directory) => directory,
+        Err(error) => {
+            native_peer::capabilities::skip(
+                "devices",
+                &format!("Cannot create a private device alias in /dev/shm: {error}"),
+            );
+            return;
+        }
+    };
+    let device = device_directory.path().join("full");
+    symlink("/dev/full", &device).unwrap();
     let project = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     fs::write(outside.path().join("secret"), b"private").unwrap();
@@ -50,44 +97,29 @@ fn optional_devices_preserve_filesystem_denials_on_both_sandbox_backends() {
         let run = |plan: &sandbox::Plan, allowed: bool| {
             let mut command = rode_host_core::command::from_argv(&plan.prefix).unwrap();
             command
-                .args([
-                    "/usr/bin/python3",
-                    "-I",
-                    "-c",
-                    r#"
-import errno, fcntl, os, sys
-try:
-    fd = os.open('/dev/full', os.O_RDWR)
-except OSError as e:
-    assert sys.argv[1] == 'denied' and e.errno in (errno.EACCES, errno.EPERM, errno.ENOENT), str(e)
-else:
-    assert sys.argv[1] == 'allowed'
-    assert os.read(fd, 1) == b'\0'
-    try:
-        fcntl.ioctl(fd, 0xdeadbeef, 0)
-    except OSError as e:
-        assert e.errno == errno.ENOTTY, str(e)
-    os.close(fd)
-try:
-    open(sys.argv[2], 'rb')
-except (PermissionError, FileNotFoundError):
-    pass
-else:
-    raise AssertionError('Device grant exposed unrelated files')
-"#,
-                ])
+                .args(["/usr/bin/python3", "-I", "-c", DEVICE_PROBE])
+                .arg(&device)
                 .arg(if allowed { "allowed" } else { "denied" })
                 .arg(outside.path().join("secret"));
             let output = command.output().unwrap();
             assert!(
                 output.status.success(),
-                "{}: {}",
+                "{} (device {}, expected {}): {}",
                 backend.label(),
+                device.display(),
+                if allowed { "allowed" } else { "denied" },
                 String::from_utf8_lossy(&output.stderr)
             );
         };
         run(&ordinary, false);
-        options.devices = vec!["/dev/full".into(), "/dev/rode-test-missing-device".into()];
+        options.devices = vec![
+            device.to_string_lossy().into_owned(),
+            device_directory
+                .path()
+                .join("missing")
+                .to_string_lossy()
+                .into_owned(),
+        ];
         let permitted = native_peer::prepare(project.path().to_str().unwrap(), &options).unwrap();
         assert!(permitted.active, "{}", permitted.reason);
         run(&permitted, true);
