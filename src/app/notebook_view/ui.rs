@@ -210,7 +210,7 @@ impl EditorApp {
                                 changed |= edit.changed;
                             }
                             if cell.kind() == "code" {
-                                for (output_index, output) in cell.outputs().iter().take(notebook::MAX_OUTPUTS).enumerate() {
+                                for (output_index, output) in cell.outputs().iter().take(state.output_limit).enumerate() {
                                     ui.add_space(6.);
                                     if output["data"].get("image/png").is_some() || output["data"].get("image/jpeg").is_some() {
                                         let key = (uid, cell.outputs_version, output_index);
@@ -281,8 +281,10 @@ impl EditorApp {
                                         ui.add(egui::Label::new(RichText::new(text).monospace().color(color)).wrap().selectable(true));
                                     }
                                 }
-                                if cell.outputs().len() > notebook::MAX_OUTPUTS {
-                                    ui.small("Only the first 256 saved outputs are displayed; the rest are preserved.");
+                                if cell.outputs().len() > state.output_limit {
+                                    let more = crate::keyboard::button(ui, format!("Show more outputs ({} remaining)", cell.outputs().len() - state.output_limit));
+                                    ui_probe::button(ui, &format!("notebook-more-outputs:{uid}"), &more);
+                                    if more.clicked() { state.output_limit = state.output_limit.saturating_add(64); }
                                 }
                             }
                         });
@@ -472,44 +474,53 @@ fn cell_toolbar(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
+// Borrow strings/lines so a 100 MiB retained result never becomes a 100 MiB
+// temporary allocation just to render its first few visible kilobytes.
+fn text_parts(value: &Value) -> Option<Box<dyn Iterator<Item = &str> + '_>> {
+    match value {
+        Value::String(text) => Some(Box::new(std::iter::once(text.as_str()))),
+        Value::Array(lines) => Some(Box::new(lines.iter().filter_map(Value::as_str))),
+        _ => None,
+    }
+}
 fn output_text(output: &Value) -> String {
-    let text = match output["output_type"].as_str().unwrap_or("") {
-        "stream" => notebook::multiline(&output["text"]).unwrap_or_default(),
-        "error" => output["traceback"]
-            .as_array()
-            .map(|lines| lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"))
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| format!(
-                "{}: {}",
-                output["ename"].as_str().unwrap_or("Error"),
-                output["evalue"].as_str().unwrap_or("")
-            )),
-        _ => notebook::multiline(&output["data"]["text/plain"])
-            .or_else(|_| notebook::multiline(&output["data"]["text/markdown"]))
-            .unwrap_or_else(|_| {
-                "[Rich output has no supported text/PNG/JPEG representation; its data is preserved.]".into()
-            }),
+    let parts: Box<dyn Iterator<Item = &str> + '_> = match output["output_type"].as_str().unwrap_or("") {
+        "stream" => text_parts(&output["text"]).unwrap_or_else(|| Box::new(std::iter::empty())),
+        "error" if output["traceback"].as_array().is_some_and(|lines| !lines.is_empty()) => {
+            Box::new(output["traceback"].as_array().unwrap().iter().filter_map(Value::as_str)
+                .flat_map(|line| [line, "\n"]))
+        }
+        "error" => Box::new([output["ename"].as_str().unwrap_or("Error"), ": ", output["evalue"].as_str().unwrap_or("")].into_iter()),
+        _ => text_parts(&output["data"]["text/plain"]).or_else(|| text_parts(&output["data"]["text/markdown"]))
+            .unwrap_or_else(|| Box::new(std::iter::once("[Rich output has no supported text/PNG/JPEG representation; its data is preserved.]"))),
     };
     let mut result = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            if chars.next() == Some('[') {
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
+    let mut raw = parts.flat_map(str::chars);
+    let mut clipped = false;
+    {
+        // Bound both visible text and scanning of invisible escape sequences.
+        let mut chars = raw.by_ref().take(64 * 1024).peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                if chars.next() == Some('[') {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
                     }
                 }
+            } else if !c.is_control() || "\n\t\r".contains(c) {
+                result.push(c);
             }
-        } else if !c.is_control() || "\n\t\r".contains(c) {
-            result.push(c);
+            if result.len() >= 64 * 1024 {
+                clipped = true;
+                break;
+            }
         }
-        if result.len() >= 64 * 1024 {
-            result.push_str(
-                "\n[Output display limited to 64 KiB; full output remains in the notebook.]",
-            );
-            break;
-        }
+    }
+    if clipped || raw.next().is_some() {
+        result
+            .push_str("\n[Output display limited to 64 KiB; full output remains in the notebook.]");
     }
     result
 }

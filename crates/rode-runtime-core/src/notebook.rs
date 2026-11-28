@@ -30,6 +30,17 @@ pub struct Run {
 /// Normalized Jupyter events tagged with their originating execution snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
+    /// Incremental host replay, already source-bound by the desktop attachment.
+    Edits {
+        /// Current view's source identity.
+        run: Run,
+        /// Clear the previous execution before applying edits.
+        reset: bool,
+        /// Only changed output records or newly printed stream text.
+        edits: Vec<crate::service::OutputEdit>,
+        /// Current execution count.
+        count: Option<u64>,
+    },
     /// Kernel startup information received from the bridge.
     Ready(Value),
     /// A bounded notebook MIME/stream/error output.
@@ -67,6 +78,7 @@ pub struct Kernel {
     started: Instant,
     startup_timeout: Duration,
     incoming: incoming::Incoming,
+    output_budget: outputs::MemoryBudget,
     /// Current human-readable bridge/kernel status.
     pub status: String,
     /// Project-host interpreter running the Jupyter bridge.
@@ -77,6 +89,10 @@ pub struct Kernel {
     pub execution: String,
 }
 impl Kernel {
+    /// RAM allowance captured by the active queue.
+    pub fn output_budget(&self) -> outputs::MemoryBudget {
+        self.output_budget
+    }
     /// Whether initialization has completed.
     pub fn ready(&self) -> bool {
         self.ready
@@ -118,6 +134,7 @@ impl Kernel {
             started: Instant::now(),
             startup_timeout,
             incoming: Default::default(),
+            output_budget: Default::default(),
             status: "Starting kernel…".into(),
             python,
             name,
@@ -139,6 +156,14 @@ impl Kernel {
     }
     /// Validate and enqueue bounded cell snapshots, preserving sequential execution.
     pub fn run(&mut self, runs: Vec<Run>) -> Result<()> {
+        self.run_with_output_budget(runs, Default::default())
+    }
+    /// Capture a RAM allowance for this queue without restarting its kernel.
+    pub fn run_with_output_budget(
+        &mut self,
+        runs: Vec<Run>,
+        output_budget: outputs::MemoryBudget,
+    ) -> Result<()> {
         ensure!(
             !self.failed,
             "Restart the failed notebook kernel before running cells."
@@ -156,6 +181,7 @@ impl Kernel {
             runs.iter().all(|r| r.code.len() <= MAX_CODE),
             "Code cells are limited to 128 KiB per execution."
         );
+        self.output_budget = output_budget;
         self.queue = runs.into();
         self.next_run()
     }
@@ -167,7 +193,7 @@ impl Kernel {
             let id = self.next;
             self.next += 1;
             self.session
-                .send(&json!({"cmd":"execute","id":id,"code":run.code}))?;
+                .send(&json!({"cmd":"execute","id":id,"code":run.code,"output_budget":self.output_budget.bytes()}))?;
             self.pending = Some((id, run));
             self.status = "Running…".into();
         } else {
@@ -219,7 +245,7 @@ impl Kernel {
             }
             match event {
                 process::Event::Message(message) => {
-                    let message = match self.incoming.message(message) {
+                    let mut message = match self.incoming.message(message) {
                         Ok(Some(message)) => message,
                         Ok(None) => continue,
                         Err(error) => {
@@ -251,7 +277,7 @@ impl Kernel {
                             if let Some(run) = run {
                                 events.push(Event::Output {
                                     run,
-                                    output: message["output"].clone(),
+                                    output: message["output"].take(),
                                     update: message["update"] == true,
                                     display_id: message["display_id"].as_str().map(str::to_owned),
                                 });

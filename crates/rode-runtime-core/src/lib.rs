@@ -3,6 +3,7 @@
 pub mod debugger;
 mod json;
 pub use json::json_size;
+pub mod json_stream;
 pub mod notebook;
 pub mod process;
 pub mod service;

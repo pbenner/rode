@@ -33,6 +33,13 @@ impl Incoming {
             "Notebook output fragments exceed their size limit"
         );
         self.id = Some(id);
+        let needed = self.data.len() + chunk.len();
+        if needed > self.data.capacity() {
+            let capacity = needed
+                .max(self.data.capacity().saturating_mul(2))
+                .min(MAX_MESSAGE_BYTES);
+            self.data.reserve_exact(capacity - self.data.len());
+        }
         self.data.push_str(chunk);
         if !last {
             return Ok(None);

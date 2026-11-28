@@ -90,6 +90,7 @@ impl Lifecycle {
 }
 /// One exclusive, bounded attachment. Dropping it preserves only persistent work.
 pub struct Client {
+    incoming: rode_runtime_core::json_stream::Incoming,
     cleanup: Arc<AtomicBool>,
     identity: Identity,
     lifecycle: Lifecycle,
@@ -219,6 +220,7 @@ impl Client {
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         Self {
+            incoming: Default::default(),
             cleanup: Arc::new(AtomicBool::new(false)),
             identity,
             lifecycle,
@@ -257,11 +259,12 @@ impl Client {
                 python: "off".into(),
                 python_program: false,
                 native_debug: false,
-                line_limit: 16 * 1024 * 1024,
+                line_limit: service::ATTACHMENT_LINE_LIMIT,
             },
             self.wake.clone(),
         )?;
         self.lifecycle = Lifecycle::Connecting(bridge);
+        self.incoming = Default::default();
         self.info = Some(info);
         Ok(())
     }
@@ -331,36 +334,39 @@ impl Client {
             for _ in 0..64 {
                 let Some(event) = bridge.poll() else { break };
                 match event {
-                    process::Event::Message(value) => match serde_json::from_value::<Update>(value)
-                    {
-                        Ok(Update::State(state)) => {
-                            connected = true;
-                            self.info = Some(state.info.clone());
-                            self.inflight
-                                .retain(|id| !state.acknowledgements.contains(id));
-                            if self.persistence_change == Some(state.info.persistent) {
-                                self.persistence_change = None;
+                    process::Event::Message(value) => {
+                        match self.incoming.message::<Update>(value) {
+                            Ok(None) => {}
+                            Ok(Some(Update::State(state))) => {
+                                connected = true;
+                                self.info = Some(state.info.clone());
+                                self.inflight
+                                    .retain(|id| !state.acknowledgements.contains(id));
+                                if self.persistence_change == Some(state.info.persistent) {
+                                    self.persistence_change = None;
+                                }
+                                // Notebook retention/execution warnings are delivered in State
+                                // while the kernel remains alive; they are not transport failures.
+                                if !state.error.is_empty()
+                                    && (state.info.kind != service::Kind::Notebook
+                                        || !state.info.alive)
+                                {
+                                    self.error = Some(state.error.clone());
+                                }
+                                self.state = Some(*state.clone());
+                                updates.push(Update::State(state));
                             }
-                            // Notebook retention/execution warnings are delivered in State
-                            // while the kernel remains alive; they are not transport failures.
-                            if !state.error.is_empty()
-                                && (state.info.kind != service::Kind::Notebook || !state.info.alive)
-                            {
-                                self.error = Some(state.error.clone());
+                            Ok(Some(Update::Error(error))) => {
+                                failed = true;
+                                self.error = Some(error);
                             }
-                            self.state = Some(*state.clone());
-                            updates.push(Update::State(state));
+                            Ok(Some(update)) => updates.push(update),
+                            Err(error) => {
+                                failed = true;
+                                self.error = Some(error.to_string());
+                            }
                         }
-                        Ok(Update::Error(error)) => {
-                            failed = true;
-                            self.error = Some(error);
-                        }
-                        Ok(update) => updates.push(update),
-                        Err(error) => {
-                            failed = true;
-                            self.error = Some(error.to_string());
-                        }
-                    },
+                    }
                     process::Event::Error(error) => {
                         failed = true;
                         self.error = Some(error);

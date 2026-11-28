@@ -101,12 +101,8 @@ for _ in range(3):
             })
             .collect::<Vec<_>>();
         assert!(warnings.is_empty(), "{warnings:?}");
-        let png = events
-            .iter()
-            .find_map(|event| match event {
-                Event::Output { output, .. } => output["data"]["image/png"].as_str(),
-                _ => None,
-            })
+        let png = output_values(&events)
+            .find_map(|output| output["data"]["image/png"].as_str())
             .expect("No high-resolution plot output");
         assert!(png.len() > 2 * 1024 * 1024);
         use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -119,7 +115,7 @@ for _ in range(3):
             2,
             format!(
                 "print('x' * {})\noverflow_finished = True",
-                rode_runtime_core::notebook::outputs::MAX_TEXT_BYTES + 1
+                64 * 1024 * 1024 + 1
             ),
         );
         let following = run(
@@ -127,7 +123,9 @@ for _ in range(3):
             "assert overflow_finished\nopen('queue-finished', 'w').write('ok')".into(),
         );
         kernel.bind(vec![overflow.clone(), following.clone()]);
-        kernel.run(vec![overflow, following]).unwrap();
+        kernel
+            .run_with_output_budget(vec![overflow, following], 64.try_into().unwrap())
+            .unwrap();
         let events = wait(&mut kernel, 2);
         assert!(events.iter().any(
             |event| matches!(event, Event::Warning(message) if message.contains("preserved"))
@@ -143,6 +141,7 @@ for _ in range(3):
             std::fs::read_to_string(root.path().join("queue-finished")).unwrap(),
             "ok"
         );
+        kernel.clear_outputs(Some("cell-2".into())).unwrap();
         let reuse = run(
             4,
             "assert sentinel == 123\nassert os.getpid() == kernel_pid\nprint('same kernel')".into(),
@@ -150,9 +149,7 @@ for _ in range(3):
         kernel.bind(vec![reuse.clone()]);
         kernel.run(vec![reuse]).unwrap();
         let events = wait(&mut kernel, 1);
-        assert!(events.iter().any(
-            |event| matches!(event, Event::Output{output,..} if output["text"]=="same kernel\n")
-        ));
+        assert!(output_values(&events).any(|output| output["text"] == "same kernel\n"));
 
         let progress = run(
             5,
@@ -173,6 +170,14 @@ for _ in range(3):
                 Event::Clear(_) => {
                     retained.apply_output(uid, 0, None, None, true).unwrap();
                 }
+                Event::Edits {
+                    reset,
+                    edits,
+                    count,
+                    ..
+                } => {
+                    retained.apply_edits(uid, 0, reset, &edits, count).unwrap();
+                }
                 Event::Output { output, .. } => {
                     retained
                         .apply_output(uid, 0, Some(output), None, false)
@@ -188,6 +193,75 @@ for _ in range(3):
                 .map(|index| format!("progress {index}\n"))
                 .collect::<String>()
         );
+        let records = run(
+            7,
+            "for i in range(600):\n    display({'text/plain': f'row {i}'}, raw=True)".into(),
+        );
+        kernel.bind(vec![records.clone()]);
+        kernel.run(vec![records]).unwrap();
+        let events = wait(&mut kernel, 1);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::Warning(_)))
+        );
+        let mut many = Notebook::default();
+        let uid = many.cells[0].uid;
+        for event in events {
+            match event {
+                Event::Clear(_) => {
+                    many.apply_output(uid, 0, None, None, true).unwrap();
+                }
+                Event::Edits {
+                    reset,
+                    edits,
+                    count,
+                    ..
+                } => {
+                    many.apply_edits(uid, 0, reset, &edits, count).unwrap();
+                }
+                Event::Output { output, .. } => {
+                    many.apply_output(uid, 0, Some(output), None, false)
+                        .unwrap();
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(many.cells[0].outputs().len(), 600);
+        assert_eq!(
+            many.cells[0].outputs()[599]["data"]["text/plain"],
+            "row 599"
+        );
+        // A lower project allowance and a later larger one apply to new runs
+        // on the same live kernel, including HTML MIME output alongside stdout.
+        for mib in [64, 128] {
+            let verbose = run(6, "assert os.getpid() == kernel_pid\nhtml = '<html><script>' + 'x' * (20 * 1024 * 1024) + '</script></html>'\nwith open('sites_all_layers.html', 'w') as saved:\n    saved.write(html)\nprint('v' * (1536 * 1024))\ndisplay({'text/html': html, 'text/plain': 'standalone HTML'}, raw=True)".into());
+            kernel.bind(vec![verbose.clone()]);
+            kernel
+                .run_with_output_budget(vec![verbose], mib.try_into().unwrap())
+                .unwrap();
+            let events = wait(&mut kernel, 1);
+            let saved_html =
+                std::fs::read_to_string(root.path().join("sites_all_layers.html")).unwrap();
+            assert_eq!(saved_html.len(), 20 * 1024 * 1024 + 30);
+            assert!(
+                saved_html.starts_with("<html><script>")
+                    && saved_html.ends_with("</script></html>")
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, Event::Warning(_)))
+            );
+            assert!(output_values(&events).any(|output| {
+                output["text"]
+                    .as_str()
+                    .is_some_and(|text| text.len() == 1536 * 1024 + 1)
+            }));
+            assert!(output_values(&events).any(
+                |output| output["data"]["text/html"].as_str() == Some(saved_html.as_str())
+            ));
+        }
         kernel.stop();
         let until = Instant::now() + Duration::from_secs(10);
         while kernel.pending() {
@@ -199,7 +273,146 @@ for _ in range(3):
 }
 
 #[test]
-fn stream_fragments_coalesce_without_reordering_outputs_or_bypassing_text_limits() {
+fn managed_kernel_accepts_large_atomic_source_queues() {
+    let Some(python) = interpreter() else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    let plan = native_peer::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
+    let mut kernel = Kernel::start_managed(
+        plan,
+        None,
+        python,
+        "python3".into(),
+        None,
+        root.path().join("queue.ipynb").to_string_lossy().into(),
+        false,
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    let padding = "x".repeat(100 * 1024);
+    let runs: Vec<_> = (0..24)
+        .map(|uid| Run {
+            uid,
+            cell: format!("queue-{uid}"),
+            version: 0,
+            code: format!("#{padding}\nprint({uid})"),
+        })
+        .collect();
+    assert!(serde_json::to_vec(&runs).unwrap().len() > 2 * 1024 * 1024);
+    kernel.bind(runs.clone());
+    kernel.run(runs).unwrap();
+    let events = wait(&mut kernel, 24);
+    assert!(output_values(&events).any(|output| output["text"] == "23\n"));
+    kernel.stop();
+}
+
+#[test]
+fn restoring_edited_source_resyncs_outputs_skipped_during_host_execution() {
+    let Some(python) = interpreter() else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    let plan = native_peer::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
+    let mut book = Notebook::default();
+    let code = "import time\nfrom pathlib import Path\nprint('first', flush=True)\nwhile not Path('continue').exists():\n    time.sleep(0.01)\nprint('second', flush=True)";
+    book.cells[0].set_source(code.into());
+    let run = Run {
+        uid: book.cells[0].uid,
+        cell: "stream".into(),
+        version: book.cells[0].version,
+        code: code.into(),
+    };
+    let mut kernel = Kernel::start_managed(
+        plan,
+        None,
+        python,
+        "python3".into(),
+        None,
+        root.path().join("stream.ipynb").to_string_lossy().into(),
+        false,
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    kernel.bind(vec![run.clone()]);
+    kernel.run(vec![run.clone()]).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while book.cells[0].outputs().is_empty() {
+        apply_events(&mut book, kernel.poll());
+        assert!(
+            Instant::now() < deadline,
+            "First output did not arrive: {}",
+            kernel.status
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    book.cells[0].set_source("# edited during execution".into());
+    kernel.bind(vec![Run {
+        version: book.cells[0].version,
+        code: book.cells[0].source.clone(),
+        ..run.clone()
+    }]);
+    std::fs::write(root.path().join("continue"), "").unwrap();
+    // Idle is delivered after all output packets. Reaching it proves the view
+    // consumed and rejected the source-incompatible second output.
+    while kernel.busy() {
+        for event in kernel.poll() {
+            assert!(!matches!(event, Event::Output { .. } | Event::Edits { .. }));
+            if let Event::Error(error) = event {
+                panic!("{error}");
+            }
+        }
+        assert!(Instant::now() < deadline, "Edited execution did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(book.cells[0].outputs()[0]["text"], "first\n");
+    book.cells[0].set_source(code.into());
+    kernel.bind(vec![Run {
+        version: book.cells[0].version,
+        ..run
+    }]);
+    apply_events(&mut book, wait(&mut kernel, 1));
+    assert_eq!(book.cells[0].outputs().len(), 1);
+    assert_eq!(book.cells[0].outputs()[0]["text"], "first\nsecond\n");
+    assert_eq!(
+        book.cells[0].data["execution_count"], 1,
+        "Resync must not execute code again"
+    );
+    kernel.stop();
+}
+
+fn apply_events(book: &mut Notebook, events: Vec<Event>) {
+    for event in events {
+        match event {
+            Event::Clear(run) => {
+                book.apply_output(run.uid, run.version, None, None, true)
+                    .unwrap();
+            }
+            Event::Output { run, output, .. } => {
+                book.apply_output(run.uid, run.version, Some(output), None, false)
+                    .unwrap();
+            }
+            Event::Edits {
+                run,
+                reset,
+                edits,
+                count,
+            } => {
+                book.apply_edits(run.uid, run.version, reset, &edits, count)
+                    .unwrap();
+            }
+            Event::Count(run, count) => {
+                book.apply_output(run.uid, run.version, None, Some(count), false)
+                    .unwrap();
+            }
+            Event::Error(error) => panic!("{error}"),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn stream_fragments_coalesce_without_reordering_outputs_or_bypassing_output_budgets() {
     use serde_json::json;
     let mut book = Notebook::default();
     let uid = book.cells[0].uid;
@@ -225,8 +438,95 @@ fn stream_fragments_coalesce_without_reordering_outputs_or_bypassing_text_limits
     }
     assert_eq!(book.cells[0].outputs().len(), 4);
     let before = book.serialize().unwrap();
-    assert!(book.apply_output(uid, 0, Some(json!({"output_type":"stream", "name":"stdout", "text":"x".repeat(rode_runtime_core::notebook::outputs::MAX_TEXT_BYTES)})), None, false).is_err());
+    assert!(
+        book.apply_edits(
+            uid,
+            0,
+            false,
+            &[rode_runtime_core::service::OutputEdit::Text {
+                index: 99,
+                text: "new text".into()
+            }],
+            None
+        )
+        .is_err()
+    );
     assert_eq!(book.serialize().unwrap(), before);
+}
+
+#[test]
+fn notebook_ram_admission_checks_display_fanout_atomically_and_snapshots_share_payloads() {
+    use serde_json::json;
+    let mut book = Notebook::default();
+    book.cells = (0..17).map(|_| notebook::Cell::new("code")).collect();
+    book.set_output_budget(64.try_into().unwrap());
+    let targets = book
+        .cells
+        .iter()
+        .map(|cell| (cell.uid, 0, 0))
+        .collect::<Vec<_>>();
+    for &(uid, version, _) in &targets {
+        book.apply_output(
+            uid,
+            version,
+            Some(json!({"output_type":"display_data", "data":{"text/plain":"before"}})),
+            Some(1),
+            false,
+        )
+        .unwrap();
+    }
+    let original = book.serialize().unwrap();
+    let replacement =
+        json!({"output_type":"display_data", "data":{"text/html":"x".repeat(4 * 1024 * 1024)}});
+    assert!(book.update_display_outputs(&targets, &replacement).is_err());
+    assert_eq!(book.serialize().unwrap(), original);
+    assert!(book.cells.iter().all(|cell| cell.outputs_version == 1));
+    book.set_output_budget(128.try_into().unwrap());
+    assert_eq!(
+        book.update_display_outputs(&targets, &replacement)
+            .unwrap()
+            .len(),
+        targets.len()
+    );
+    let snapshot = book.clone();
+    for cell in &snapshot.cells {
+        assert!(Arc::ptr_eq(&cell.outputs()[0], &book.cells[0].outputs()[0]));
+    }
+    book.cells[0].clear_outputs();
+    assert_eq!(
+        snapshot.cells[0].outputs()[0]["data"]["text/html"]
+            .as_str()
+            .unwrap()
+            .len(),
+        4 * 1024 * 1024
+    );
+    // Explicit clear releases the charged allowance without disturbing a snapshot.
+    for cell in &mut book.cells {
+        cell.clear_outputs();
+    }
+    book.set_output_budget(64.try_into().unwrap());
+    let uid = book.cells[0].uid;
+    assert!(
+        book.apply_output(uid, 0, Some(replacement), Some(2), false)
+            .unwrap()
+    );
+}
+
+fn output_values(events: &[Event]) -> impl Iterator<Item = &serde_json::Value> {
+    events.iter().flat_map(|event| match event {
+        Event::Output { output, .. } => vec![output],
+        Event::Edits { edits, .. } => edits
+            .iter()
+            .filter_map(|edit| match edit {
+                rode_runtime_core::service::OutputEdit::Append { output }
+                | rode_runtime_core::service::OutputEdit::Replace { output, .. } => {
+                    Some(output.value.as_ref())
+                }
+                _ => None,
+            })
+            .collect(),
+        _ => vec![],
+    })
 }
 fn interpreter() -> Option<String> {
     native_peer::capabilities::tool("jupyter", &["RODE_TEST_JUPYTER"])
@@ -302,10 +602,22 @@ fn execution_results_are_version_checked_and_output_limits_roll_back_atomically(
     );
     assert_eq!(book.cells[0].outputs()[0]["text"], "42\n");
     let before = book.serialize().unwrap();
-    let huge = serde_json::json!({"output_type":"stream","name":"stdout","text":"x".repeat(notebook::MAX_OUTPUT_BYTES+1)});
     assert!(
-        book.apply_output(uid, 1, Some(huge), Some(99), false)
-            .is_err()
+        book.apply_edits(
+            uid,
+            1,
+            false,
+            &[rode_runtime_core::service::OutputEdit::Replace {
+                index: 99,
+                output: rode_runtime_core::service::Output::new(
+                    serde_json::json!({"text":"new text"}),
+                    None
+                )
+                .unwrap()
+            }],
+            Some(99)
+        )
+        .is_err()
     );
     assert_eq!(book.serialize().unwrap(), before);
     assert!(!book.apply_output(0, 1, None, None, true).unwrap());

@@ -176,11 +176,21 @@ impl EditorApp {
     }
 }
 
+const MAX_IMAGE_PREVIEW_BYTES: usize = 32 * 1024 * 1024;
+
 /// Share preview/export MIME selection and its encoded bound with Markdown attachments.
 pub(super) fn image_bundle(bundle: &Value) -> Option<(String, String)> {
     for (mime, path) in [("image/png", "output.png"), ("image/jpeg", "output.jpg")] {
-        if let Ok(data) = notebook::multiline(&bundle[mime])
-            && data.len() <= notebook::MAX_OUTPUT_BYTES
+        let size = match &bundle[mime] {
+            Value::String(text) => Some(text.len()),
+            Value::Array(parts) => parts.iter().try_fold(0usize, |size, value| {
+                let next = size.saturating_add(value.as_str()?.len());
+                (next <= MAX_IMAGE_PREVIEW_BYTES).then_some(next)
+            }),
+            _ => None,
+        };
+        if size.is_some_and(|size| size <= MAX_IMAGE_PREVIEW_BYTES)
+            && let Ok(data) = notebook::multiline(&bundle[mime])
         {
             return Some((data, path.into()));
         }
@@ -268,7 +278,7 @@ mod tests {
             json!({}),
             json!({"image/png": "invalid"}),
             json!({"image/png": STANDARD.encode(b"not an image")}),
-            json!({"image/png": "a".repeat(notebook::MAX_OUTPUT_BYTES + 1)}),
+            json!({"image/png": "a".repeat(MAX_IMAGE_PREVIEW_BYTES + 1)}),
         ] {
             assert!(ImageExport::capture(1, "book.ipynb", 1, 1, &bundle).is_err());
         }

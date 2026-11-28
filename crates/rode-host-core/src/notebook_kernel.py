@@ -48,18 +48,18 @@ class OutputBudget:
         self.limits = limits
         self.entries = []
         self.reason = ""
+        self.used = 0
+        self.displays = {}
 
     def clear(self):
         self.entries.clear()
+        self.used = 0
+        self.displays.clear()
 
     def accept(self, output, display_id, update, clear=False):
         self.reason = ""
-        size = len(compact(output).encode("utf-8"))
-        text = size
-        for mime in ("image/png", "image/jpeg"):
-            if mime in output.get("data", {}):
-                text -= len(compact(output["data"][mime]).encode("utf-8"))
-        entries = [] if clear else list(self.entries)
+        size = len(compact(output).encode("utf-8")) + self.limits["overhead"]
+        size += len(display_id.encode("utf-8")) if display_id else 0
         stream = (
             output.get("name")
             if output.get("output_type") == "stream"
@@ -67,35 +67,42 @@ class OutputBudget:
             and isinstance(output.get("text"), str)
             else None
         )
-        entry = (size, text, display_id, stream)
+        entry = (size, display_id, stream)
+        used = 0 if clear else self.used
+        targets = [] if clear else self.displays.get(display_id, [])
+        merge = (
+            not update
+            and not clear
+            and stream is not None
+            and self.entries
+            and self.entries[-1][2] == stream
+        )
         if update:
-            entries = [entry if display_id and old[2] == display_id else old for old in entries]
-        elif stream is not None and entries and entries[-1][3] == stream:
-            # Only the fragment's escaped JSON string contents are added to the
-            # retained stream; its object header and quotes already exist.
-            fragment = len(compact(output["text"]).encode("utf-8")) - 2
-            previous = entries[-1]
-            entries[-1] = (previous[0] + fragment, previous[1] + fragment, display_id, stream)
+            candidate = (
+                used + size * len(targets) - sum(self.entries[index][0] for index in targets)
+            )
+        elif merge:
+            previous = self.entries[-1]
+            extra = len(compact(output["text"]).encode("utf-8")) - 2
+            entry = (previous[0] + extra, display_id, stream)
+            candidate = used + extra
         else:
-            entries.append(entry)
-        separators = max(0, len(entries) - 1) + 2
-        for exceeded, reason in [
-            (
-                size + 2 > self.limits["bytes"]
-                or sum(old[0] for old in entries) + separators > self.limits["bytes"],
-                f"{self.limits['bytes'] / (1024 * 1024):g} MiB including images",
-            ),
-            (
-                text + 2 > self.limits["text"]
-                or sum(old[1] for old in entries) + separators > self.limits["text"],
-                f"{self.limits['text'] / (1024 * 1024):g} MiB of text and metadata",
-            ),
-            (len(entries) > self.limits["count"], f"{self.limits['count']} output records"),
-        ]:
-            if exceeded:
-                self.reason = reason
-                return False
-        self.entries = entries
+            candidate = used + size
+        if size > self.limits["bytes"] or candidate > self.limits["bytes"]:
+            self.reason = f"{self.limits['bytes'] / (1024 * 1024):g} MiB output RAM allowance"
+            return False
+        if clear:
+            self.clear()
+        if update:
+            for index in targets:
+                self.entries[index] = entry
+        elif merge:
+            self.entries[-1] = entry
+        else:
+            if display_id:
+                self.displays.setdefault(display_id, []).append(len(self.entries))
+            self.entries.append(entry)
+        self.used = candidate
         return True
 
 
@@ -151,6 +158,10 @@ def terminate(*_args):
 
 def execute(manager, client, message, limits):
     """Run one bounded code snapshot and translate only matching Jupyter messages into safe outputs."""
+    budget = message.get("output_budget", limits["bytes"])
+    if type(budget) is not int or not 0 < budget <= limits["message"]:
+        raise ValueError("Invalid notebook output RAM budget")
+    limits = dict(limits, bytes=budget)
     code = message.get("code", "")
     request_id = message["id"]
     if not isinstance(code, str) or len(code.encode("utf-8")) > 128 * 1024:
@@ -224,9 +235,9 @@ def execute(manager, client, message, limits):
                         "warning",
                         id=request_id,
                         message=(
-                            f"Some cell output was omitted ({reason}). "
+                            f"Some notebook display output was omitted ({reason}). "
                             "Computation continues; earlier output and kernel variables are preserved. "
-                            "Reduce the output or use clear_output() to make room."
+                            "Files written by the cell are unaffected."
                         ),
                     )
                     warned = True

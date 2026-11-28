@@ -11,7 +11,10 @@ use serde_json::Value;
 use std::sync::Condvar;
 
 const FRAME_LIMIT: usize = super::framing::RUNTIME.limit();
-const NOTEBOOK_LIMIT: usize = notebook::outputs::MAX_NOTEBOOK_BYTES;
+mod notebook_output;
+use notebook_output::event as notebook_event;
+#[cfg(test)]
+use notebook_output::update_displays as update_notebook_displays;
 const TERMINAL_EVENT_LIMIT: usize = 128;
 #[derive(Default)]
 /// Host registry of retained notebook/debugger controllers; completed persistent state
@@ -24,6 +27,7 @@ pub(super) struct Store {
 struct Shared {
     view: View,
     cells: BTreeMap<String, Cell>,
+    output_bytes: usize,
     revision: u64,
     terminals: BTreeMap<u64, (String, vt100::Parser, bool)>,
     events: VecDeque<(u64, debugger::Event)>,
@@ -209,6 +213,7 @@ impl Store {
         let job = Arc::new(Job {
             shared: Mutex::new(Shared {
                 view: View {
+                    output_budget: Default::default(),
                     acknowledgement: String::new(),
                     acknowledgements: vec![],
                     info: info.clone(),
@@ -225,6 +230,7 @@ impl Store {
                     error: String::new(),
                 },
                 cells: BTreeMap::new(),
+                output_bytes: 0,
                 revision: 0,
                 terminals: BTreeMap::new(),
                 events: VecDeque::new(),
@@ -323,7 +329,10 @@ impl Store {
                     let updated: Vec<_> = shared
                         .cells
                         .iter()
-                        .filter(|(key, cell)| cells.get(*key) != Some(&cell.revision))
+                        .filter(|(key, cell)| {
+                            cells.get(*key).and_then(service::outputs::Cursor::revision)
+                                != Some(cell.revision)
+                        })
                         .map(|(key, cell)| (key.clone(), cell.clone()))
                         .collect();
                     let mut events = vec![];
@@ -375,8 +384,13 @@ impl Store {
                     }
                     send(&mut writer, &Update::State(Box::new(state)))?;
                     for (key, cell) in updated {
-                        cells.insert(key, cell.revision);
-                        send(&mut writer, &Update::Cell(cell))?;
+                        if let Some(update) = cells
+                            .entry(key)
+                            .or_insert_with(service::outputs::Cursor::default)
+                            .update(&cell)
+                        {
+                            send(&mut writer, &update)?;
+                        }
                     }
                     if let Some(completion) = completion {
                         send(&mut writer, &Update::State(Box::new(completion)))?;
@@ -625,12 +639,31 @@ fn apply(controller: &mut Controller, job: &Job, action: Action) -> Result<()> {
                 "This is not a notebook kernel"
             );
             let mut shared = job.shared.lock().unwrap();
+            let mut freed = 0;
             for (id, result) in &mut shared.cells {
                 if cell.as_ref().is_none_or(|wanted| wanted == id) {
+                    freed += result.output_bytes;
                     result.outputs.clear();
+                    result.output_bytes = 0;
                     result.count = None;
                     result.revision += 1;
+                    result.epoch = result.revision;
                 }
+            }
+            shared.output_bytes = shared.output_bytes.saturating_sub(freed);
+            Ok(())
+        }
+        Action::Replay { cell } => {
+            ensure!(
+                matches!(controller, Controller::Notebook(_)),
+                "This is not a notebook kernel"
+            );
+            let mut shared = job.shared.lock().unwrap();
+            if let Some(result) = shared.cells.get_mut(&cell) {
+                // Invalidating the delivery baseline makes the existing cursor
+                // send a reset with all retained records, without cloning them.
+                result.revision += 1;
+                result.epoch = result.revision;
             }
             Ok(())
         }
@@ -644,7 +677,10 @@ fn apply(controller: &mut Controller, job: &Job, action: Action) -> Result<()> {
             job.stop.store(true, Ordering::Release);
             Ok(())
         }
-        Action::Run { runs } => {
+        Action::Run {
+            runs,
+            output_budget,
+        } => {
             let Controller::Notebook(kernel) = controller else {
                 bail!("This is not a notebook kernel")
             };
@@ -652,10 +688,12 @@ fn apply(controller: &mut Controller, job: &Job, action: Action) -> Result<()> {
                 serde_json::to_vec(&runs)?.len() <= 8 * 1024 * 1024,
                 "Notebook queue exceeds 8 MiB encoded size"
             );
-            kernel.run(runs)?;
+            kernel.run_with_output_budget(runs, output_budget)?;
             // A warning belongs to the previously submitted queue. Do not
             // replay it as a new failure after accepting another execution.
-            job.shared.lock().unwrap().view.error.clear();
+            let mut shared = job.shared.lock().unwrap();
+            shared.view.error.clear();
+            shared.view.output_budget = output_budget;
             Ok(())
         }
         Action::Retain { cells } => {
@@ -740,162 +778,6 @@ fn apply(controller: &mut Controller, job: &Job, action: Action) -> Result<()> {
         }
     }
 }
-fn notebook_event(shared: &mut Shared, event: notebook::Event) -> Result<()> {
-    use notebook::Event;
-    if let Event::Output {
-        output,
-        update: true,
-        display_id,
-        ..
-    } = &event
-    {
-        if let Some(id) = display_id {
-            update_notebook_displays(&mut shared.cells, id, output)?;
-        }
-        return Ok(());
-    }
-    if let Event::Ready(language) = event {
-        shared.view.language = language;
-        return Ok(());
-    }
-    if let Event::Error(error) = event {
-        shared.view.error = error;
-        shared.finished = true;
-        return Ok(());
-    }
-    if let Event::Warning(warning) = event {
-        shared.view.error = warning;
-        return Ok(());
-    }
-    let run = match &event {
-        Event::Output { run, .. }
-        | Event::Clear(run)
-        | Event::Count(run, _)
-        | Event::Done(run, _) => run.clone(),
-        _ => unreachable!(),
-    };
-    let key = if run.cell.is_empty() {
-        format!("uid:{}", run.uid)
-    } else {
-        run.cell.clone()
-    };
-    let previous = shared.cells.get(&key);
-    let mut cell = previous.cloned().unwrap_or_else(|| Cell {
-        run: run.clone(),
-        outputs: vec![],
-        count: None,
-        done: None,
-        revision: 0,
-    });
-    if cell.run.uid != run.uid
-        || cell.run.version != run.version
-        || cell.run.code != run.code
-        || cell.done.is_some()
-    {
-        cell = Cell {
-            run: run.clone(),
-            outputs: vec![],
-            count: None,
-            done: None,
-            revision: cell.revision,
-        };
-    }
-    cell.revision += 1;
-    match event {
-        Event::Output {
-            output, display_id, ..
-        } => {
-            let merged = display_id.is_none()
-                && cell.outputs.last_mut().is_some_and(|previous| {
-                    previous.display.is_none()
-                        && notebook::outputs::merge_stream(&mut previous.value, &output)
-                });
-            if !merged {
-                cell.outputs.push(service::Output {
-                    value: output,
-                    display: display_id,
-                });
-            }
-        }
-        Event::Clear(_) => cell.outputs.clear(),
-        Event::Count(_, count) => cell.count = Some(count),
-        Event::Done(_, status) => cell.done = Some(status),
-        _ => {}
-    }
-    notebook::outputs::validate(cell.outputs.iter().map(|output| &output.value))?;
-    let size = json_size(&shared.cells)?;
-    let size = if let Some(previous) = previous {
-        size - json_size(previous)? + json_size(&cell)?
-    } else {
-        // Map braces already exist; a new entry adds its key, colon and
-        // (except in an empty map) the comma separating it from its neighbour.
-        size + json_size(&key)? + 1 + json_size(&cell)? + usize::from(!shared.cells.is_empty())
-    };
-    check_notebook_budget(shared.cells.len() + usize::from(previous.is_none()), size)?;
-    shared.cells.insert(key, cell);
-    Ok(())
-}
-fn update_notebook_displays(
-    cells: &mut BTreeMap<String, Cell>,
-    id: &str,
-    output: &Value,
-) -> Result<()> {
-    // Validate the entire fan-out before cloning any replacement. One
-    // display identity can belong to many outputs in different cells.
-    let mut size = json_size(&cells)?;
-    let replacement = json_size(output)?;
-    for cell in cells.values() {
-        let mut changed = false;
-        for old in &cell.outputs {
-            if old.display.as_deref() == Some(id) {
-                size = size - json_size(&old.value)? + replacement;
-                changed = true;
-            }
-        }
-        if changed {
-            size = size - json_size(&cell.revision)? + json_size(&(cell.revision + 1))?;
-        }
-    }
-    check_notebook_budget(cells.len(), size)?;
-    // The retained host map also has a global wire budget, but each updated
-    // nbformat array must remain acceptable to a desktop reopening this kernel.
-    // No cell or revision changes until every proposed replacement passes.
-    for cell in cells.values() {
-        if cell
-            .outputs
-            .iter()
-            .any(|old| old.display.as_deref() == Some(id))
-        {
-            notebook::outputs::validate(cell.outputs.iter().map(|old| {
-                if old.display.as_deref() == Some(id) {
-                    output
-                } else {
-                    &old.value
-                }
-            }))?;
-        }
-    }
-    for cell in cells.values_mut() {
-        let mut changed = false;
-        for old in &mut cell.outputs {
-            if old.display.as_deref() == Some(id) {
-                old.value = output.clone();
-                changed = true;
-            }
-        }
-        if changed {
-            cell.revision += 1;
-        }
-    }
-    Ok(())
-}
-fn check_notebook_budget(cells: usize, size: usize) -> Result<()> {
-    ensure!(
-        cells <= 1024 && size <= NOTEBOOK_LIMIT,
-        "Retained notebook outputs exceed 64 MiB or 1024 cells; earlier output and kernel variables are preserved. Clear outputs to make room."
-    );
-    Ok(())
-}
 fn terminal_event_room(shared: &Shared) -> bool {
     !shared.view.info.attached
         || shared.events.len() < TERMINAL_EVENT_LIMIT
@@ -937,11 +819,20 @@ fn terminal_event(shared: &mut Shared, event: debugger::Event) {
 }
 /// Encode the runtime envelope with its larger limit through the shared codec.
 fn send<T: serde::Serialize>(stream: &mut UnixStream, value: &T) -> Result<()> {
-    super::framing::RUNTIME.send_json(stream, value)
+    rode_runtime_core::json_stream::send(value, |packet| {
+        super::framing::RUNTIME.send_json(stream, packet)
+    })
 }
 /// Decode one runtime update without allowing the control connection's smaller limit to leak in.
 fn receive<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
-    super::framing::RUNTIME.recv_json(stream)
+    let mut incoming = rode_runtime_core::json_stream::Incoming::default();
+    loop {
+        if let Some(value) =
+            incoming.message(super::framing::RUNTIME.recv_json::<Value>(stream)?)?
+        {
+            return Ok(value);
+        }
+    }
 }
 
 /// Bridge bounded stdio messages through the current service's authenticated
@@ -967,7 +858,9 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
     );
     let mut output = std::io::BufWriter::new(rode_host_core::connection::Output::stdout()?);
     loop {
-        let value: Value = receive(&mut stream)?;
+        // The service already packetizes updates. Forward each bounded packet
+        // unchanged rather than rebuilding a large payload on the SSH relay.
+        let value = super::framing::RUNTIME.recv_json::<Value>(&mut stream)?;
         if value["kind"] == "error" {
             bail!(
                 "{}",
@@ -998,11 +891,15 @@ mod tests {
             let (input, commands) = mpsc::sync_channel(64);
             let mut cells = display_cells();
             let mut cell = cells.remove("cell-0").unwrap();
-            cell.outputs[0].value = json!({"text/plain": "payload".repeat(64 * 1024)});
+            cell.outputs[0] =
+                service::Output::new(json!({"text/plain": "payload".repeat(64 * 1024)}), None)
+                    .unwrap();
+            cell.output_bytes = cell.outputs[0].bytes;
             let expected = cell.outputs[0].value.clone();
             let job = Arc::new(Job {
                 shared: Mutex::new(Shared {
                     view: View {
+                        output_budget: Default::default(),
                         acknowledgement: String::new(),
                         acknowledgements: vec![],
                         info: Info {
@@ -1031,6 +928,7 @@ mod tests {
                         debugger: None,
                         error: String::new(),
                     },
+                    output_bytes: cell.output_bytes,
                     cells: BTreeMap::from([("cell-0".into(), cell)]),
                     revision: 0,
                     terminals: BTreeMap::new(),
@@ -1101,9 +999,21 @@ mod tests {
             ));
             assert!(store.list()[0].attached);
             peer.read_exact(&mut payload[1..]).unwrap();
-            let Update::Cell(delivered) = serde_json::from_slice::<Update>(&payload).unwrap()
-            else {
-                panic!("Expected the complete retained output cell")
+            let mut incoming = rode_runtime_core::json_stream::Incoming::default();
+            let mut complete = incoming
+                .message::<Update>(serde_json::from_slice(&payload).unwrap())
+                .unwrap();
+            while complete.is_none() {
+                complete = incoming
+                    .message(
+                        super::super::framing::RUNTIME
+                            .recv_json::<Value>(&mut peer)
+                            .unwrap(),
+                    )
+                    .unwrap();
+            }
+            let Some(Update::Cell(delivered)) = complete else {
+                panic!("Expected the complete retained output cell");
             };
             assert_eq!(delivered.outputs[0].value, expected);
             let Update::State(complete) = receive::<Update>(&mut peer).unwrap() else {
@@ -1150,10 +1060,19 @@ mod tests {
                             version: 0,
                             code: "display(value, display_id='shared')".into(),
                         },
-                        outputs: vec![service::Output {
-                            value: json!({"output_type":"display_data", "data":{"text/plain":"seed"}}),
-                            display: Some("shared".into()),
-                        }],
+                        outputs: vec![
+                            service::Output::new(
+                                json!({"output_type":"display_data", "data":{"text/plain":"seed"}}),
+                                Some("shared".into()),
+                            )
+                            .unwrap(),
+                        ],
+                        output_bytes: notebook::outputs::retained_bytes(
+                            &json!({"output_type":"display_data", "data":{"text/plain":"seed"}}),
+                        )
+                        .unwrap()
+                            + "shared".len(),
+                        epoch: 1,
                         count: Some(uid + 1),
                         done: Some("ok".into()),
                         revision: 9,
@@ -1169,7 +1088,15 @@ mod tests {
         let previous = serde_json::to_vec(&cells).unwrap();
         let output =
             json!({"output_type":"display_data", "data":{"image/png":"x".repeat(4*1024*1024)}});
-        let error = update_notebook_displays(&mut cells, "shared", &output).unwrap_err();
+        let mut used = cells.values().map(|cell| cell.output_bytes).sum();
+        let error = update_notebook_displays(
+            &mut cells,
+            "shared",
+            Arc::new(output),
+            &mut used,
+            64.try_into().unwrap(),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("64 MiB"));
         assert_eq!(serde_json::to_vec(&cells).unwrap(), previous);
     }
@@ -1179,17 +1106,25 @@ mod tests {
         let mut cells = display_cells();
         cells.get_mut("cell-0").unwrap().outputs[0].display = Some("other".into());
         let output = json!({"output_type":"display_data", "data":{"text/plain":"updated"}});
-        update_notebook_displays(&mut cells, "shared", &output).unwrap();
+        let mut used = cells.values().map(|cell| cell.output_bytes).sum();
+        update_notebook_displays(
+            &mut cells,
+            "shared",
+            Arc::new(output.clone()),
+            &mut used,
+            Default::default(),
+        )
+        .unwrap();
         assert_eq!(
             cells["cell-0"].outputs[0].value["data"]["text/plain"],
             "seed"
         );
         assert_eq!(cells["cell-0"].revision, 9);
         for cell in cells.values().filter(|c| c.run.cell != "cell-0") {
-            assert_eq!(cell.outputs[0].value, output);
+            assert_eq!(cell.outputs[0].value.as_ref(), &output);
             assert_eq!(cell.revision, 10);
             assert_eq!(cell.done.as_deref(), Some("ok"));
         }
-        assert!(json_size(&cells).unwrap() <= NOTEBOOK_LIMIT);
+        assert!(json_size(&cells).unwrap() <= notebook::outputs::MemoryBudget::default().bytes());
     }
 }

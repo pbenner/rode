@@ -3,6 +3,84 @@
 use super::*;
 
 #[test]
+fn output_paging_keeps_all_saved_records_and_reveals_the_rest_on_request() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_notebook();
+    let view = app.documents[0].notebook_mut().unwrap();
+    view.focus = None;
+    let uid = view.book.cells[0].uid;
+    for row in 0..80 {
+        view.book
+            .apply_output(
+                uid,
+                0,
+                Some(serde_json::json!({
+                    "output_type":"display_data", "data":{"text/plain":format!("Output row {row}")}
+                })),
+                None,
+                false,
+            )
+            .unwrap();
+    }
+    let before = view.book.serialize().unwrap();
+    let frame = |app: &mut EditorApp, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900., 5000.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.notebook_ui(ui, ctx));
+            },
+        )
+    };
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    let more = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Show more outputs (16 remaining)" => {
+                Some(text)
+            }
+            _ => None,
+        })
+        .expect("More outputs must be reachable");
+    assert_eq!(
+        app.documents[0].notebook().unwrap().cells[&uid].output_limit,
+        64
+    );
+    let point = more.pos + more.galley.size() / 2.;
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    let output = frame(&mut app, vec![]);
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.text() == "Output row 79"
+    )));
+    let view = app.documents[0].notebook().unwrap();
+    assert_eq!(view.cells[&uid].output_limit, 128);
+    assert_eq!(view.book.serialize().unwrap(), before);
+}
+
+#[test]
 fn markdown_previews_are_compact_and_keep_html_source_through_editing() {
     for theme in ["atelier-dark", "atelier-light"] {
         for width in [650., 1280.] {

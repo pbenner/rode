@@ -9,6 +9,6 @@ description = "Headless notebook and debugger controllers for RODE"
 [dependencies]
 anyhow = "1"
 libc = "0.2"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 sha2 = "0.10"

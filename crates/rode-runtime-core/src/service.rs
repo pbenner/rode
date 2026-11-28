@@ -3,6 +3,15 @@ use crate::{debugger, notebook};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+pub mod outputs;
+/// Inclusive process-line allowance for atomic source queues in either direction.
+/// Large output uses smaller packets; the command side still accepts Run All queues.
+pub const ATTACHMENT_LINE_LIMIT: usize = 16 * 1024 * 1024;
+static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(1);
 
 /// Type of host-owned computation.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,10 +196,18 @@ pub enum Command {
         /// Stable cell ID, or all retained cells.
         cell: Option<String>,
     },
+    /// Resend a complete cell after the view skipped source-incompatible deltas.
+    Replay {
+        /// Stable cell identity; output and execution remain unchanged.
+        cell: String,
+    },
     /// Execute one atomic submitted queue. Controller continues while detached.
     Run {
         /// Cell snapshots.
         runs: Vec<notebook::Run>,
+        /// Notebook-wide output RAM allowance captured by this queue, in MiB.
+        #[serde(default)]
+        output_budget: notebook::outputs::MemoryBudget,
     },
     /// Drop queued cells whose stable ID/source changed.
     Retain {
@@ -226,9 +243,32 @@ pub struct Envelope {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Output {
     /// nbformat output.
-    pub value: Value,
+    pub value: Arc<Value>,
     /// Cross-cell display update identity.
     pub display: Option<String>,
+    /// Cached retention charge; serialization never repeats payload measurement.
+    #[serde(skip)]
+    pub bytes: usize,
+    /// Slot generation for incremental replay; stream appends preserve it.
+    #[serde(skip)]
+    pub generation: u64,
+}
+impl Output {
+    /// Retain one owned MIME payload with its cached RAM charge.
+    pub fn new(value: Value, display: Option<String>) -> anyhow::Result<Self> {
+        Self::shared(Arc::new(value), display)
+    }
+    /// Share one immutable display update across all matching output slots.
+    pub fn shared(value: Arc<Value>, display: Option<String>) -> anyhow::Result<Self> {
+        let bytes = notebook::outputs::retained_bytes(&value)?
+            .saturating_add(display.as_ref().map_or(0, String::len));
+        Ok(Self {
+            value,
+            display,
+            bytes,
+            generation: NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed),
+        })
+    }
 }
 /// Latest bounded execution result for one stable notebook cell.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -243,10 +283,59 @@ pub struct Cell {
     pub done: Option<String>,
     /// Monotonic cell revision for replay/deduplication.
     pub revision: u64,
+    /// Cached charge for all retained output records in this cell.
+    #[serde(skip)]
+    pub output_bytes: usize,
+    /// Execution/reset identity, independent of source identity and wire revision.
+    #[serde(skip)]
+    pub epoch: u64,
+}
+/// Ordered changes to an already delivered cell; payloads are shared until sent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum OutputEdit {
+    /// Append a newly published output record.
+    Append {
+        /// Retained output.
+        output: Output,
+    },
+    /// Replace an existing output, usually a Jupyter display update.
+    Replace {
+        /// Existing output position.
+        index: usize,
+        /// Replacement payload.
+        output: Output,
+    },
+    /// Append only newly printed bytes to an existing stream.
+    Text {
+        /// Existing stream position.
+        index: usize,
+        /// Newly appended UTF-8 text.
+        text: String,
+    },
+}
+/// Incremental replay carrying only changed output records and small cell metadata.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CellDelta {
+    /// Source digest and version owning this update.
+    pub run: RunRef,
+    /// Monotonic cell revision.
+    pub revision: u64,
+    /// Start a new execution or clear the previous output list before applying edits.
+    pub reset: bool,
+    /// Ordered output mutations.
+    pub edits: Vec<OutputEdit>,
+    /// Current execution count.
+    pub count: Option<u64>,
+    /// Completion status, absent while executing.
+    pub done: Option<String>,
 }
 /// Small authoritative snapshot; output cells stream as separate bounded frames.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State {
+    /// RAM allowance captured by the current notebook queue.
+    #[serde(default)]
+    pub output_budget: notebook::outputs::MemoryBudget,
     /// Last applied mutation token, including a rejected operation.
     pub acknowledgement: String,
     /// Recent applied tokens so interleaved terminal writes cannot hide an acknowledgement.
@@ -297,6 +386,8 @@ pub enum Update {
     State(Box<State>),
     /// Latest result for one cell.
     Cell(Cell),
+    /// Changes since this attachment's last delivered cell revision.
+    CellDelta(CellDelta),
     /// Debug terminal history or incremental output.
     Terminal(debugger::Event),
     /// Attachment protocol failure.

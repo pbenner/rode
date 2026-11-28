@@ -53,6 +53,8 @@ struct PictureJob {
 }
 /// Per-cell rendering measurements and optional Markdown preview, keyed by stable cell UID.
 struct CellUi {
+    /// Rendering page size, independent of the number of retained output records.
+    output_limit: usize,
     height: f32,
     previewing: bool,
     preview: Option<markdown::Preview>,
@@ -60,6 +62,7 @@ struct CellUi {
 impl Default for CellUi {
     fn default() -> Self {
         Self {
+            output_limit: 64,
             height: 150.,
             previewing: true,
             preview: None,
@@ -452,6 +455,7 @@ impl EditorApp {
             return;
         }
         let python = self.terminal_python_selection();
+        let output_budget = self.workbench.notebook_output_budget();
         let Some(doc) = self.documents.active_mut() else {
             return;
         };
@@ -588,8 +592,14 @@ impl EditorApp {
                 }
             }
         }
-        match view.kernel.as_mut().unwrap().run(runs.clone()) {
+        match view
+            .kernel
+            .as_mut()
+            .unwrap()
+            .run_with_output_budget(runs.clone(), output_budget)
+        {
             Ok(()) => {
+                view.book.set_output_budget(output_budget);
                 for run in runs {
                     view.pending_clear.insert(run.uid, run.version);
                 }
@@ -659,9 +669,63 @@ impl EditorApp {
                 });
             }
             let events = view.kernel.as_mut().map(Kernel::poll).unwrap_or_default();
+            if let Some(kernel) = &view.kernel {
+                view.book.set_output_budget(kernel.output_budget);
+            }
             let mut changed = false;
             for event in events {
                 let result = match event {
+                    kernel::Event::Edits {
+                        run,
+                        reset,
+                        edits,
+                        count,
+                    } => {
+                        use rode_runtime_core::service::OutputEdit;
+                        let old_len = view
+                            .book
+                            .cells
+                            .iter()
+                            .find(|cell| cell.uid == run.uid)
+                            .map_or(0, |cell| cell.outputs().len());
+                        let result =
+                            view.book
+                                .apply_edits(run.uid, run.version, reset, &edits, count);
+                        if matches!(&result, Ok(true)) {
+                            if reset {
+                                view.drop_displays(run.uid);
+                                view.pending_clear.remove(&run.uid);
+                            }
+                            let mut next = if reset { 0 } else { old_len };
+                            for edit in edits {
+                                let (index, display) = match edit {
+                                    OutputEdit::Append { output } => {
+                                        let at = next;
+                                        next += 1;
+                                        (at, output.display)
+                                    }
+                                    OutputEdit::Replace { index, output } => {
+                                        for targets in view.display_ids.values_mut() {
+                                            targets.retain(|(uid, _, old)| {
+                                                *uid != run.uid || *old != index
+                                            });
+                                        }
+                                        (index, output.display)
+                                    }
+                                    OutputEdit::Text { .. } => continue,
+                                };
+                                if let Some(display) = display {
+                                    view.display_ids.entry(display).or_default().push((
+                                        run.uid,
+                                        run.version,
+                                        index,
+                                    ));
+                                }
+                            }
+                            view.invalidate_pictures(run.uid);
+                        }
+                        result
+                    }
                     kernel::Event::Ready(info) => {
                         if let Some(info) = info.as_object() {
                             if !view.book.data["metadata"]["language_info"].is_object() {

@@ -8,7 +8,7 @@ import unittest
 
 bridge = {"__name__": "rode_notebook_bridge_test"}
 exec(compile(sys.argv[1], "notebook_kernel.py", "exec"), bridge)
-limits = {"bytes": 2048, "text": 256, "count": 4, "chunk_chars": 32}
+limits = {"bytes": 2048, "overhead": 128, "chunk_chars": 32, "message": 4096}
 
 
 class Manager:
@@ -39,8 +39,33 @@ class Client:
 
 
 class OutputPolicy(unittest.TestCase):
+    def test_ram_allowance_is_captured_per_execution_and_rejects_invalid_requests(self):
+        policy = dict(limits, bytes=2 * 1024 * 1024, message=2 * 1024 * 1024, chunk_chars=65536)
+        for allowance, warning in [(1024 * 1024, True), (2 * 1024 * 1024, False)]:
+            manager = Manager()
+            client = Client(
+                [("stream", {"text": "x" * (1536 * 1024)}), ("status", {"execution_state": "idle"})]
+            )
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                bridge["execute"](
+                    manager,
+                    client,
+                    {"id": 17, "code": "print(value)", "output_budget": allowance},
+                    policy,
+                )
+            events = [json.loads(line) for line in stream.getvalue().splitlines()]
+            self.assertEqual(any(event["kind"] == "warning" for event in events), warning)
+            self.assertEqual(events[-1]["status"], "ok")
+            self.assertEqual(manager.interrupts, 0)
+        for invalid in [False, 0, -1, 4 * 1024 * 1024]:
+            with self.assertRaises(ValueError):
+                bridge["execute"](
+                    Manager(), Client([]), {"id": 17, "code": "", "output_budget": invalid}, policy
+                )
+
     def test_stream_fragments_share_one_record_and_match_json_byte_accounting(self):
-        budget = bridge["OutputBudget"](dict(limits, bytes=8192, text=4096))
+        budget = bridge["OutputBudget"](dict(limits, bytes=1024 * 1024))
         joined = ""
         for fragment in ["日", "🦀", "\n", '"', "\\"] * 70:
             output = dict(output_type="stream", name="stdout", text=fragment)
@@ -49,18 +74,21 @@ class OutputPolicy(unittest.TestCase):
         retained = dict(output_type="stream", name="stdout", text=joined)
         size = len(bridge["compact"](retained).encode("utf-8"))
         self.assertEqual(len(budget.entries), 1)
-        self.assertEqual(budget.entries[0][:2], (size, size))
+        self.assertEqual(budget.entries[0][0], size + limits["overhead"])
         for output in [
             dict(output_type="stream", name="stderr", text="error"),
             dict(output_type="display_data", data={"text/plain": "result"}),
             dict(output_type="stream", name="stdout", text="after display"),
         ]:
             self.assertTrue(budget.accept(output, None, False), budget.reason)
-        self.assertEqual(len(budget.entries), limits["count"])
-        self.assertFalse(
-            budget.accept(dict(output_type="stream", name="stderr", text="error"), None, False)
-        )
-        self.assertIn("output records", budget.reason)
+        # Record count is not a separate retention limit.
+        for _ in range(350):
+            self.assertTrue(
+                budget.accept(
+                    dict(output_type="display_data", data={"text/plain": "small"}), None, False
+                )
+            )
+        self.assertEqual(len(budget.entries), 354)
 
     def test_updates_replace_and_clear_reclaims_retained_bytes(self):
         budget = bridge["OutputBudget"](limits)
@@ -71,7 +99,7 @@ class OutputPolicy(unittest.TestCase):
         before = list(budget.entries)
         self.assertFalse(budget.accept(image, "other", False))
         self.assertEqual(budget.entries, before)
-        self.assertFalse(budget.accept({"text": "x" * 300}, None, False, clear=True))
+        self.assertFalse(budget.accept({"text": "x" * 3000}, None, False, clear=True))
         self.assertEqual(budget.entries, before)
         self.assertTrue(budget.accept(image, "other", False, clear=True))
         self.assertEqual(len(budget.entries), 1)
@@ -93,11 +121,11 @@ class OutputPolicy(unittest.TestCase):
         client = Client(
             [
                 ("stream", {"text": "earlier output"}),
-                ("stream", {"text": "x" * 300}),
+                ("stream", {"text": "x" * 3000}),
                 ("stream", {"text": "later output"}),
-                ("stream", {"text": "x" * 400}),
+                ("stream", {"text": "x" * 4000}),
                 ("clear_output", {"wait": True}),
-                ("stream", {"text": "x" * 300}),
+                ("stream", {"text": "x" * 3000}),
                 ("display_data", {"data": {"image/png": "a" * 1200}}),
                 ("status", {"execution_state": "idle"}),
             ]
@@ -125,7 +153,7 @@ class OutputPolicy(unittest.TestCase):
         self.assertEqual(outputs[1]["text"], "later output")
         self.assertEqual(outputs[2]["data"]["image/png"], "a" * 1200)
         warning = next(event["message"] for event in events if event["kind"] == "warning")
-        self.assertIn("MiB of text", warning)
+        self.assertIn("output RAM allowance", warning)
         self.assertIn("Computation continues", warning)
 
     def test_immediate_clear_replaces_a_pending_deferred_clear(self):

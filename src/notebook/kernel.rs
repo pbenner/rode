@@ -10,11 +10,15 @@ enum Backend {
 }
 /// A kernel view. Persistent execution, queue and outputs belong to the host.
 pub struct Kernel {
+    /// RAM allowance reported by the current notebook controller.
+    pub output_budget: rode_runtime_core::notebook::outputs::MemoryBudget,
     backend: Backend,
     bindings: Vec<Run>,
     source_hashes: BTreeMap<String, String>,
     document: String,
     revisions: BTreeMap<String, u64>,
+    /// Source hashes whose replay baseline was skipped; bool tracks a queued resync.
+    missed: BTreeMap<String, (String, bool)>,
     ready: bool,
     busy: bool,
     submitted: bool,
@@ -31,6 +35,7 @@ pub struct Kernel {
 impl Kernel {
     fn direct(inner: rode_runtime_core::notebook::Kernel) -> Self {
         Self {
+            output_budget: Default::default(),
             status: inner.status.clone(),
             python: inner.python.clone(),
             name: inner.name.clone(),
@@ -40,6 +45,7 @@ impl Kernel {
             source_hashes: BTreeMap::new(),
             document: String::new(),
             revisions: BTreeMap::new(),
+            missed: BTreeMap::new(),
             ready: false,
             busy: true,
             submitted: false,
@@ -157,11 +163,13 @@ impl Kernel {
     }
     fn host(host: runtime::Client, python: String, name: String) -> Self {
         Self {
+            output_budget: Default::default(),
             backend: Backend::Host(Box::new(host)),
             bindings: vec![],
             source_hashes: BTreeMap::new(),
             document: String::new(),
             revisions: BTreeMap::new(),
+            missed: BTreeMap::new(),
             ready: false,
             busy: true,
             submitted: false,
@@ -216,8 +224,16 @@ impl Kernel {
     }
     /// Submit one bounded queue. Host-owned queues keep executing after detachment.
     pub fn run(&mut self, runs: Vec<Run>) -> Result<()> {
+        self.run_with_output_budget(runs, Default::default())
+    }
+    /// Capture this queue's RAM allowance without changing the kernel or its variables.
+    pub fn run_with_output_budget(
+        &mut self,
+        runs: Vec<Run>,
+        output_budget: rode_runtime_core::notebook::outputs::MemoryBudget,
+    ) -> Result<()> {
         match &mut self.backend {
-            Backend::Direct(k) => k.run(runs),
+            Backend::Direct(k) => k.run_with_output_budget(runs, output_budget),
             Backend::Host(host) => {
                 ensure!(
                     !self.busy || !self.submitted,
@@ -227,7 +243,10 @@ impl Kernel {
                     host.info.as_ref().is_none_or(|i| i.alive),
                     "Kernel ended; shut it down before starting a new kernel"
                 );
-                host.send(Command::Run { runs })?;
+                host.send(Command::Run {
+                    runs,
+                    output_budget,
+                })?;
                 self.busy = true;
                 self.submitted = true;
                 self.retain_sent = false;
@@ -302,7 +321,14 @@ impl Kernel {
     /// Clear retained host output without changing Python state.
     pub fn clear_outputs(&mut self, cell: Option<String>) -> Result<()> {
         if let Backend::Host(host) = &mut self.backend {
-            host.send(Command::ClearOutputs { cell })?;
+            host.send(Command::ClearOutputs { cell: cell.clone() })?;
+            // The view clears immediately. Ignore older suffixes until the
+            // host's ordered reset establishes the new output baseline.
+            for (id, source) in &self.source_hashes {
+                if cell.as_ref().is_none_or(|wanted| wanted == id) {
+                    self.missed.insert(id.clone(), (source.clone(), true));
+                }
+            }
         }
         Ok(())
     }
@@ -351,6 +377,7 @@ impl Kernel {
             self.python = kernel.python.clone();
             self.execution = kernel.execution.clone();
             self.busy = kernel.busy();
+            self.output_budget = kernel.output_budget();
             return events;
         }
         let Backend::Host(host) = &mut self.backend else {
@@ -363,6 +390,7 @@ impl Kernel {
         for update in updates {
             match update {
                 Update::State(state) => {
+                    self.output_budget = state.output_budget;
                     self.busy = state.info.busy || pending;
                     self.status = state.info.status.clone();
                     self.python = state.python.clone();
@@ -383,15 +411,21 @@ impl Kernel {
                     if self.revisions.get(&cell.run.cell) == Some(&cell.revision) {
                         continue;
                     }
-                    self.revisions.insert(cell.run.cell.clone(), cell.revision);
                     let Some(run) = self.bound(&cell.run) else {
+                        defer_replay(
+                            &mut self.missed,
+                            cell.run.cell.clone(),
+                            crate::files::digest(cell.run.code.as_bytes()),
+                        );
                         continue;
                     };
+                    self.missed.remove(&cell.run.cell);
+                    self.revisions.insert(cell.run.cell.clone(), cell.revision);
                     events.push(Event::Clear(run.clone()));
                     for output in cell.outputs {
                         events.push(Event::Output {
                             run: run.clone(),
-                            output: output.value,
+                            output: Arc::unwrap_or_clone(output.value),
                             update: false,
                             display_id: output.display,
                         });
@@ -404,7 +438,59 @@ impl Kernel {
                     }
                 }
                 Update::Error(error) => events.push(Event::Error(error)),
+                Update::CellDelta(delta) => {
+                    if self
+                        .revisions
+                        .get(&delta.run.cell)
+                        .is_some_and(|revision| *revision >= delta.revision)
+                    {
+                        continue;
+                    }
+                    let Some(run) = self
+                        .bindings
+                        .iter()
+                        .find(|run| {
+                            run.cell == delta.run.cell
+                                && self.source_hashes.get(&run.cell) == Some(&delta.run.source)
+                        })
+                        .cloned()
+                    else {
+                        defer_replay(&mut self.missed, delta.run.cell, delta.run.source);
+                        continue;
+                    };
+                    if delta.reset {
+                        self.missed.remove(&delta.run.cell);
+                    } else if self.missed.contains_key(&delta.run.cell) {
+                        // The host cursor advanced while this view rejected
+                        // stale source. A suffix cannot restore the lost prefix.
+                        continue;
+                    }
+                    self.revisions
+                        .insert(delta.run.cell.clone(), delta.revision);
+                    events.push(Event::Edits {
+                        run: run.clone(),
+                        reset: delta.reset,
+                        edits: delta.edits,
+                        count: delta.count,
+                    });
+                    if let Some(status) = delta.done {
+                        events.push(Event::Done(run, status));
+                    }
+                }
                 _ => {}
+            }
+        }
+        let Backend::Host(host) = &mut self.backend else {
+            unreachable!()
+        };
+        for (cell, (source, requested)) in &mut self.missed {
+            if !*requested
+                && self.source_hashes.get(cell) == Some(source)
+                && host.send(Command::Replay { cell: cell.clone() }).is_ok()
+            {
+                *requested = true;
+                self.busy = true;
+                self.status = "Receiving output…".into();
             }
         }
         if let Some(error) = failure {
@@ -413,6 +499,17 @@ impl Kernel {
         events
     }
 }
+
+/// Keep only a source digest while a cell is incompatible with retained output.
+fn defer_replay(missed: &mut BTreeMap<String, (String, bool)>, cell: String, source: String) {
+    let entry = missed
+        .entry(cell)
+        .or_insert_with(|| (source.clone(), false));
+    if entry.0 != source {
+        *entry = (source, false);
+    }
+}
+
 fn validate_name(name: &str) -> Result<()> {
     ensure!(
         !name.is_empty()

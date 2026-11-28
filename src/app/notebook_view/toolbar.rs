@@ -174,6 +174,22 @@ impl EditorApp {
                         }
                     });
                     ui.horizontal_wrapped(|ui| {
+                        ui.label("Output RAM budget");
+                        let mut selected = self.workbench.notebook_output_budget();
+                        let previous = selected;
+                        let response = crate::keyboard::ComboBox::new(("notebook-output-budget", id), "Notebook output RAM budget")
+                            .selected_text(format!("{} MiB", selected.mib()))
+                            .show_ui(ui, |ui| {
+                                for preset in rode_runtime_core::notebook::outputs::MemoryBudget::PRESETS {
+                                    let response = crate::keyboard::selectable_value(ui, &mut selected, preset, format!("{} MiB", preset.mib()));
+                                    ui_probe::button(ui, &format!("notebook-output-budget-{}", preset.mib()), &response);
+                                }
+                            }).response.on_hover_text("All live outputs in this notebook share this RAM allowance. No separate text, image or record-count cap. Saved for this project and applied to the next Run or Run All; existing output is kept. Output is never spooled to disk.");
+                        ui_probe::button(ui, "notebook-output-budget", &response);
+                        ui_probe::value(ui, "notebook-output-budget-value", &response, &selected.mib().to_string());
+                        if selected != previous { self.workbench.save_notebook_output_budget(selected); }
+                    });
+                    ui.horizontal_wrapped(|ui| {
                         ui.label("Execution target");
                         let mut selected = view.execution_target.clone();
                         let (queue, _) = self.slurm_programs();

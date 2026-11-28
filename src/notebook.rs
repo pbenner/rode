@@ -2,10 +2,9 @@
 //!
 //! # Design decisions
 //!
-//! Retain raw JSON alongside the native cell model so editing supported fields
-//! does not discard metadata or output types produced by other notebook tools.
-//! This costs some duplicate in-memory state, with separate cell/execution limits,
-//! and requires serialization to take cells from their current edited models.
+//! Retain unknown notebook/cell metadata while storing MIME payloads separately
+//! behind shared references. Structured serialization borrows those values, so
+//! snapshots and ordinary saves do not deep-copy the retained output tree.
 //! Stable cell IDs and source versions let outputs follow moved cells while
 //! rejecting results for source that changed during execution. A separately
 //! started kernel keeps execution dependencies/lifetimes out of ordinary file
@@ -15,9 +14,11 @@ pub mod kernel;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
     path::Path,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// Maximum retained cells in one notebook.
@@ -25,10 +26,7 @@ pub const MAX_CELLS: usize = 1024;
 /// Maximum source size per cell in bytes.
 pub const MAX_SOURCE: usize = 256 * 1024;
 use rode_runtime_core::notebook::outputs;
-pub use rode_runtime_core::notebook::{
-    MAX_CODE,
-    outputs::{MAX_OUTPUT_BYTES, MAX_OUTPUTS},
-};
+pub use rode_runtime_core::notebook::{MAX_CODE, outputs::MemoryBudget};
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Editable cell preserving unknown nbformat fields alongside runtime-only identity/version
@@ -37,7 +35,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 pub struct Cell {
     /// Stable in-memory identity, independent of cell position and never serialized.
     pub uid: u64,
-    /// Original cell JSON updated through the cell's editing methods.
+    /// Cell fields updated through editing methods; code outputs live in shared storage.
     pub data: Value,
     /// Joined source text used by the native editor.
     pub source: String,
@@ -45,6 +43,9 @@ pub struct Cell {
     pub version: u64,
     /// Output revision used to invalidate rendered output caches.
     pub outputs_version: u64,
+    outputs: Vec<Arc<Value>>,
+    output_sizes: Vec<usize>,
+    output_bytes: usize,
 }
 impl Cell {
     /// Create an empty code, Markdown or raw cell with a fresh runtime identity.
@@ -52,7 +53,6 @@ impl Cell {
         let uid = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let mut data = json!({"id":format!("rode-{}-{uid}",std::process::id()),"cell_type":kind,"metadata":{},"source":[]});
         if kind == "code" {
-            data["outputs"] = json!([]);
             data["execution_count"] = Value::Null;
         }
         Self {
@@ -61,6 +61,9 @@ impl Cell {
             source: String::new(),
             version: 0,
             outputs_version: 0,
+            outputs: vec![],
+            output_sizes: vec![],
+            output_bytes: 0,
         }
     }
     /// Read the nbformat cell type without discarding unknown fields.
@@ -68,11 +71,8 @@ impl Cell {
         self.data["cell_type"].as_str().unwrap_or("raw")
     }
     /// Borrow saved/executed outputs, or an empty slice for non-code cells.
-    pub fn outputs(&self) -> &[Value] {
-        self.data["outputs"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+    pub fn outputs(&self) -> &[Arc<Value>] {
+        &self.outputs
     }
     /// Update source JSON and advance its version when source changes.
     pub fn set_source(&mut self, source: String) {
@@ -84,9 +84,11 @@ impl Cell {
     pub fn change_kind(&mut self, kind: &str) {
         self.data["cell_type"] = json!(kind);
         self.data.as_object_mut().unwrap().remove("outputs");
+        self.outputs.clear();
+        self.output_sizes.clear();
+        self.output_bytes = 0;
         self.data.as_object_mut().unwrap().remove("execution_count");
         if kind == "code" {
-            self.data["outputs"] = json!([]);
             self.data["execution_count"] = Value::Null;
         }
         self.version = self.version.wrapping_add(1);
@@ -95,7 +97,9 @@ impl Cell {
     /// Remove code outputs/execution count and advance output-cache state.
     pub fn clear_outputs(&mut self) {
         if self.kind() == "code" {
-            self.data["outputs"] = json!([]);
+            self.outputs.clear();
+            self.output_sizes.clear();
+            self.output_bytes = 0;
             self.data["execution_count"] = Value::Null;
             self.outputs_version = self.outputs_version.wrapping_add(1);
         }
@@ -109,12 +113,14 @@ pub struct Notebook {
     pub data: Value,
     /// Ordered native cell models with stable runtime identities.
     pub cells: Vec<Cell>,
+    output_budget: MemoryBudget,
 }
 impl Default for Notebook {
     fn default() -> Self {
         Self {
             data: json!({"nbformat":4,"nbformat_minor":5,"metadata":{"kernelspec":{"name":"python3","display_name":"Python 3","language":"python"},"language_info":{"name":"python"}}}),
             cells: vec![Cell::new("code")],
+            output_budget: Default::default(),
         }
     }
 }
@@ -157,10 +163,12 @@ impl Notebook {
             .context("Notebook must be an object")?
             .remove("cells")
             .context("Notebook cells are missing")?;
-        let raw = raw.as_array().context("Notebook cells must be an array")?;
+        let Value::Array(raw) = raw else {
+            anyhow::bail!("Notebook cells must be an array");
+        };
         ensure!(raw.len() <= MAX_CELLS, "Notebook exceeds 1024 cells.");
         let mut cells = Vec::new();
-        for value in raw {
+        for mut value in raw {
             ensure!(
                 value.is_object()
                     && value["cell_type"].is_string()
@@ -178,21 +186,43 @@ impl Notebook {
                     "Code cell outputs must be an array."
                 );
             }
+            let retained = if value["cell_type"] == "code" {
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("outputs")
+                    .unwrap()
+                    .as_array_mut()
+                    .map(std::mem::take)
+                    .unwrap()
+            } else {
+                vec![]
+            };
+            let output_sizes = retained
+                .iter()
+                .map(outputs::retained_bytes)
+                .collect::<Result<Vec<_>>>()?;
+            let output_bytes = output_sizes.iter().sum();
             cells.push(Cell {
                 uid: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-                data: value.clone(),
+                data: value,
                 source,
                 version: 0,
                 outputs_version: 0,
+                outputs: retained.into_iter().map(Arc::new).collect(),
+                output_sizes,
+                output_bytes,
             });
         }
-        Ok(Self { data, cells })
+        Ok(Self {
+            data,
+            cells,
+            output_budget: Default::default(),
+        })
     }
     /// Serialize current cell JSON while preserving unknown fields, without a file-byte ceiling.
     pub fn serialize(&self) -> Result<String> {
-        let mut data = self.data.clone();
-        data["cells"] = Value::Array(self.cells.iter().map(|c| c.data.clone()).collect());
-        let mut text = serde_json::to_string_pretty(&data)?;
+        let mut text = serde_json::to_string_pretty(&NotebookFile(self))?;
         text.push('\n');
         Ok(text)
     }
@@ -228,55 +258,155 @@ impl Notebook {
         self.data["metadata"]["kernelspec"]["display_name"] = json!(name);
         Ok(())
     }
-    /// Replace display outputs addressed by `(cell UID, source version, output index)`.
-    /// Ignore obsolete targets and validate every affected cell before changing any.
-    /// Return changed UIDs so views can invalidate their own decoded-output caches.
+    /// Set the RAM allowance used by new live output. Loaded files are preserved.
+    pub fn set_output_budget(&mut self, budget: MemoryBudget) {
+        self.output_budget = budget;
+    }
+
+    /// Account all cells without walking their shared MIME payloads again.
+    fn retained_output_bytes(&self) -> usize {
+        self.cells.iter().map(|cell| cell.output_bytes).sum()
+    }
+
+    /// Apply an ordered delta atomically. Validation measures only changed payloads;
+    /// successful edits move shared MIME references and append stream text in place.
+    pub fn apply_edits(
+        &mut self,
+        uid: u64,
+        version: u64,
+        reset: bool,
+        edits: &[rode_runtime_core::service::OutputEdit],
+        count: Option<u64>,
+    ) -> Result<bool> {
+        use rode_runtime_core::service::OutputEdit;
+        let Some(at) = self
+            .cells
+            .iter()
+            .position(|cell| cell.uid == uid && cell.version == version && cell.kind() == "code")
+        else {
+            return Ok(false);
+        };
+        let cell = &self.cells[at];
+        let mut bytes = if reset { 0 } else { cell.output_bytes };
+        let mut appended_sizes = Vec::new();
+        let mut changed_sizes = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for edit in edits {
+            match edit {
+                OutputEdit::Append { output } => {
+                    let size = outputs::retained_bytes(&output.value)?;
+                    bytes = bytes.saturating_add(size);
+                    appended_sizes.push(size);
+                }
+                OutputEdit::Replace { index, output } => {
+                    ensure!(
+                        !reset && *index < cell.outputs.len() && seen.insert(*index),
+                        "Invalid notebook output replacement"
+                    );
+                    let size = outputs::retained_bytes(&output.value)?;
+                    bytes = bytes
+                        .saturating_sub(cell.output_sizes[*index])
+                        .saturating_add(size);
+                    changed_sizes.push((*index, size));
+                }
+                OutputEdit::Text { index, text } => {
+                    ensure!(
+                        !reset && *index < cell.outputs.len() && seen.insert(*index),
+                        "Invalid notebook stream position"
+                    );
+                    ensure!(
+                        cell.outputs[*index]["output_type"] == "stream"
+                            && cell.outputs[*index]["text"].is_string(),
+                        "Notebook output is not a stream"
+                    );
+                    let extra = rode_runtime_core::json_size(text)?.saturating_sub(2);
+                    bytes = bytes.saturating_add(extra);
+                    changed_sizes.push((*index, cell.output_sizes[*index].saturating_add(extra)));
+                }
+            }
+        }
+        let old_total = self.retained_output_bytes();
+        let total = old_total
+            .saturating_sub(cell.output_bytes)
+            .saturating_add(bytes);
+        if total > old_total {
+            self.output_budget.check(total)?;
+        }
+        let cell = &mut self.cells[at];
+        if reset {
+            cell.outputs.clear();
+            cell.output_sizes.clear();
+        }
+        for edit in edits {
+            match edit {
+                OutputEdit::Append { output } => cell.outputs.push(output.value.clone()),
+                OutputEdit::Replace { index, output } => {
+                    cell.outputs[*index] = output.value.clone()
+                }
+                OutputEdit::Text { index, text } => {
+                    if let Value::String(previous) =
+                        &mut Arc::make_mut(&mut cell.outputs[*index])["text"]
+                    {
+                        previous.reserve_exact(text.len());
+                        previous.push_str(text);
+                    }
+                }
+            }
+        }
+        if let Some(count) = count {
+            cell.data["execution_count"] = json!(count);
+        }
+        for (index, size) in changed_sizes {
+            cell.output_sizes[index] = size;
+        }
+        cell.output_sizes.extend(appended_sizes);
+        cell.output_bytes = bytes;
+        cell.outputs_version = cell.outputs_version.wrapping_add(1);
+        Ok(true)
+    }
+
+    /// Validate an entire cross-cell display update before replacing any references.
     pub fn update_display_outputs(
         &mut self,
         targets: &[(u64, u64, usize)],
         output: &Value,
     ) -> Result<Vec<u64>> {
-        let mut grouped = HashMap::<_, Vec<_>>::new();
+        let size = outputs::retained_bytes(output)?;
+        let mut locations = std::collections::BTreeSet::new();
+        let mut total = self.retained_output_bytes();
         for &(uid, version, index) in targets {
-            grouped.entry((uid, version)).or_default().push(index);
-        }
-        let mut candidates = Vec::new();
-        for (index, cell) in self.cells.iter().enumerate() {
-            let Some(mut indices) = grouped.remove(&(cell.uid, cell.version)) else {
-                continue;
-            };
-            let Some(current) = cell.data["outputs"].as_array() else {
-                continue;
-            };
-            indices.retain(|index| *index < current.len());
-            if indices.is_empty() {
-                continue;
+            if let Some(at) = self
+                .cells
+                .iter()
+                .position(|cell| cell.uid == uid && cell.version == version)
+                && index < self.cells[at].outputs.len()
+                && locations.insert((at, index))
+            {
+                total = total
+                    .saturating_sub(self.cells[at].output_sizes[index])
+                    .saturating_add(size);
             }
-            outputs::validate(current.iter().enumerate().map(|(index, old)| {
-                if indices.contains(&index) {
-                    output
-                } else {
-                    old
-                }
-            }))?;
-            candidates.push((index, indices));
         }
-        let mut changed = Vec::with_capacity(candidates.len());
-        for (index, indices) in candidates {
-            let cell = &mut self.cells[index];
-            let current = cell.data["outputs"].as_array_mut().unwrap();
-            for index in indices {
-                current[index] = output.clone();
-                cell.outputs_version = cell.outputs_version.wrapping_add(1);
-            }
-            changed.push(cell.uid);
+        if total > self.retained_output_bytes() {
+            self.output_budget.check(total)?;
         }
-        Ok(changed)
+        let shared = Arc::new(output.clone());
+        let mut changed = std::collections::BTreeSet::new();
+        for (at, index) in locations {
+            let cell = &mut self.cells[at];
+            cell.output_bytes = cell
+                .output_bytes
+                .saturating_sub(cell.output_sizes[index])
+                .saturating_add(size);
+            cell.output_sizes[index] = size;
+            cell.outputs[index] = shared.clone();
+            cell.outputs_version = cell.outputs_version.wrapping_add(1);
+            changed.insert(cell.uid);
+        }
+        Ok(changed.into_iter().collect())
     }
 
-    /// Apply output/count/clear only to the matching cell identity and source version. Returns
-    /// `false` for stale/deleted cells and rolls back changes that exceed output/document
-    /// limits.
+    /// Apply foreground output while preserving source identity and normal stream coalescing.
     pub fn apply_output(
         &mut self,
         uid: u64,
@@ -285,41 +415,82 @@ impl Notebook {
         count: Option<u64>,
         clear: bool,
     ) -> Result<bool> {
-        let Some(index) = self
-            .cells
-            .iter()
-            .position(|c| c.uid == uid && c.version == version && c.kind() == "code")
-        else {
-            return Ok(false);
-        };
-        let cell = &mut self.cells[index];
-        let old = cell.data.clone();
-        if clear {
-            cell.data["outputs"] = json!([]);
-        }
-        if let Some(count) = count {
-            cell.data["execution_count"] = json!(count);
-        }
+        use rode_runtime_core::service::{Output, OutputEdit};
+        let mut edits = vec![];
         if let Some(output) = output {
-            let outputs = cell.data["outputs"]
-                .as_array_mut()
-                .context("Cell outputs are invalid")?;
-            if !outputs
-                .last_mut()
-                .is_some_and(|previous| outputs::merge_stream(previous, &output))
-            {
-                outputs.push(output);
+            let stream = (!clear)
+                .then(|| {
+                    self.cells
+                        .iter()
+                        .find(|cell| cell.uid == uid && cell.version == version)
+                        .and_then(|cell| {
+                            cell.outputs.last().and_then(|old| {
+                                outputs::stream_fragment(old, &output)
+                                    .map(|text| (cell.outputs.len() - 1, text.to_owned()))
+                            })
+                        })
+                })
+                .flatten();
+            if let Some((index, text)) = stream {
+                edits.push(OutputEdit::Text { index, text });
+            } else {
+                edits.push(OutputEdit::Append {
+                    output: Output::new(output, None)?,
+                });
             }
         }
-        if let Err(error) = outputs::validate(cell.outputs()) {
-            cell.data = old;
-            return Err(error);
+        self.apply_edits(uid, version, clear, &edits, count)
+    }
+}
+
+/// Borrow structured cells during serialization instead of cloning all MIME payloads.
+struct NotebookFile<'a>(&'a Notebook);
+impl serde::Serialize for NotebookFile<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        for (key, value) in self.0.data.as_object().unwrap() {
+            if key != "cells" {
+                map.serialize_entry(key, value)?;
+            }
         }
-        if let Err(error) = self.serialize() {
-            self.cells[index].data = old;
-            return Err(error);
+        struct Cells<'a>(&'a [Cell]);
+        impl serde::Serialize for Cells<'_> {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                use serde::ser::SerializeSeq;
+                let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+                for cell in self.0 {
+                    seq.serialize_element(&CellFile(cell))?;
+                }
+                seq.end()
+            }
         }
-        self.cells[index].outputs_version = self.cells[index].outputs_version.wrapping_add(1);
-        Ok(true)
+        map.serialize_entry("cells", &Cells(&self.0.cells))?;
+        map.end()
+    }
+}
+struct CellFile<'a>(&'a Cell);
+impl serde::Serialize for CellFile<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        for (key, value) in self.0.data.as_object().unwrap() {
+            if key != "outputs" || self.0.kind() != "code" {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        if self.0.kind() == "code" {
+            map.serialize_entry("outputs", &self.0.outputs)?;
+        }
+        map.end()
     }
 }

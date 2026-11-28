@@ -101,12 +101,12 @@ impl Fixture {
         };
         *info
     }
-    fn attach(&self, info: &Info) -> process::Session {
+    fn attach(&self, info: &Info) -> Attachment {
         let plan = sandbox::Plan {
             root: self.root.path().to_string_lossy().into(),
             ..Default::default()
         };
-        process::Session::start(
+        let session = process::Session::start(
             process::Launch {
                 argv: vec![
                     "env".into(),
@@ -121,11 +121,16 @@ impl Fixture {
                 python: "off".into(),
                 python_program: false,
                 native_debug: false,
-                line_limit: 16 * 1024 * 1024,
+                line_limit: rode_runtime_core::service::ATTACHMENT_LINE_LIMIT,
             },
             Arc::new(|| {}),
         )
-        .unwrap()
+        .unwrap();
+        Attachment {
+            session,
+            incoming: Default::default(),
+            cells: Default::default(),
+        }
     }
 }
 impl Drop for Fixture {
@@ -143,6 +148,61 @@ impl Drop for Fixture {
         let _ = self.rpc(rode_session::Request::Shutdown);
     }
 }
+struct Attachment {
+    session: process::Session,
+    incoming: std::cell::RefCell<rode_runtime_core::json_stream::Incoming>,
+    cells: std::cell::RefCell<BTreeMap<String, rode_runtime_core::service::Cell>>,
+}
+impl std::ops::Deref for Attachment {
+    type Target = process::Session;
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
+impl Attachment {
+    // Independently reconstruct logical cells for the end-to-end assertions.
+    // Protocol tests separately inspect the actual incremental packets.
+    fn update(&self, value: serde_json::Value) -> Option<Update> {
+        use rode_runtime_core::service::OutputEdit;
+        let update: Update = self.incoming.borrow_mut().message(value).unwrap()?;
+        match update {
+            Update::Cell(cell) => {
+                self.cells
+                    .borrow_mut()
+                    .insert(cell.run.cell.clone(), cell.clone());
+                Some(Update::Cell(cell))
+            }
+            Update::CellDelta(delta) => {
+                let mut cells = self.cells.borrow_mut();
+                let cell = cells
+                    .get_mut(&delta.run.cell)
+                    .expect("Delta without initial replay");
+                if delta.reset {
+                    cell.outputs.clear();
+                }
+                for edit in delta.edits {
+                    match edit {
+                        OutputEdit::Append { output } => cell.outputs.push(output),
+                        OutputEdit::Replace { index, output } => cell.outputs[index] = output,
+                        OutputEdit::Text { index, text } => {
+                            if let serde_json::Value::String(old) = &mut std::sync::Arc::make_mut(
+                                &mut cell.outputs[index].value,
+                            )["text"]
+                            {
+                                old.push_str(&text);
+                            }
+                        }
+                    }
+                }
+                cell.count = delta.count;
+                cell.done = delta.done;
+                cell.revision = delta.revision;
+                Some(Update::Cell(cell.clone()))
+            }
+            update => Some(update),
+        }
+    }
+}
 fn action(session: &process::Session, command: Action) -> String {
     let id = rode_session::new_id().unwrap();
     session
@@ -156,13 +216,15 @@ fn action(session: &process::Session, command: Action) -> String {
         .unwrap();
     id
 }
-fn wait(session: &process::Session, mut check: impl FnMut(&Update) -> bool) -> Update {
+fn wait(session: &Attachment, mut check: impl FnMut(&Update) -> bool) -> Update {
     let until = Instant::now() + Duration::from_secs(35);
     loop {
         while let Some(event) = session.poll() {
             match event {
                 process::Event::Message(value) => {
-                    let update: Update = serde_json::from_value(value).unwrap();
+                    let Some(update) = session.update(value) else {
+                        continue;
+                    };
                     if check(&update) {
                         return update;
                     }
@@ -292,7 +354,13 @@ fn real_kernel_queue_variables_and_outputs_survive_detach_and_exclusive_reattach
             ),
         },
     ];
-    let token = action(&session, Action::Run { runs: runs.clone() });
+    let token = action(
+        &session,
+        Action::Run {
+            output_budget: Default::default(),
+            runs: runs.clone(),
+        },
+    );
     wait(
         &session,
         |u| matches!(u,Update::State(s)if s.acknowledgements.contains(&token)),
@@ -336,6 +404,7 @@ fn real_kernel_queue_variables_and_outputs_survive_detach_and_exclusive_reattach
     let token = action(
         &session,
         Action::Run {
+            output_budget: Default::default(),
             runs: vec![rode_runtime_core::notebook::Run {
                 uid: 3,
                 cell: "third".into(),
@@ -382,7 +451,13 @@ fn real_kernel_queue_variables_and_outputs_survive_detach_and_exclusive_reattach
         })
         .collect();
     assert!(serde_json::to_vec(&runs).unwrap().len() > 4 * 1024 * 1024);
-    let token = action(&session, Action::Run { runs });
+    let token = action(
+        &session,
+        Action::Run {
+            output_budget: Default::default(),
+            runs,
+        },
+    );
     let update = wait(
         &session,
         |u| matches!(u,Update::State(s)if s.acknowledgements.contains(&token)),
@@ -667,7 +742,13 @@ for line in sys.stdin:
             code: format!("seed-{uid}"),
         })
         .collect();
-    let token = action(&session, Action::Run { runs });
+    let token = action(
+        &session,
+        Action::Run {
+            output_budget: 64.try_into().unwrap(),
+            runs,
+        },
+    );
     wait(
         &session,
         |u| matches!(u, Update::State(s) if !s.info.busy && s.acknowledgements.contains(&token)),
@@ -675,6 +756,7 @@ for line in sys.stdin:
     action(
         &session,
         Action::Run {
+            output_budget: 64.try_into().unwrap(),
             runs: vec![rode_runtime_core::notebook::Run {
                 uid: 200,
                 cell: "update".into(),
@@ -707,11 +789,12 @@ for line in sys.stdin:
     }
     assert!(
         serde_json::to_vec(&replayed).unwrap().len()
-            < rode_runtime_core::notebook::outputs::MAX_NOTEBOOK_BYTES
+            < rode_runtime_core::notebook::outputs::MemoryBudget::default().bytes()
     );
     action(
         &session,
         Action::Run {
+            output_budget: 64.try_into().unwrap(),
             runs: vec![rode_runtime_core::notebook::Run {
                 uid: 201,
                 cell: "probe".into(),

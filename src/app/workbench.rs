@@ -46,6 +46,8 @@ pub(super) struct Preferences {
     slurm_queue: String,
     slurm_cancel: String,
     slurm_allocation: crate::slurm::Allocation,
+    /// RAM allowance shared by live outputs and captured by each new notebook Run or Run All queue.
+    notebook_output_budget: rode_runtime_core::notebook::outputs::MemoryBudget,
     pub(super) marp: crate::marp::Settings,
     pub(super) latex: crate::latex::Settings,
     pub(super) debugger: crate::debugger::Settings,
@@ -73,6 +75,27 @@ mod execution_preferences_tests {
         assert!(!restored.terminal_sandbox);
         assert!(restored.slurm_sandbox);
     }
+
+    #[test]
+    fn notebook_output_budget_defaults_to_256_mib_and_preserves_other_settings() {
+        let mut workbench = Workbench::default();
+        assert_eq!(workbench.notebook_output_budget().mib(), 256);
+        workbench.draft.python = "keep-unapplied-interpreter".into();
+        workbench.save_notebook_output_budget(64.try_into().unwrap());
+        assert_eq!(workbench.prefs.notebook_output_budget.mib(), 64);
+        assert_eq!(workbench.draft.notebook_output_budget.mib(), 64);
+        assert_eq!(workbench.draft.python, "keep-unapplied-interpreter");
+        assert_eq!(
+            serde_json::from_str::<Preferences>("{}")
+                .unwrap()
+                .notebook_output_budget
+                .mib(),
+            256
+        );
+        let restored: Preferences =
+            serde_json::from_str(&serde_json::to_string(&workbench.prefs).unwrap()).unwrap();
+        assert_eq!(restored.notebook_output_budget.mib(), 64);
+    }
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -92,6 +115,7 @@ impl Default for Preferences {
             slurm_queue: "squeue".into(),
             slurm_cancel: "scancel".into(),
             slurm_allocation: Default::default(),
+            notebook_output_budget: Default::default(),
             marp: Default::default(),
             latex: Default::default(),
             debugger: Default::default(),
@@ -232,6 +256,21 @@ impl Workbench {
     /// Return saved allocation defaults; this does not create a scheduler reservation.
     pub(super) fn slurm_allocation(&self) -> &crate::slurm::Allocation {
         &self.prefs.slurm_allocation
+    }
+    /// Applied notebook RAM allowance; running queues keep their captured limit.
+    pub(super) fn notebook_output_budget(
+        &self,
+    ) -> rode_runtime_core::notebook::outputs::MemoryBudget {
+        self.prefs.notebook_output_budget
+    }
+    /// Persist notebook retention settings without changing the kernel or other drafts.
+    pub(super) fn save_notebook_output_budget(
+        &mut self,
+        limit: rode_runtime_core::notebook::outputs::MemoryBudget,
+    ) {
+        self.prefs.notebook_output_budget = limit;
+        self.draft.notebook_output_budget = limit;
+        self.save_preferences();
     }
     /// Apply allocation defaults to both settings copies and queue a preference-map update.
     pub(super) fn save_slurm_allocation(&mut self, settings: crate::slurm::Allocation) {
